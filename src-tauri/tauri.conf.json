@@ -1,0 +1,30 @@
+{
+  "productName": "ChronX Wallet",
+  "version": "0.1.0",
+  "identifier": "com.chronx.wallet",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:8080",
+    "beforeBuildCommand": "trunk build",
+    "beforeDevCommand": "trunk serve --port 8080"
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ChronX Wallet",
+        "width": 520,
+        "height": 680,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
