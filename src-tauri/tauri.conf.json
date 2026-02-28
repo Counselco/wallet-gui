@@ -1,6 +1,6 @@
 {
   "productName": "ChronX Wallet",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.chronx.wallet",
   "build": {
     "frontendDist": "../dist",
@@ -11,7 +11,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": [],
+    "android": {
+      "minSdkVersion": 24
+    }
   },
   "app": {
     "windows": [

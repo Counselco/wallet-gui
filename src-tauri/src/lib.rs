@@ -6,6 +6,13 @@ pub fn run() {
             commands::check_node,
             commands::get_account_info,
             commands::send_transfer,
+            commands::create_timelock,
+            commands::get_timelocks,
+            commands::claim_timelock,
+            commands::export_public_key,
+            commands::get_node_url,
+            commands::set_node_url,
+            commands::generate_wallet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ChronX Wallet");

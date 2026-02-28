@@ -118,7 +118,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chronx-wallet-ui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64",
  "console_error_panic_hook",

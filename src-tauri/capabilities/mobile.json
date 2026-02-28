@@ -1,0 +1,9 @@
+{
+  "identifier": "mobile",
+  "description": "Mobile capability for ChronX Wallet (Android/iOS)",
+  "platforms": ["android", "iOS"],
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

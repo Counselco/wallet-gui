@@ -18,14 +18,16 @@ body {
     padding: 16px;
 }
 
-/* Header */
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
 header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    padding: 16px 0 20px;
+    align-items: flex-start;
+    padding: 12px 0 16px;
     border-bottom: 1px solid #1e2130;
     margin-bottom: 16px;
+    gap: 12px;
 }
 
 .logo-link {
@@ -34,11 +36,13 @@ header {
     text-decoration: none;
     flex-shrink: 0;
 }
-.logo {
-    height: 48px;
-    width: auto;
-    display: block;
-    border-radius: 6px;
+
+.header-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    flex: 1;
 }
 
 .node-status {
@@ -58,7 +62,35 @@ header {
 .dot.online  { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
 .dot.offline { background: #ef4444; }
 
-/* Cards */
+/* ── Tab bar ─────────────────────────────────────────────────────────────── */
+
+.tab-bar {
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.tab {
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: #6b7280;
+    font-size: 12px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+    white-space: nowrap;
+}
+.tab:hover { color: #a5b4c8; background: #1a1f2e; }
+.tab.active {
+    color: #fff;
+    background: #1e2845;
+    border-bottom: 2px solid #3b82f6;
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+
 .card {
     background: #161b27;
     border: 1px solid #1e2845;
@@ -70,7 +102,13 @@ header {
     gap: 12px;
 }
 
-/* Labels */
+.setup-card {
+    text-align: center;
+    padding: 40px 20px;
+}
+
+/* ── Labels ──────────────────────────────────────────────────────────────── */
+
 .label {
     font-size: 11px;
     text-transform: uppercase;
@@ -84,7 +122,14 @@ header {
     color: #fff;
 }
 
-/* Account ID */
+/* ── Account ID + copy ───────────────────────────────────────────────────── */
+
+.copy-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
 .mono {
     font-family: 'Consolas', 'Cascadia Code', 'Monaco', monospace;
     font-size: 12px;
@@ -92,8 +137,21 @@ header {
     word-break: break-all;
     line-height: 1.6;
 }
+.mono:hover { color: #c5cfe0; }
 
-/* Balance */
+.copy-badge {
+    font-size: 11px;
+    color: #4ade80;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.2s;
+    padding-top: 2px;
+    flex-shrink: 0;
+}
+.copy-badge.visible { opacity: 1; }
+
+/* ── Balance ─────────────────────────────────────────────────────────────── */
+
 .balance {
     font-size: 30px;
     font-weight: 700;
@@ -102,14 +160,16 @@ header {
     line-height: 1.1;
 }
 
-/* Row layout (balance + refresh) */
+/* ── Row layout ──────────────────────────────────────────────────────────── */
+
 .row {
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
 }
 
-/* Buttons */
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
 button {
     padding: 8px 16px;
     border-radius: 6px;
@@ -135,7 +195,50 @@ button.primary {
 }
 button.primary:hover:not(:disabled) { background: #2563eb; border-color: #2563eb; }
 
-/* Form fields */
+button.primary.danger {
+    background: #7c2d12;
+    border-color: #9a3412;
+}
+button.primary.danger:hover:not(:disabled) { background: #9a3412; border-color: #c2410c; }
+
+/* Quick-date pill buttons */
+.quick-dates {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+
+.pill {
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid #2d3748;
+    background: #0f1117;
+    color: #8b9197;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.pill:hover:not(:disabled) {
+    background: #1e2845;
+    color: #c5cfe0;
+    border-color: #3b4e72;
+}
+
+/* Claim button */
+.claim-btn {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid #166534;
+    background: #052e16;
+    color: #4ade80;
+    font-size: 12px;
+    cursor: pointer;
+}
+.claim-btn:hover:not(:disabled) { background: #14532d; }
+
+/* ── Form fields ─────────────────────────────────────────────────────────── */
+
 .field {
     display: flex;
     flex-direction: column;
@@ -147,7 +250,7 @@ label {
     color: #8b9197;
 }
 
-input {
+input, textarea {
     width: 100%;
     padding: 10px 12px;
     background: #0f1117;
@@ -158,16 +261,20 @@ input {
     font-family: inherit;
     outline: none;
     transition: border-color 0.15s;
+    resize: vertical;
 }
-input:focus  { border-color: #3b82f6; }
-input::placeholder { color: #3d4455; }
-input:disabled { opacity: 0.45; }
+input:focus, textarea:focus  { border-color: #3b82f6; }
+input::placeholder, textarea::placeholder { color: #3d4455; }
+input:disabled, textarea:disabled { opacity: 0.45; }
 input[type="number"] { -moz-appearance: textfield; }
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+input[type="date"] { color-scheme: dark; }
 
-/* Status messages */
+/* ── Status messages ─────────────────────────────────────────────────────── */
+
 .error { color: #f87171; font-size: 13px; }
+.muted { color: #4b5563; font-size: 12px; }
 
 .msg {
     font-size: 12px;
@@ -180,3 +287,101 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
 .msg.success { color: #4ade80; background: #0a1f0f; border: 1px solid #166534; }
 .msg.error   { color: #f87171; background: #1f0a0a; border: 1px solid #7f1d1d; }
 .msg.mining  { color: #facc15; background: #1a1500; border: 1px solid #713f12; }
+
+/* ── Lock warning ────────────────────────────────────────────────────────── */
+
+.lock-warning {
+    font-size: 11px;
+    color: #d97706;
+    font-style: italic;
+    line-height: 1.5;
+}
+
+/* ── Timelocks list ──────────────────────────────────────────────────────── */
+
+.timelock-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.timelock-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    background: #0f1117;
+    border: 1px solid #1e2130;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.tl-main {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.tl-amount {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.tl-unlock {
+    font-size: 12px;
+    color: #8b9197;
+}
+
+.tl-memo {
+    font-size: 11px;
+    color: #6b7280;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+
+.tl-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* Status badges */
+.badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+.badge.pending  { background: #1a1500; color: #facc15; border: 1px solid #713f12; }
+.badge.matured  { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.badge.claimed  { background: #1a1f2e; color: #6b7280; border: 1px solid #2d3748; }
+.badge.forsale  { background: #1e1a2e; color: #a78bfa; border: 1px solid #5b21b6; }
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 20px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* ── Mobile / Android tweaks ─────────────────────────────────────────────── */
+
+@media (max-width: 400px) {
+    .app { padding: 10px; }
+    header { padding: 8px 0 12px; }
+    .card { padding: 14px; }
+    .tab { padding: 4px 8px; font-size: 11px; }
+    .balance { font-size: 24px; }
+    .quick-dates { gap: 4px; }
+    .tl-memo { max-width: 140px; }
+}
