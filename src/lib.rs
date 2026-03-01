@@ -44,6 +44,9 @@ struct AccountInfo {
     balance_kx: String,
     #[allow(dead_code)]
     balance_chronos: String,
+    spendable_kx: String,
+    #[allow(dead_code)]
+    spendable_chronos: String,
     #[allow(dead_code)]
     nonce: u64,
 }
@@ -305,6 +308,19 @@ fn AccountPanel(
     on_refresh: impl Fn(web_sys::MouseEvent) + 'static,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
+    let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
+    let inc_loading  = RwSignal::new(false);
+
+    // Load pending incoming locks on mount.
+    Effect::new(move |_| {
+        spawn_local(async move {
+            inc_loading.set(true);
+            if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
+                incoming.set(locks);
+            }
+            inc_loading.set(false);
+        });
+    });
 
     let on_copy = move |_: web_sys::MouseEvent| {
         let addr = info.get_untracked()
@@ -349,6 +365,17 @@ fn AccountPanel(
                             }
                         }}
                     </p>
+                    <p class="label" style="margin-top:4px">
+                        "Spendable: "
+                        {move || {
+                            if loading.get() { "\u{2026}".into() }
+                            else {
+                                info.get()
+                                    .map(|a| format!("{} KX", a.spendable_kx))
+                                    .unwrap_or_else(|| "\u{2014}".into())
+                            }
+                        }}
+                    </p>
                 </div>
                 <button on:click=on_refresh disabled=move || loading.get()>
                     {move || if loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
@@ -359,6 +386,45 @@ fn AccountPanel(
                 let e = err_msg.get();
                 if e.is_empty() { view! { <span></span> }.into_any() }
                 else { view! { <p class="error">{e}</p> }.into_any() }
+            }}
+
+            // ── Pending incoming locks ────────────────────────────────────────
+            {move || {
+                let locks = incoming.get();
+                if inc_loading.get() {
+                    view! { <p class="muted" style="margin-top:12px">"Checking incoming locks\u{2026}"</p> }.into_any()
+                } else if locks.is_empty() {
+                    view! { <span></span> }.into_any()
+                } else {
+                    let rows: Vec<_> = locks.into_iter().map(|lock| {
+                        let unlock_date = {
+                            let d = js_sys::Date::new(
+                                &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
+                            );
+                            format!("{:04}-{:02}-{:02}",
+                                d.get_utc_full_year(),
+                                d.get_utc_month() + 1,
+                                d.get_utc_date())
+                        };
+                        view! {
+                            <div class="incoming-lock-row">
+                                <span class="tl-amount" style="color:#d4a84b">
+                                    {lock.amount_kx} " KX"
+                                </span>
+                                <span class="tl-unlock">"Unlocks " {unlock_date}</span>
+                                {lock.memo.map(|m| view! {
+                                    <span class="tl-memo">{m}</span>
+                                })}
+                            </div>
+                        }
+                    }).collect();
+                    view! {
+                        <div style="margin-top:12px;border-top:1px solid #1e2130;padding-top:12px">
+                            <p class="label">"Incoming Pending Locks"</p>
+                            <div class="timelock-list">{rows}</div>
+                        </div>
+                    }.into_any()
+                }
             }}
         </div>
     }

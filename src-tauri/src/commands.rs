@@ -79,6 +79,8 @@ pub struct AccountInfo {
     pub account_id: String,
     pub balance_kx: String,
     pub balance_chronos: String,
+    pub spendable_kx: String,
+    pub spendable_chronos: String,
     pub nonce: u64,
 }
 
@@ -205,6 +207,10 @@ async fn build_sign_mine_submit(
         pow_nonce,
         signatures: vec![signature],
         auth_scheme: AuthScheme::SingleSig,
+        tx_version: 1,
+        client_ref: None,
+        fee_chronos: 0,
+        expires_at: None,
     };
 
     let tx_bytes =
@@ -246,6 +252,8 @@ pub async fn get_account_info(app: AppHandle) -> Result<AccountInfo, String> {
             account_id: b58,
             balance_kx: "0".to_string(),
             balance_chronos: "0".to_string(),
+            spendable_kx: "0".to_string(),
+            spendable_chronos: "0".to_string(),
             nonce: 0,
         });
     }
@@ -257,6 +265,8 @@ pub async fn get_account_info(app: AppHandle) -> Result<AccountInfo, String> {
             .unwrap_or(b58),
         balance_kx: result["balance_kx"].as_str().unwrap_or("0").to_string(),
         balance_chronos: result["balance_chronos"].as_str().unwrap_or("0").to_string(),
+        spendable_kx: result["spendable_kx"].as_str().unwrap_or("0").to_string(),
+        spendable_chronos: result["spendable_chronos"].as_str().unwrap_or("0").to_string(),
         nonce: result["nonce"].as_u64().unwrap_or(0),
     })
 }
@@ -311,6 +321,19 @@ pub async fn create_timelock(
         amount: chronos,
         unlock_at: unlock_at_unix,
         memo,
+        cancellation_window_secs: None,
+        notify_recipient: None,
+        tags: None,
+        private: None,
+        expiry_policy: None,
+        split_policy: None,
+        claim_attempts_max: None,
+        recurring: None,
+        extension_data: None,
+        oracle_hint: None,
+        jurisdiction_hint: None,
+        governance_proposal_id: None,
+        client_ref: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -377,10 +400,12 @@ pub async fn get_node_url(app: AppHandle) -> String {
 }
 
 /// Persist a new node URL to the wallet config file.
+/// Reads the existing config first to preserve all other fields.
 #[tauri::command]
 pub async fn set_node_url(app: AppHandle, url: String) -> Result<(), String> {
-    let cfg = WalletConfig { node_url: url };
     let path = config_path(&app);
+    let mut cfg = read_config(&app);
+    cfg.node_url = url;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Creating config dir: {e}"))?;
     }
@@ -404,4 +429,37 @@ pub async fn generate_wallet(app: AppHandle) -> Result<String, String> {
     let json = serde_json::to_string_pretty(&kp).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
     Ok(b58)
+}
+
+/// Fetch all **Pending** incoming timelocks for this wallet's account (max 20).
+/// These are locks sent to us that haven't been claimed yet.
+#[tauri::command]
+pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+
+    let result = rpc_call(&url, "chronx_getPendingIncoming", serde_json::json!([b58]))
+        .await
+        .map_err(|e| format!("RPC failed: {e}"))?;
+
+    let raw: Vec<serde_json::Value> =
+        serde_json::from_value(result).map_err(|e| format!("Parsing incoming locks: {e}"))?;
+
+    let locks = raw
+        .into_iter()
+        .take(20)
+        .map(|v| TimeLockInfo {
+            lock_id: v["lock_id"].as_str().unwrap_or("").to_string(),
+            sender: v["sender"].as_str().unwrap_or("").to_string(),
+            recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
+            amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
+            unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
+            created_at: v["created_at"].as_i64().unwrap_or(0),
+            status: v["status"].as_str().unwrap_or("Pending").to_string(),
+            memo: v["memo"].as_str().map(|s| s.to_string()),
+        })
+        .collect();
+
+    Ok(locks)
 }
