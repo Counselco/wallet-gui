@@ -6,7 +6,7 @@ use chronx_core::{
 use chronx_crypto::{hash::tx_id_from_body, mine_pow, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:8545";
 
