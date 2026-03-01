@@ -9,4 +9,16 @@
     <link data-trunk rel="rust" data-wasm-opt="z" />
   </head>
   <body></body>
+  <script>
+    window.__chronxScanQr = async function(file) {
+      if (!('BarcodeDetector' in window)) return null;
+      try {
+        const bd = new BarcodeDetector({ formats: ['qr_code'] });
+        const bmp = await createImageBitmap(file);
+        const codes = await bd.detect(bmp);
+        bmp.close();
+        return codes.length ? codes[0].rawValue : null;
+      } catch(e) { return null; }
+    };
+  </script>
 </html>

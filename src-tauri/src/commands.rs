@@ -289,14 +289,17 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
     build_sign_mine_submit(&kp, actions, &url).await
 }
 
-/// Create a self-directed timelock commitment.
+/// Create a timelock commitment.
 /// `unlock_at_unix` is a UTC Unix timestamp (seconds).
+/// `to_pubkey_hex` is the recipient's Dilithium2 public key as hex.
+/// Leave `to_pubkey_hex` as None (or empty string) to lock funds to yourself.
 #[tauri::command]
 pub async fn create_timelock(
     app: AppHandle,
     amount_kx: f64,
     unlock_at_unix: i64,
     memo: Option<String>,
+    to_pubkey_hex: Option<String>,
 ) -> Result<String, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
@@ -311,13 +314,23 @@ pub async fn create_timelock(
         return Err("Unlock date must be in the future".to_string());
     }
 
+    // Resolve recipient: use provided pubkey hex, or default to self.
+    let recipient = match to_pubkey_hex.as_deref() {
+        Some(hex) if !hex.is_empty() => {
+            let bytes = hex::decode(hex)
+                .map_err(|e| format!("Invalid recipient public key (bad hex): {e}"))?;
+            chronx_core::types::DilithiumPublicKey(bytes)
+        }
+        _ => kp.public_key.clone(),
+    };
+
     // Truncate memo to 256 bytes.
     let memo = memo.map(|m| {
         if m.len() > 256 { m[..256].to_string() } else { m }
     });
 
     let actions = vec![Action::TimeLockCreate {
-        recipient: kp.public_key.clone(),
+        recipient,
         amount: chronos,
         unlock_at: unlock_at_unix,
         memo,
