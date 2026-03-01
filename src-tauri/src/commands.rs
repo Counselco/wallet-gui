@@ -1,5 +1,7 @@
 use base64::Engine as _;
 use sha2::{Sha256, Digest};
+#[cfg(target_os = "android")]
+use tauri::Manager;
 use chronx_core::{
     constants::{CHRONOS_PER_KX, POW_INITIAL_DIFFICULTY},
     transaction::{Action, AuthScheme, Transaction, TransactionBody},
