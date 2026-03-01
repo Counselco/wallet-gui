@@ -231,6 +231,7 @@ async fn build_sign_mine_submit(
         client_ref: None,
         fee_chronos: 0,
         expires_at: None,
+        sender_public_key: Some(kp.public_key.clone()),
     };
 
     let tx_bytes =
@@ -565,10 +566,9 @@ pub struct TxHistoryEntry {
 #[tauri::command]
 pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntry>, String> {
     let url = rpc_url(&app);
-    let kp = load_keypair(&app)?;
-    let b58 = kp.account_id.to_b58();
+    let _ = load_keypair(&app)?;  // ensure wallet exists before querying
 
-    let result = rpc_call(&url, "chronx_getRecentTransactions", serde_json::json!([b58, 50]))
+    let result = rpc_call(&url, "chronx_getRecentTransactions", serde_json::json!([50]))
         .await
         .map_err(|e| format!("RPC failed: {e}"))?;
 
@@ -578,10 +578,10 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     Ok(raw.into_iter().map(|v| TxHistoryEntry {
         tx_id:           v["tx_id"].as_str().unwrap_or("").to_string(),
         tx_type:         v["tx_type"].as_str().unwrap_or("Transfer").to_string(),
-        amount_chronos:  v["amount_chronos"].as_str().map(|s| s.to_string()),
-        counterparty:    v["counterparty"].as_str().map(|s| s.to_string()),
+        amount_chronos:  None,
+        counterparty:    v["from"].as_str().map(|s| s.to_string()),
         timestamp:       v["timestamp"].as_i64().unwrap_or(0),
-        status:          v["status"].as_str().unwrap_or("Confirmed").to_string(),
+        status:          "Confirmed".to_string(),
     }).collect())
 }
 

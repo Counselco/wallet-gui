@@ -1414,10 +1414,24 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     lock_date.set(String::new());
                     lock_memo.set(String::new());
                     to_pubkey.set(String::new());
-                    // Brief delay so the node can commit before we read the new balance
-                    delay_ms(1200).await;
-                    if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                        info.set(Some(a));
+                    // Poll until the account nonce increments — proves the node has
+                    // committed the transaction and updated the balance.
+                    let prev_nonce = info.get_untracked().map(|a| a.nonce).unwrap_or(0);
+                    let mut updated = false;
+                    for _ in 0..15u8 {
+                        delay_ms(1000).await;
+                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            if a.nonce > prev_nonce {
+                                info.set(Some(a));
+                                updated = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !updated {
+                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            info.set(Some(a));
+                        }
                     }
                 }
                 Err(e) => lock_msg.set(format!("Error: {e}")),
