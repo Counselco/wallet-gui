@@ -385,7 +385,16 @@ fn App() -> impl IntoView {
                 app_version.set(v);
             }
 
-            // Check if PIN is already configured
+            // Check wallet existence first — config.json may have a PIN hash
+            // even after wallet.json has been deleted (e.g. device transfer).
+            let wallet_exists = call::<String>("export_secret_key", no_args()).await.is_ok();
+
+            if !wallet_exists {
+                app_phase.set(AppPhase::Welcome);
+                return;
+            }
+
+            // Wallet exists — check if PIN is configured
             let pin_is_set = call::<bool>("check_pin_set", no_args()).await.unwrap_or(false);
 
             if pin_is_set {
@@ -393,24 +402,14 @@ fn App() -> impl IntoView {
                 return;
             }
 
-            // No PIN — determine if wallet exists
+            // Wallet exists, no PIN yet — load account and go to PIN setup
             loading.set(true);
             online.set(call::<bool>("check_node", no_args()).await.unwrap_or(false));
-            match call::<AccountInfo>("get_account_info", no_args()).await {
-                Ok(a) => {
-                    info.set(Some(a));
-                    // Wallet exists but no PIN yet — force setup
-                    app_phase.set(AppPhase::PinSetup);
-                }
-                Err(e) if e.contains("Wallet not found") || e.contains("keygen") => {
-                    app_phase.set(AppPhase::Welcome);
-                }
-                Err(e) => {
-                    err_msg.set(e);
-                    app_phase.set(AppPhase::Wallet);
-                }
+            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                info.set(Some(a));
             }
             loading.set(false);
+            app_phase.set(AppPhase::PinSetup);
         });
     });
 
@@ -777,9 +776,21 @@ fn PinScreen(
         }
     });
 
-    // on_submit clones for keydown, confirm button, and Enter key
-    let on_submit_btn = on_submit.clone();
-    let on_submit_enter = on_submit.clone();
+    // on_submit clones — auto Effect, keydown Enter, and Confirm button
+    let on_submit_auto   = on_submit.clone();
+    let on_submit_btn    = on_submit.clone();
+    let on_submit_enter  = on_submit.clone();
+
+    // Auto-submit when 4th digit is entered.
+    // Clears pin_digits first to prevent double-fire from Confirm button.
+    Effect::new(move |_| {
+        let d = pin_digits.get();
+        if d.len() == 4 {
+            let captured = d.clone();
+            pin_digits.set(String::new()); // clear before submit to block Confirm button race
+            on_submit_auto(captured);
+        }
+    });
 
     // Keydown handler — handles digits and Backspace.
     // On desktop: keydown fires before input, prevent_default() stops input from firing.
@@ -1403,6 +1414,8 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     lock_date.set(String::new());
                     lock_memo.set(String::new());
                     to_pubkey.set(String::new());
+                    // Brief delay so the node can commit before we read the new balance
+                    delay_ms(1200).await;
                     if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
                         info.set(Some(a));
                     }
