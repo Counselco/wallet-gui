@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use sha2::{Sha256, Digest};
 use chronx_core::{
     constants::{CHRONOS_PER_KX, POW_INITIAL_DIFFICULTY},
@@ -7,7 +8,7 @@ use chronx_core::{
 use chronx_crypto::{hash::tx_id_from_body, mine_pow, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:8545";
 
@@ -398,6 +399,73 @@ pub async fn get_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> 
         .collect();
 
     Ok(locks)
+}
+
+// ── Wallet backup / restore ───────────────────────────────────────────────────
+
+/// Export the wallet as a base64-encoded JSON string (the "backup key").
+/// The backup key encodes the full keypair JSON — treat it like a private key.
+#[tauri::command]
+pub async fn export_secret_key(app: AppHandle) -> Result<String, String> {
+    let path = keyfile_path(&app);
+    let json = std::fs::read_to_string(&path)
+        .map_err(|_| "Wallet not found".to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(json.as_bytes()))
+}
+
+/// Restore a wallet from a base64 backup key. Errors if a wallet already exists.
+/// Returns the base58 account ID on success.
+#[tauri::command]
+pub async fn restore_wallet(app: AppHandle, backup_key: String) -> Result<String, String> {
+    let path = keyfile_path(&app);
+    if path.exists() {
+        return Err("A wallet already exists on this device.".to_string());
+    }
+    let json_bytes = base64::engine::general_purpose::STANDARD
+        .decode(backup_key.trim())
+        .map_err(|_| "Invalid backup key — could not decode".to_string())?;
+    let json = String::from_utf8(json_bytes)
+        .map_err(|_| "Invalid backup key — not valid UTF-8".to_string())?;
+    let kp: KeyPair = serde_json::from_str(&json)
+        .map_err(|_| "Invalid backup key — not a valid wallet file".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Creating wallet dir: {e}"))?;
+    }
+    std::fs::write(&path, &json).map_err(|e| format!("Writing wallet: {e}"))?;
+    Ok(kp.account_id.to_b58())
+}
+
+// ── URL opener ───────────────────────────────────────────────────────────────
+
+/// Open a URL or mailto: link using the platform-native handler.
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = url;
+    }
+    Ok(())
 }
 
 /// Claim a matured timelock. `lock_id_hex` is the hex TxId of the lock.
