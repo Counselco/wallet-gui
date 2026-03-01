@@ -21,7 +21,6 @@ extern "C" {
     #[wasm_bindgen(js_namespace = ["window", "__TAURI_INTERNALS__"])]
     fn invoke(cmd: &str, args: JsValue) -> Promise;
 
-    /// QR scan helper injected via index.html (BarcodeDetector Web API).
     #[wasm_bindgen(js_namespace = window, js_name = __chronxScanQr)]
     fn scan_qr_js(file: &web_sys::File) -> Promise;
 }
@@ -70,9 +69,29 @@ struct TimeLockInfo {
     memo: Option<String>,
 }
 
+#[derive(Clone, Deserialize, Default)]
+struct TxHistoryEntry {
+    tx_id: String,
+    tx_type: String,
+    amount_chronos: Option<String>,
+    counterparty: Option<String>,
+    timestamp: i64,
+    status: String,
+}
+
+// ── App phase state machine ───────────────────────────────────────────────────
+
+#[derive(Clone, PartialEq)]
+enum AppPhase {
+    Splash,
+    PinSetup,
+    PinConfirm,
+    PinUnlock,
+    Wallet,
+}
+
 // ── Number formatting ─────────────────────────────────────────────────────────
 
-/// Format a u128 integer with comma separators: 10000000 → "10,000,000"
 fn format_int_with_commas(n: u128) -> String {
     if n == 0 { return "0".to_string(); }
     let s = n.to_string();
@@ -84,24 +103,40 @@ fn format_int_with_commas(n: u128) -> String {
     result.into_iter().rev().collect()
 }
 
-/// Convert raw Chronos string → "X,XXX,XXX.XXXXXX" KX display.
-/// 10_000_000_000_000 Chronos → "10,000,000.000000"
-/// 500_000 Chronos            → "0.500000"
 fn format_kx(chronos_str: &str) -> String {
     let c: u128 = chronos_str.parse().unwrap_or(0);
     format!("{}.{:06}", format_int_with_commas(c / 1_000_000), (c % 1_000_000) as u32)
 }
 
-/// Add comma separators to a KX integer string: "10000000" → "10,000,000"
 fn format_kx_str(kx_str: &str) -> String {
     let n: u128 = kx_str.trim().parse().unwrap_or(0);
     format_int_with_commas(n)
 }
 
+// ── Display helpers ───────────────────────────────────────────────────────────
+
+fn shorten_addr(addr: &str) -> String {
+    if addr.len() > 20 {
+        format!("{}…{}", &addr[..8], &addr[addr.len()-8..])
+    } else {
+        addr.to_string()
+    }
+}
+
+fn format_utc_ts(ts: i64) -> String {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        d.get_utc_full_year(),
+        d.get_utc_month() + 1,
+        d.get_utc_date(),
+        d.get_utc_hours(),
+        d.get_utc_minutes()
+    )
+}
+
 // ── QR code generation ────────────────────────────────────────────────────────
 
-/// Generate an inline SVG QR code for the given text.
-/// Returns an empty string on failure.
 fn make_qr_svg(data: &str) -> String {
     use qrcodegen::{QrCode, QrCodeEcc};
     let Ok(qr) = QrCode::encode_text(data, QrCodeEcc::Medium) else {
@@ -133,8 +168,6 @@ fn make_qr_svg(data: &str) -> String {
 
 // ── QR scan helpers ───────────────────────────────────────────────────────────
 
-/// Scan a QR image file using the BarcodeDetector Web API.
-/// Returns the raw string value or an error message.
 async fn scan_qr_file(file: web_sys::File) -> Result<String, String> {
     let result = JsFuture::from(scan_qr_js(&file))
         .await
@@ -144,8 +177,6 @@ async fn scan_qr_file(file: web_sys::File) -> Result<String, String> {
         .ok_or_else(|| "No QR code found in image (or scanner unavailable)".to_string())
 }
 
-/// Extract account_id from a scanned QR value.
-/// Accepts "chronx:<id>:<pk>" or plain "<id>".
 fn qr_extract_account_id(raw: &str) -> String {
     if let Some(rest) = raw.strip_prefix("chronx:") {
         rest.split(':').next().unwrap_or("").to_string()
@@ -154,8 +185,6 @@ fn qr_extract_account_id(raw: &str) -> String {
     }
 }
 
-/// Extract pubkey hex from a scanned QR value.
-/// Accepts "chronx:<id>:<pk>" or plain "<pk>".
 fn qr_extract_pubkey(raw: &str) -> String {
     if let Some(rest) = raw.strip_prefix("chronx:") {
         rest.split(':').nth(1).unwrap_or("").to_string()
@@ -166,19 +195,16 @@ fn qr_extract_pubkey(raw: &str) -> String {
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
-/// Return current UTC date as "YYYY-MM-DD" for the date input min attribute.
 fn today_str() -> String {
     let d = js_sys::Date::new_0();
     let y = d.get_utc_full_year();
-    let m = d.get_utc_month() + 1; // 0-indexed
+    let m = d.get_utc_month() + 1;
     let day = d.get_utc_date();
     format!("{y:04}-{m:02}-{day:02}")
 }
 
-/// "YYYY-MM-DD" → Unix timestamp at midnight UTC.
 fn date_str_to_unix(s: &str) -> Option<i64> {
     if s.len() != 10 { return None; }
-    // Append UTC time component so the browser parses it as UTC midnight.
     let utc_str = format!("{s}T00:00:00Z");
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(&utc_str));
     let ms = d.get_time();
@@ -186,18 +212,16 @@ fn date_str_to_unix(s: &str) -> Option<i64> {
     Some((ms / 1000.0) as i64)
 }
 
-/// Add `months` calendar months to today's date, return "YYYY-MM-DD".
 fn date_plus_months(months: u32) -> String {
     let d = js_sys::Date::new_0();
     let mut y = d.get_utc_full_year() as u32;
-    let mut m = d.get_utc_month() + months; // 0-indexed, may overflow
+    let mut m = d.get_utc_month() + months;
     y += m / 12;
     m %= 12;
     let day = d.get_utc_date();
     format!("{y:04}-{m1:02}-{day:02}", m1 = m + 1)
 }
 
-/// Add `years` to today's date, return "YYYY-MM-DD".
 fn date_plus_years(years: u32) -> String {
     let d = js_sys::Date::new_0();
     let y = d.get_utc_full_year() as u32 + years;
@@ -208,7 +232,6 @@ fn date_plus_years(years: u32) -> String {
 
 // ── Clipboard ─────────────────────────────────────────────────────────────────
 
-/// Copy text to clipboard; resolves when done (or silently fails).
 async fn copy_to_clipboard(text: String) {
     if let Some(win) = web_sys::window() {
         let clip = win.navigator().clipboard();
@@ -216,19 +239,42 @@ async fn copy_to_clipboard(text: String) {
     }
 }
 
-/// Delay ~1.5 s using a JS Promise.
-async fn delay_1500ms() {
+// ── Delay ─────────────────────────────────────────────────────────────────────
+
+async fn delay_ms(ms: u32) {
     let promise = Promise::new(&mut |resolve, _| {
         if let Some(win) = web_sys::window() {
-            let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 1500);
+            let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32);
         }
     });
     let _ = JsFuture::from(promise).await;
 }
 
-// ── Trigger a hidden file input ───────────────────────────────────────────────
+// ── Countdown ticker (self-scheduling via spawn_local) ────────────────────────
 
-/// Programmatically click a hidden file input and return the chosen File.
+fn start_countdown_tick(countdown: RwSignal<u32>, locked_until: f64) {
+    let remaining = ((locked_until - js_sys::Date::now()) / 1000.0).ceil().max(0.0) as u32;
+    countdown.set(remaining);
+    if remaining > 0 {
+        spawn_local(async move {
+            delay_ms(1000).await;
+            start_countdown_tick(countdown, locked_until);
+        });
+    }
+}
+
+// ── Shake helper ──────────────────────────────────────────────────────────────
+
+fn do_shake(pin_shake: RwSignal<bool>) {
+    pin_shake.set(true);
+    spawn_local(async move {
+        delay_ms(450).await;
+        pin_shake.set(false);
+    });
+}
+
+// ── File picker ───────────────────────────────────────────────────────────────
+
 async fn pick_image_file() -> Option<web_sys::File> {
     use wasm_bindgen::JsCast;
     let doc = web_sys::window()?.document()?;
@@ -239,8 +285,6 @@ async fn pick_image_file() -> Option<web_sys::File> {
         .ok()?;
     input.set_type("file");
     input.set_attribute("accept", "image/*").ok()?;
-    // capture="environment" is respected by Android WebView (opens back camera);
-    // desktop browsers ignore it and show a normal file picker.
     input.set_attribute("capture", "environment").ok()?;
     input.set_attribute("style", "display:none").ok()?;
     doc.body()?.append_child(&input).ok()?;
@@ -259,7 +303,6 @@ async fn pick_image_file() -> Option<web_sys::File> {
     input.click();
 
     let file = rx.await.ok().flatten();
-    // Clean up the temporary input element.
     if let Some(parent) = input.parent_node() {
         let _ = parent.remove_child(&input);
     }
@@ -283,55 +326,93 @@ fn App() -> impl IntoView {
     let loading     = RwSignal::new(false);
     let err_msg     = RwSignal::new(String::new());
     let online      = RwSignal::new(false);
-    let active_tab  = RwSignal::new(0u8); // 0=Account 1=Send 2=SendLater 3=Promises 4=Settings
+    // 0=Account 1=Send 2=SendLater 3=Promises 4=History 5=Settings
+    let active_tab  = RwSignal::new(0u8);
+    let app_version = RwSignal::new("1.0.0".to_string());
 
-    // First-run / setup state (wallet not found).
+    // First-run / setup state
     let need_setup  = RwSignal::new(false);
     let setup_msg   = RwSignal::new(String::new());
     let setup_busy  = RwSignal::new(false);
 
-    // ── Data refresh ─────────────────────────────────────────────────────────
+    // PIN state machine
+    let app_phase       = RwSignal::new(AppPhase::Splash);
+    let pin_digits      = RwSignal::new(String::new());
+    let pin_msg         = RwSignal::new(String::new());
+    let pin_attempts    = RwSignal::new(0u8);
+    let pin_locked_until = RwSignal::new(0.0f64);
+    let pin_shake       = RwSignal::new(false);
+    let pin_first       = RwSignal::new(String::new()); // saved during PinConfirm
+    let countdown       = RwSignal::new(0u32);
 
-    async fn refresh_data(
+    // ── Load wallet data after PIN unlock ─────────────────────────────────────
+
+    async fn load_wallet(
         online: RwSignal<bool>,
         loading: RwSignal<bool>,
-        err_msg: RwSignal<String>,
         info: RwSignal<Option<AccountInfo>>,
-        need_setup: RwSignal<bool>,
+        err_msg: RwSignal<String>,
     ) {
         online.set(call::<bool>("check_node", no_args()).await.unwrap_or(false));
         loading.set(true);
         err_msg.set(String::new());
-        match call::<AccountInfo>("get_account_info", no_args()).await {
-            Ok(a) => {
-                info.set(Some(a));
-                need_setup.set(false);
-            }
-            Err(e) => {
-                // "Wallet not found" → show first-run setup screen.
-                if e.contains("Wallet not found") || e.contains("keygen") {
-                    need_setup.set(true);
-                } else {
-                    err_msg.set(e);
-                }
-            }
+        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+            info.set(Some(a));
         }
         loading.set(false);
     }
 
+    // ── Startup: splash → PIN check ───────────────────────────────────────────
+
     Effect::new(move |_| {
         spawn_local(async move {
-            refresh_data(online, loading, err_msg, info, need_setup).await;
+            // Show splash for 1.5 s
+            delay_ms(1500).await;
+
+            // Load app version (best effort)
+            if let Ok(v) = call::<String>("get_app_version", no_args()).await {
+                app_version.set(v);
+            }
+
+            // Check if PIN is already configured
+            let pin_is_set = call::<bool>("check_pin_set", no_args()).await.unwrap_or(false);
+
+            if pin_is_set {
+                app_phase.set(AppPhase::PinUnlock);
+                return;
+            }
+
+            // No PIN — determine if wallet exists
+            loading.set(true);
+            online.set(call::<bool>("check_node", no_args()).await.unwrap_or(false));
+            match call::<AccountInfo>("get_account_info", no_args()).await {
+                Ok(a) => {
+                    info.set(Some(a));
+                    // Wallet exists but no PIN yet — force setup
+                    app_phase.set(AppPhase::PinSetup);
+                }
+                Err(e) if e.contains("Wallet not found") || e.contains("keygen") => {
+                    need_setup.set(true);
+                    app_phase.set(AppPhase::Wallet);
+                }
+                Err(e) => {
+                    err_msg.set(e);
+                    app_phase.set(AppPhase::Wallet);
+                }
+            }
+            loading.set(false);
         });
     });
 
+    // ── Refresh (used on Account tab) ─────────────────────────────────────────
+
     let on_refresh = move |_: web_sys::MouseEvent| {
         spawn_local(async move {
-            refresh_data(online, loading, err_msg, info, need_setup).await;
+            load_wallet(online, loading, info, err_msg).await;
         });
     };
 
-    // ── Setup: generate new wallet ────────────────────────────────────────────
+    // ── Wallet creation (first run) ───────────────────────────────────────────
 
     let on_generate = move |_: web_sys::MouseEvent| {
         spawn_local(async move {
@@ -339,9 +420,15 @@ fn App() -> impl IntoView {
             setup_msg.set(String::new());
             match call::<String>("generate_wallet", no_args()).await {
                 Ok(account_id) => {
-                    setup_msg.set(format!("Wallet created! Account ID:\n{account_id}"));
-                    // Re-load account info.
-                    refresh_data(online, loading, err_msg, info, need_setup).await;
+                    setup_msg.set(format!("Wallet created!\nAccount ID:\n{account_id}"));
+                    loading.set(true);
+                    if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                        info.set(Some(a));
+                        need_setup.set(false);
+                    }
+                    loading.set(false);
+                    // Now require PIN setup before accessing wallet
+                    app_phase.set(AppPhase::PinSetup);
                 }
                 Err(e) => setup_msg.set(format!("Error: {e}")),
             }
@@ -349,62 +436,329 @@ fn App() -> impl IntoView {
         });
     };
 
+    // ── PIN digit submission ──────────────────────────────────────────────────
+
+    let handle_pin = move |digits: String| {
+        let phase = app_phase.get_untracked();
+        match phase {
+            AppPhase::PinSetup => {
+                pin_first.set(digits);
+                pin_msg.set(String::new());
+                pin_digits.set(String::new());
+                app_phase.set(AppPhase::PinConfirm);
+            }
+            AppPhase::PinConfirm => {
+                let first = pin_first.get_untracked();
+                if digits == first {
+                    spawn_local(async move {
+                        let args = serde_wasm_bindgen::to_value(
+                            &serde_json::json!({ "pin": digits })
+                        ).unwrap_or(no_args());
+                        match call::<()>("set_pin", args).await {
+                            Ok(_) => {
+                                pin_msg.set(String::new());
+                                pin_digits.set(String::new());
+                                app_phase.set(AppPhase::Wallet);
+                                load_wallet(online, loading, info, err_msg).await;
+                            }
+                            Err(e) => {
+                                pin_msg.set(format!("Error saving PIN: {e}"));
+                                pin_digits.set(String::new());
+                            }
+                        }
+                    });
+                } else {
+                    pin_msg.set("PINs do not match \u{2014} please try again".to_string());
+                    do_shake(pin_shake);
+                    pin_digits.set(String::new());
+                    pin_first.set(String::new());
+                    app_phase.set(AppPhase::PinSetup);
+                }
+            }
+            AppPhase::PinUnlock => {
+                // Check lockout
+                let now = js_sys::Date::now();
+                if now < pin_locked_until.get_untracked() {
+                    let rem = countdown.get_untracked();
+                    if rem > 0 {
+                        pin_msg.set(format!("Too many attempts \u{2014} wait {rem}s"));
+                    }
+                    pin_digits.set(String::new());
+                    return;
+                }
+                spawn_local(async move {
+                    let args = serde_wasm_bindgen::to_value(
+                        &serde_json::json!({ "pin": digits })
+                    ).unwrap_or(no_args());
+                    match call::<bool>("verify_pin", args).await {
+                        Ok(true) => {
+                            pin_attempts.set(0);
+                            pin_digits.set(String::new());
+                            pin_msg.set(String::new());
+                            app_phase.set(AppPhase::Wallet);
+                            load_wallet(online, loading, info, err_msg).await;
+                        }
+                        Ok(false) | Err(_) => {
+                            let attempts = pin_attempts.get_untracked() + 1;
+                            pin_attempts.set(attempts);
+                            do_shake(pin_shake);
+                            pin_digits.set(String::new());
+                            if attempts >= 3 {
+                                let locked_ts = js_sys::Date::now() + 30_000.0;
+                                pin_locked_until.set(locked_ts);
+                                pin_attempts.set(0);
+                                pin_msg.set("Too many attempts \u{2014} please wait 30 seconds".to_string());
+                                start_countdown_tick(countdown, locked_ts);
+                            } else {
+                                pin_msg.set("Incorrect PIN".to_string());
+                            }
+                        }
+                    }
+                });
+            }
+            _ => {}
+        }
+    };
+
     // ── View ──────────────────────────────────────────────────────────────────
 
     view! {
-        <div class="app">
+        {move || match app_phase.get() {
+            AppPhase::Splash => view! {
+                <SplashScreen />
+            }.into_any(),
 
-            // Header: logo + node status + tab bar
-            <header>
-                <a href="https://www.chronx.io" target="_blank" rel="noopener" class="logo-link">
-                    <img src=logo_src() alt="ChronX Logo" style="height:40px;width:auto;display:block;" />
-                </a>
-                <div class="header-right">
-                    <span class="node-status">
-                        <span class=move || if online.get() { "dot online" } else { "dot offline" }></span>
-                        {move || if online.get() { "Online" } else { "Offline" }}
-                    </span>
-                    {move || if !need_setup.get() {
+            AppPhase::PinSetup | AppPhase::PinConfirm | AppPhase::PinUnlock => view! {
+                <PinScreen
+                    phase=app_phase
+                    pin_digits=pin_digits
+                    pin_msg=pin_msg
+                    pin_shake=pin_shake
+                    countdown=countdown
+                    on_submit=handle_pin
+                />
+            }.into_any(),
+
+            AppPhase::Wallet => view! {
+                <div class="app">
+                    // Header
+                    <header>
+                        <a href="https://www.chronx.io" target="_blank" rel="noopener" class="logo-link">
+                            <img src=logo_src() alt="ChronX Logo" style="height:40px;width:auto;display:block;" />
+                        </a>
+                        <div class="header-right">
+                            <span class="node-status">
+                                <span class=move || if online.get() { "dot online" } else { "dot offline" }></span>
+                                {move || if online.get() { "Online" } else { "Offline" }}
+                            </span>
+                            {move || if !need_setup.get() {
+                                view! {
+                                    <nav class="tab-bar">
+                                        <button class=move || if active_tab.get()==0 {"tab active"} else {"tab"}
+                                            on:click=move |_| active_tab.set(0)>"💰 Account"</button>
+                                        <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
+                                            on:click=move |_| active_tab.set(1)>"↗ Send"</button>
+                                        <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
+                                            on:click=move |_| active_tab.set(2)>"⏳ Send Later"</button>
+                                        <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
+                                            on:click=move |_| active_tab.set(3)>"📋 Promises"</button>
+                                        <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
+                                            on:click=move |_| active_tab.set(4)>"📜 History"</button>
+                                        <button class=move || if active_tab.get()==5 {"tab active"} else {"tab"}
+                                            on:click=move |_| active_tab.set(5)>"⚙ Settings"</button>
+                                    </nav>
+                                }.into_any()
+                            } else {
+                                view! { <span></span> }.into_any()
+                            }}
+                        </div>
+                    </header>
+
+                    // Main content
+                    {move || if need_setup.get() {
                         view! {
-                            <nav class="tab-bar">
-                                <button class=move || if active_tab.get()==0 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(0)>"💰 Account"</button>
-                                <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(1)>"↗ Send"</button>
-                                <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(2)>"⏳ Send Later"</button>
-                                <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(3)>"📋 Promises"</button>
-                                <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(4)>"⚙ Settings"</button>
-                            </nav>
+                            <SetupPanel on_generate=on_generate busy=setup_busy msg=setup_msg />
                         }.into_any()
                     } else {
-                        view! { <span></span> }.into_any()
+                        view! {
+                            <div>
+                                {move || match active_tab.get() {
+                                    0 => view! {
+                                        <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh />
+                                    }.into_any(),
+                                    1 => view! { <SendPanel info=info /> }.into_any(),
+                                    2 => view! { <SendLaterPanel info=info /> }.into_any(),
+                                    3 => view! { <PromisesPanel /> }.into_any(),
+                                    4 => view! { <HistoryPanel /> }.into_any(),
+                                    5 => view! {
+                                        <SettingsPanel online=online app_phase=app_phase pin_digits=pin_digits pin_msg=pin_msg pin_shake=pin_shake />
+                                    }.into_any(),
+                                    _ => view! { <span></span> }.into_any(),
+                                }}
+                            </div>
+                        }.into_any()
                     }}
+
+                    // Version footer — always visible
+                    <p class="version-footer">
+                        "ChronX Wallet v"
+                        {move || app_version.get()}
+                    </p>
                 </div>
-            </header>
+            }.into_any(),
+        }}
+    }
+}
 
-            // First-run / setup screen
-            {move || if need_setup.get() {
-                view! { <SetupPanel on_generate=on_generate busy=setup_busy msg=setup_msg /> }.into_any()
+// ── SplashScreen ──────────────────────────────────────────────────────────────
+
+#[component]
+fn SplashScreen() -> impl IntoView {
+    view! {
+        <div class="splash-screen">
+            <img src=logo_src() alt="ChronX" class="splash-logo" />
+            <p class="splash-title">"ChronX Wallet"</p>
+            <p class="splash-sub">"The Future Payment Protocol"</p>
+        </div>
+    }
+}
+
+// ── PinScreen ─────────────────────────────────────────────────────────────────
+
+#[component]
+fn PinScreen(
+    phase: RwSignal<AppPhase>,
+    pin_digits: RwSignal<String>,
+    pin_msg: RwSignal<String>,
+    pin_shake: RwSignal<bool>,
+    countdown: RwSignal<u32>,
+    on_submit: impl Fn(String) + Clone + 'static,
+) -> impl IntoView {
+    let input_ref = NodeRef::<leptos::html::Input>::new();
+
+    // Auto-focus the hidden input whenever the PIN screen is shown
+    Effect::new(move |_| {
+        let _ = phase.get(); // track phase changes
+        if let Some(el) = input_ref.get() {
+            let _ = el.focus();
+        }
+    });
+
+    // Auto-submit when 4 digits entered
+    let on_submit_clone = on_submit.clone();
+    Effect::new(move |_| {
+        let d = pin_digits.get();
+        if d.len() == 4 {
+            let captured = d.clone();
+            pin_digits.set(String::new()); // clear immediately to prevent double-fire
+            on_submit_clone(captured);
+        }
+    });
+
+    let on_input = move |ev: web_sys::Event| {
+        use wasm_bindgen::JsCast;
+        if let Some(input) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+            let val = input.value();
+            let digits: String = val.chars().filter(|c| c.is_ascii_digit()).take(4).collect();
+            // Force clear the hidden input so it stays in sync
+            input.set_value("");
+            let current = pin_digits.get_untracked();
+            // Append only the new digit(s)
+            let new_digits = if digits.len() > current.len() {
+                format!("{}{}", current, &digits[current.len()..])
             } else {
-                view! {
-                    <div>
-                        {move || match active_tab.get() {
-                            0 => view! {
-                                <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh />
-                            }.into_any(),
-                            1 => view! { <SendPanel info=info /> }.into_any(),
-                            2 => view! { <SendLaterPanel info=info /> }.into_any(),
-                            3 => view! { <PromisesPanel /> }.into_any(),
-                            4 => view! { <SettingsPanel online=online /> }.into_any(),
-                            _ => view! { <span></span> }.into_any(),
-                        }}
-                    </div>
-                }.into_any()
-            }}
+                digits
+            };
+            let trimmed: String = new_digits.chars().take(4).collect();
+            pin_digits.set(trimmed);
+        }
+    };
 
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == "Backspace" {
+            let mut d = pin_digits.get_untracked();
+            d.pop();
+            pin_digits.set(d);
+            ev.prevent_default();
+        }
+    };
+
+    view! {
+        <div class="app">
+            <div style="text-align:center;padding:20px 0 8px">
+                <img src=logo_src() alt="ChronX" style="height:44px;width:auto;display:inline-block" />
+            </div>
+
+            <div class="pin-screen">
+                // Title
+                <p class="pin-title">
+                    {move || match phase.get() {
+                        AppPhase::PinSetup   => "Create Your PIN",
+                        AppPhase::PinConfirm => "Confirm Your PIN",
+                        AppPhase::PinUnlock  => "Enter Your PIN",
+                        _ => "PIN",
+                    }}
+                </p>
+
+                // Subtitle
+                <p class="pin-subtitle">
+                    {move || match phase.get() {
+                        AppPhase::PinSetup   => "Choose a 4-digit PIN to secure your wallet",
+                        AppPhase::PinConfirm => "Enter the same PIN again to confirm",
+                        AppPhase::PinUnlock  => "Enter your PIN to access your wallet",
+                        _ => "",
+                    }}
+                </p>
+
+                // PIN blocks
+                <div class=move || if pin_shake.get() { "pin-blocks-wrap pin-shake" } else { "pin-blocks-wrap" }>
+                    <div class="pin-blocks">
+                        {(0..4usize).map(|i| {
+                            view! {
+                                <div class=move || {
+                                    let len = pin_digits.get().len();
+                                    if len > i { "pin-block filled" }
+                                    else if len == i { "pin-block active" }
+                                    else { "pin-block" }
+                                }>
+                                    {move || if pin_digits.get().len() > i { "\u{25cf}" } else { "" }}
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                </div>
+
+                // Message / countdown
+                {move || {
+                    let c = countdown.get();
+                    let msg = pin_msg.get();
+                    if c > 0 {
+                        view! {
+                            <p class="pin-lockout-msg">
+                                "\u{23f1} Please wait " {c} " seconds"
+                            </p>
+                        }.into_any()
+                    } else if !msg.is_empty() {
+                        view! { <p class="pin-msg">{msg}</p> }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }
+                }}
+
+                // Hidden input — captures keyboard / numeric keypad on Android
+                <input
+                    node_ref=input_ref
+                    type="tel"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    class="pin-hidden-input"
+                    on:input=on_input
+                    on:keydown=on_keydown
+                />
+
+                // Coming soon helper
+                <p class="pin-coming-soon">"Biometric / Windows Hello \u{2014} Coming Soon"</p>
+            </div>
         </div>
     }
 }
@@ -422,7 +776,7 @@ fn SetupPanel(
             <p class="section-title">"Welcome to ChronX Wallet"</p>
             <p class="label">"No wallet found on this device."</p>
             <button class="primary" on:click=on_generate disabled=move || busy.get()>
-                {move || if busy.get() { "Generating…" } else { "Create New Wallet" }}
+                {move || if busy.get() { "Generating\u{2026}" } else { "Create New Wallet" }}
             </button>
             {move || {
                 let s = msg.get();
@@ -448,9 +802,8 @@ fn AccountPanel(
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
     let inc_loading  = RwSignal::new(false);
-    let qr_svg       = RwSignal::new(String::new()); // empty = hidden
+    let qr_svg       = RwSignal::new(String::new());
 
-    // Load pending incoming promises on mount.
     Effect::new(move |_| {
         spawn_local(async move {
             inc_loading.set(true);
@@ -462,33 +815,25 @@ fn AccountPanel(
     });
 
     let on_copy = move |_: web_sys::MouseEvent| {
-        let addr = info.get_untracked()
-            .map(|a| a.account_id)
-            .unwrap_or_default();
+        let addr = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
         if addr.is_empty() { return; }
         spawn_local(async move {
             copy_to_clipboard(addr).await;
             copy_success.set(true);
-            delay_1500ms().await;
+            delay_ms(2000).await;
             copy_success.set(false);
         });
     };
 
-    // Show / hide QR code. When showing, also fetch the public key to embed.
     let on_toggle_qr = move |_: web_sys::MouseEvent| {
         if !qr_svg.get_untracked().is_empty() {
             qr_svg.set(String::new());
             return;
         }
-        let account_id = info.get_untracked()
-            .map(|a| a.account_id)
-            .unwrap_or_default();
+        let account_id = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
         if account_id.is_empty() { return; }
         spawn_local(async move {
-            // Fetch public key so the QR encodes both id and pubkey.
-            let pk = call::<String>("export_public_key", no_args())
-                .await
-                .unwrap_or_default();
+            let pk = call::<String>("export_public_key", no_args()).await.unwrap_or_default();
             let qr_data = if pk.is_empty() {
                 account_id
             } else {
@@ -503,22 +848,21 @@ fn AccountPanel(
             <p class="label">"Account ID"</p>
             <div class="copy-row">
                 <p class="mono"
-                   title="Click to copy"
+                   title="Click to copy address"
                    style="cursor:pointer;flex:1"
                    on:click=on_copy>
                     {move || info.get()
                         .map(|a| a.account_id)
                         .unwrap_or_else(|| "\u{2014}".into())}
                 </p>
-                <span class=move || if copy_success.get() { "copy-badge visible" } else { "copy-badge" }>
-                    "Copied!"
-                </span>
-                <button style="margin-left:8px;font-size:13px" on:click=on_toggle_qr>
+                <button style="font-size:12px;padding:4px 10px" on:click=on_copy title="Copy address">
+                    {move || if copy_success.get() { "Copied!" } else { "\u{1f4cb} Copy" }}
+                </button>
+                <button style="font-size:12px;padding:4px 10px" on:click=on_toggle_qr>
                     {move || if qr_svg.get().is_empty() { "📷 QR" } else { "Hide QR" }}
                 </button>
             </div>
 
-            // QR code display
             {move || {
                 let svg = qr_svg.get();
                 if svg.is_empty() {
@@ -528,7 +872,7 @@ fn AccountPanel(
                         <div style="text-align:center;margin-top:12px;padding:12px;background:#fff;border-radius:8px">
                             <div inner_html=svg></div>
                             <p style="color:#555;font-size:11px;margin-top:6px">
-                                "Scan on Send to transfer · Scan on Send Later to make a promise"
+                                "Scan on Send to transfer \u{b7} Scan on Send Later to make a promise"
                             </p>
                         </div>
                     }.into_any()
@@ -571,7 +915,6 @@ fn AccountPanel(
                 else { view! { <p class="error">{e}</p> }.into_any() }
             }}
 
-            // ── Incoming promises ─────────────────────────────────────────────
             {move || {
                 let locks = incoming.get();
                 if inc_loading.get() {
@@ -595,9 +938,7 @@ fn AccountPanel(
                                     {format_kx_str(&lock.amount_kx)} " KX"
                                 </span>
                                 <span class="tl-unlock">"Unlocks " {unlock_date}</span>
-                                {lock.memo.map(|m| view! {
-                                    <span class="tl-memo">{m}</span>
-                                })}
+                                {lock.memo.map(|m| view! { <span class="tl-memo">{m}</span> })}
                             </div>
                         }
                     }).collect();
@@ -642,32 +983,25 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
     let on_send = move |_: web_sys::MouseEvent| {
         let to  = to_addr.get_untracked();
         let amt_str = amount.get_untracked();
-
         if to.is_empty() || amt_str.is_empty() {
-            tx_msg.set("Error: fill in both To and Amount.".into());
-            return;
+            tx_msg.set("Error: fill in both To and Amount.".into()); return;
         }
         let amt: f64 = match amt_str.parse() {
             Ok(v) if v > 0.0 => v,
             Ok(_) => { tx_msg.set("Error: amount must be > 0.".into()); return; }
             Err(_) => { tx_msg.set("Error: invalid amount.".into()); return; }
         };
-
         spawn_local(async move {
             sending.set(true);
             tx_msg.set("Mining PoW\u{2026} (~10s)".into());
-
-            // Tauri v2 expects camelCase arg keys.
             let args = serde_wasm_bindgen::to_value(
                 &serde_json::json!({ "to": to, "amountKx": amt })
             ).unwrap_or(no_args());
-
             match call::<String>("send_transfer", args).await {
                 Ok(txid) => {
                     tx_msg.set(format!("Sent! TxId: {txid}"));
                     to_addr.set(String::new());
                     amount.set(String::new());
-                    // Refresh balance (best effort).
                     if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
                         info.set(Some(a));
                     }
@@ -681,51 +1015,35 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
     view! {
         <div class="card">
             <p class="section-title">"Send KX"</p>
-
             <div class="field">
                 <label>"To (account ID)"</label>
                 <div style="display:flex;gap:8px;align-items:center">
-                    <input
-                        type="text"
-                        placeholder="Base-58 address\u{2026}"
-                        style="flex:1"
+                    <input type="text" placeholder="Base-58 address\u{2026}" style="flex:1"
                         prop:value=move || to_addr.get()
                         on:input=move |ev| to_addr.set(event_target_value(&ev))
-                        disabled=move || sending.get()
-                    />
+                        disabled=move || sending.get() />
                     <button type="button" style="white-space:nowrap" on:click=on_scan_qr
-                        disabled=move || sending.get()>
-                        "📷 Scan QR"
-                    </button>
+                        disabled=move || sending.get()>"📷 Scan QR"</button>
                 </div>
                 {move || {
                     let s = scan_msg.get();
                     if s.is_empty() { view! { <span></span> }.into_any() }
                     else {
-                        let cls = if s.starts_with("Scan failed") || s.starts_with("No file") { "msg error" }
-                                  else { "msg success" };
+                        let cls = if s.starts_with("Scan failed") || s.starts_with("No file") { "msg error" } else { "msg success" };
                         view! { <p class=cls style="margin-top:4px">{s}</p> }.into_any()
                     }
                 }}
             </div>
-
             <div class="field">
                 <label>"Amount (KX)"</label>
-                <input
-                    type="number"
-                    placeholder="0.000000"
-                    step="0.000001"
-                    min="0"
+                <input type="number" placeholder="0.000000" step="0.000001" min="0"
                     prop:value=move || amount.get()
                     on:input=move |ev| amount.set(event_target_value(&ev))
-                    disabled=move || sending.get()
-                />
+                    disabled=move || sending.get() />
             </div>
-
             <button class="primary" on:click=on_send disabled=move || sending.get()>
                 {move || if sending.get() { "Sending\u{2026}" } else { "Send Transfer" }}
             </button>
-
             {move || {
                 let s = tx_msg.get();
                 if s.is_empty() { view! { <span></span> }.into_any() }
@@ -744,7 +1062,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
 
 #[component]
 fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
-    let to_pubkey   = RwSignal::new(String::new()); // empty = self-lock
+    let to_pubkey   = RwSignal::new(String::new());
     let lock_amount = RwSignal::new(String::new());
     let lock_date   = RwSignal::new(String::new());
     let lock_memo   = RwSignal::new(String::new());
@@ -752,7 +1070,6 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
     let lock_msg    = RwSignal::new(String::new());
     let scan_msg    = RwSignal::new(String::new());
 
-    // Quick-date helpers: set the date input value.
     let set_date = move |date: String| lock_date.set(date);
 
     let on_scan_qr = move |_: web_sys::MouseEvent| {
@@ -776,15 +1093,8 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
         let date_str = lock_date.get_untracked();
         let memo_str = lock_memo.get_untracked();
         let pubkey   = to_pubkey.get_untracked();
-
-        if amt_str.is_empty() {
-            lock_msg.set("Error: enter an amount.".into());
-            return;
-        }
-        if date_str.is_empty() {
-            lock_msg.set("Error: choose an unlock date.".into());
-            return;
-        }
+        if amt_str.is_empty() { lock_msg.set("Error: enter an amount.".into()); return; }
+        if date_str.is_empty() { lock_msg.set("Error: choose an unlock date.".into()); return; }
         let amt: f64 = match amt_str.parse() {
             Ok(v) if v > 0.0 => v,
             Ok(_) => { lock_msg.set("Error: amount must be > 0.".into()); return; }
@@ -794,22 +1104,18 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             Some(t) => t,
             None => { lock_msg.set("Error: invalid date.".into()); return; }
         };
-
         let memo = if memo_str.is_empty() { None } else { Some(memo_str) };
         let to_pubkey_hex: Option<String> = if pubkey.is_empty() { None } else { Some(pubkey) };
 
         spawn_local(async move {
             locking.set(true);
             lock_msg.set("Mining PoW\u{2026} (~10s)".into());
-
-            // Tauri v2 expects camelCase arg keys.
             let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                 "amountKx": amt,
                 "unlockAtUnix": unlock_unix,
                 "memo": memo,
                 "toPubkeyHex": to_pubkey_hex,
             })).unwrap_or(no_args());
-
             match call::<String>("create_timelock", args).await {
                 Ok(txid) => {
                     lock_msg.set(format!("Promise made! ID: {txid}"));
@@ -817,7 +1123,6 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     lock_date.set(String::new());
                     lock_memo.set(String::new());
                     to_pubkey.set(String::new());
-                    // Refresh balance.
                     if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
                         info.set(Some(a));
                     }
@@ -837,25 +1142,20 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             <div class="field">
                 <label>"To (recipient public key hex, or leave blank to promise to yourself)"</label>
                 <div style="display:flex;gap:8px;align-items:center">
-                    <input
-                        type="text"
-                        placeholder="Leave blank for self · paste pubkey hex · or scan QR\u{2026}"
+                    <input type="text"
+                        placeholder="Leave blank for self \u{b7} paste pubkey hex \u{b7} or scan QR\u{2026}"
                         style="flex:1"
                         prop:value=move || to_pubkey.get()
                         on:input=move |ev| to_pubkey.set(event_target_value(&ev))
-                        disabled=move || locking.get()
-                    />
+                        disabled=move || locking.get() />
                     <button type="button" style="white-space:nowrap" on:click=on_scan_qr
-                        disabled=move || locking.get()>
-                        "📷 Scan QR"
-                    </button>
+                        disabled=move || locking.get()>"📷 Scan QR"</button>
                 </div>
                 {move || {
                     let s = scan_msg.get();
                     if s.is_empty() { view! { <span></span> }.into_any() }
                     else {
-                        let cls = if s.starts_with("Scan failed") || s.starts_with("No file") { "msg error" }
-                                  else { "msg success" };
+                        let cls = if s.starts_with("Scan failed") || s.starts_with("No file") { "msg error" } else { "msg success" };
                         view! { <p class=cls style="margin-top:4px">{s}</p> }.into_any()
                     }
                 }}
@@ -870,26 +1170,18 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
 
             <div class="field">
                 <label>"Amount (KX)"</label>
-                <input
-                    type="number"
-                    placeholder="0.000000"
-                    step="0.000001"
-                    min="0"
+                <input type="number" placeholder="0.000000" step="0.000001" min="0"
                     prop:value=move || lock_amount.get()
                     on:input=move |ev| lock_amount.set(event_target_value(&ev))
-                    disabled=move || locking.get()
-                />
+                    disabled=move || locking.get() />
             </div>
 
             <div class="field">
                 <label>"Unlock Date (UTC)"</label>
-                <input
-                    type="date"
-                    min=today
+                <input type="date" min=today
                     prop:value=move || lock_date.get()
                     on:input=move |ev| lock_date.set(event_target_value(&ev))
-                    disabled=move || locking.get()
-                />
+                    disabled=move || locking.get() />
                 <div class="quick-dates">
                     <button type="button" class="pill"
                         on:click=move |_| { let d=date_plus_months(1); set_date(d); }
@@ -914,14 +1206,11 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
 
             <div class="field">
                 <label>"Memo (optional, max 256 chars)"</label>
-                <textarea
-                    placeholder="e.g. College fund for Maya — do not touch until 2040"
-                    maxlength="256"
-                    rows="3"
+                <textarea placeholder="e.g. College fund for Maya \u{2014} do not touch until 2040"
+                    maxlength="256" rows="3"
                     prop:value=move || lock_memo.get()
                     on:input=move |ev| lock_memo.set(event_target_value(&ev))
-                    disabled=move || locking.get()
-                ></textarea>
+                    disabled=move || locking.get()></textarea>
             </div>
 
             <button class="primary danger" on:click=on_lock disabled=move || locking.get()>
@@ -929,7 +1218,7 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             </button>
 
             <p class="lock-warning">
-                "\u{26A0} Promised funds cannot be recovered before the unlock date. "
+                "\u{26a0} Promised funds cannot be recovered before the unlock date. "
                 "This action is permanent and cannot be undone."
             </p>
 
@@ -951,25 +1240,12 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
 
 #[component]
 fn PromisesPanel() -> impl IntoView {
-    let timelocks   = RwSignal::new(Vec::<TimeLockInfo>::new());
-    let tl_loading  = RwSignal::new(false);
-    let tl_err      = RwSignal::new(String::new());
-    let claim_msg   = RwSignal::new(String::new());
+    let timelocks  = RwSignal::new(Vec::<TimeLockInfo>::new());
+    let tl_loading = RwSignal::new(false);
+    let tl_err     = RwSignal::new(String::new());
+    let claim_msg  = RwSignal::new(String::new());
 
-    // Load promises on mount.
-    Effect::new(move |_| {
-        spawn_local(async move {
-            tl_loading.set(true);
-            tl_err.set(String::new());
-            match call::<Vec<TimeLockInfo>>("get_timelocks", no_args()).await {
-                Ok(locks) => timelocks.set(locks),
-                Err(e)    => tl_err.set(e),
-            }
-            tl_loading.set(false);
-        });
-    });
-
-    let on_refresh = move |_: web_sys::MouseEvent| {
+    let reload = move || {
         spawn_local(async move {
             tl_loading.set(true);
             tl_err.set(String::new());
@@ -980,6 +1256,9 @@ fn PromisesPanel() -> impl IntoView {
             tl_loading.set(false);
         });
     };
+
+    Effect::new(move |_| { reload(); });
+    let on_refresh = move |_: web_sys::MouseEvent| { reload(); };
 
     view! {
         <div class="card">
@@ -1005,7 +1284,6 @@ fn PromisesPanel() -> impl IntoView {
                         <div class="empty-state">
                             <p>"No promises found."</p>
                             <p class="muted">
-                                "On-chain promise indexing is coming soon. "
                                 "Promises you make will appear here once the node supports full scanning."
                             </p>
                         </div>
@@ -1024,17 +1302,13 @@ fn PromisesPanel() -> impl IntoView {
                                 };
                                 let status_label = if matured && lock.status == "Pending" {
                                     "Matured".to_string()
-                                } else {
-                                    lock.status.clone()
-                                };
+                                } else { lock.status.clone() };
                                 let unlock_date = {
                                     let d = js_sys::Date::new(
                                         &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
                                     );
                                     format!("{:04}-{:02}-{:02}",
-                                        d.get_utc_full_year(),
-                                        d.get_utc_month() + 1,
-                                        d.get_utc_date())
+                                        d.get_utc_full_year(), d.get_utc_month() + 1, d.get_utc_date())
                                 };
                                 let lock_id = lock.lock_id.clone();
                                 let can_claim = matured && lock.status == "Pending";
@@ -1044,7 +1318,6 @@ fn PromisesPanel() -> impl IntoView {
                                         let lid2 = lid.clone();
                                         spawn_local(async move {
                                             claim_msg.set("Mining PoW\u{2026}".into());
-                                            // Tauri v2 camelCase
                                             let args = serde_wasm_bindgen::to_value(
                                                 &serde_json::json!({ "lockIdHex": lid2 })
                                             ).unwrap_or(no_args());
@@ -1055,27 +1328,20 @@ fn PromisesPanel() -> impl IntoView {
                                         });
                                     }
                                 };
-
                                 view! {
                                     <div class="timelock-row">
                                         <div class="tl-main">
                                             <span class="tl-amount">{format_kx_str(&lock.amount_kx)} " KX"</span>
                                             <span class="tl-unlock">"Unlocks " {unlock_date}</span>
-                                            {lock.memo.clone().map(|m| view! {
-                                                <span class="tl-memo">{m}</span>
-                                            })}
+                                            {lock.memo.clone().map(|m| view! { <span class="tl-memo">{m}</span> })}
                                         </div>
                                         <div class="tl-right">
                                             <span class=status_cls>{status_label}</span>
                                             {if can_claim {
                                                 view! {
-                                                    <button class="claim-btn" on:click=on_claim>
-                                                        "Claim"
-                                                    </button>
+                                                    <button class="claim-btn" on:click=on_claim>"Claim"</button>
                                                 }.into_any()
-                                            } else {
-                                                view! { <span></span> }.into_any()
-                                            }}
+                                            } else { view! { <span></span> }.into_any() }}
                                         </div>
                                     </div>
                                 }
@@ -1099,16 +1365,143 @@ fn PromisesPanel() -> impl IntoView {
     }
 }
 
+// ── HistoryPanel ──────────────────────────────────────────────────────────────
+
+#[component]
+fn HistoryPanel() -> impl IntoView {
+    let entries    = RwSignal::new(Vec::<TxHistoryEntry>::new());
+    let h_loading  = RwSignal::new(false);
+    let h_err      = RwSignal::new(String::new());
+    let expanded   = RwSignal::new(Option::<String>::None); // tx_id of expanded row
+
+    let reload = move || {
+        spawn_local(async move {
+            h_loading.set(true);
+            h_err.set(String::new());
+            match call::<Vec<TxHistoryEntry>>("get_transaction_history", no_args()).await {
+                Ok(e)  => entries.set(e),
+                Err(e) => h_err.set(e),
+            }
+            h_loading.set(false);
+        });
+    };
+
+    Effect::new(move |_| { reload(); });
+    let on_refresh = move |_: web_sys::MouseEvent| { reload(); };
+
+    view! {
+        <div class="card">
+            <div class="row">
+                <p class="section-title">"Transaction History"</p>
+                <button on:click=on_refresh disabled=move || h_loading.get()>
+                    {move || if h_loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
+                </button>
+            </div>
+
+            {move || {
+                let e = h_err.get();
+                if e.is_empty() { view! { <span></span> }.into_any() }
+                else { view! { <p class="error">{e}</p> }.into_any() }
+            }}
+
+            {move || {
+                let list = entries.get();
+                if h_loading.get() {
+                    view! { <p class="muted">"Loading\u{2026}"</p> }.into_any()
+                } else if list.is_empty() && h_err.get().is_empty() {
+                    view! {
+                        <div class="empty-state">
+                            <p>"\u{1f552} No transactions yet"</p>
+                            <p class="muted">"Transactions will appear here once confirmed on-chain."</p>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="history-list">
+                            {list.into_iter().map(|entry| {
+                                let tx_id = entry.tx_id.clone();
+                                let tx_id_for_toggle = tx_id.clone();
+                                let type_icon = match entry.tx_type.as_str() {
+                                    "TimeLockCreate" => "\u{23f3}",
+                                    "TimeLockClaim"  => "\u{2705}",
+                                    _                => "\u{2197}",
+                                };
+                                let amount_display = entry.amount_chronos.as_deref()
+                                    .map(|c| format!("{} KX", format_kx(c)))
+                                    .unwrap_or_else(|| "\u{2014}".to_string());
+                                let addr_display = entry.counterparty.as_deref()
+                                    .map(shorten_addr)
+                                    .unwrap_or_default();
+                                let date_display = format_utc_ts(entry.timestamp);
+                                let tx_id_short = shorten_addr(&entry.tx_id);
+
+                                view! {
+                                    <div class="history-row"
+                                        on:click=move |_| {
+                                            let current = expanded.get_untracked();
+                                            if current.as_deref() == Some(&tx_id_for_toggle) {
+                                                expanded.set(None);
+                                            } else {
+                                                expanded.set(Some(tx_id_for_toggle.clone()));
+                                            }
+                                        }>
+                                        <div class="history-row-top">
+                                            <span class="history-type">
+                                                {type_icon} " " {entry.tx_type.clone()}
+                                            </span>
+                                            <span class="history-amount">{amount_display}</span>
+                                        </div>
+                                        <div class="history-row-bottom">
+                                            <span class="history-addr">{addr_display}</span>
+                                            <span class="history-date">{date_display}</span>
+                                        </div>
+                                        {move || {
+                                            if expanded.get().as_deref() == Some(tx_id.as_str()) {
+                                                view! {
+                                                    <div class="history-detail">
+                                                        "TxID: " {tx_id_short.clone()}
+                                                    </div>
+                                                }.into_any()
+                                            } else { view! { <span></span> }.into_any() }
+                                        }}
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
 // ── SettingsPanel ─────────────────────────────────────────────────────────────
 
 #[component]
-fn SettingsPanel(online: RwSignal<bool>) -> impl IntoView {
-    let node_url    = RwSignal::new(String::new());
-    let save_msg    = RwSignal::new(String::new());
-    let pubkey_hex  = RwSignal::new(String::new());
-    let pk_loading  = RwSignal::new(false);
+fn SettingsPanel(
+    online: RwSignal<bool>,
+    app_phase: RwSignal<AppPhase>,
+    pin_digits: RwSignal<String>,
+    pin_msg: RwSignal<String>,
+    pin_shake: RwSignal<bool>,
+) -> impl IntoView {
+    let node_url   = RwSignal::new(String::new());
+    let save_msg   = RwSignal::new(String::new());
+    let pubkey_hex = RwSignal::new(String::new());
+    let pk_loading = RwSignal::new(false);
 
-    // Load current URL on mount.
+    // Modal visibility
+    let show_about   = RwSignal::new(false);
+    let show_updates = RwSignal::new(false);
+    let show_change_pin = RwSignal::new(false);
+
+    // Change PIN state
+    let cp_phase    = RwSignal::new(0u8); // 0=verify current, 1=enter new, 2=confirm new
+    let cp_digits   = RwSignal::new(String::new());
+    let cp_first    = RwSignal::new(String::new());
+    let cp_msg      = RwSignal::new(String::new());
+    let cp_shake    = RwSignal::new(false);
+
     Effect::new(move |_| {
         spawn_local(async move {
             let url = call::<String>("get_node_url", no_args()).await.unwrap_or_default();
@@ -1121,9 +1514,7 @@ fn SettingsPanel(online: RwSignal<bool>) -> impl IntoView {
         if url.is_empty() { save_msg.set("Error: URL cannot be empty.".into()); return; }
         spawn_local(async move {
             save_msg.set(String::new());
-            let args = serde_wasm_bindgen::to_value(
-                &serde_json::json!({ "url": url })
-            ).unwrap_or(no_args());
+            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "url": url })).unwrap_or(no_args());
             match call::<()>("set_node_url", args).await {
                 Ok(_) => {
                     let is_online = call::<bool>("check_node", no_args()).await.unwrap_or(false);
@@ -1146,21 +1537,111 @@ fn SettingsPanel(online: RwSignal<bool>) -> impl IntoView {
         });
     };
 
+    // Change PIN: handle submit on 4 digits
+    let cp_input_ref = NodeRef::<leptos::html::Input>::new();
+
+    Effect::new(move |_| {
+        let _ = show_change_pin.get();
+        if let Some(el) = cp_input_ref.get() {
+            if show_change_pin.get_untracked() {
+                let _ = el.focus();
+            }
+        }
+    });
+
+    let cp_on_input = move |ev: web_sys::Event| {
+        use wasm_bindgen::JsCast;
+        if let Some(input) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+            let val = input.value();
+            let digits: String = val.chars().filter(|c| c.is_ascii_digit()).take(4).collect();
+            input.set_value("");
+            let current = cp_digits.get_untracked();
+            let new_val = if digits.len() > current.len() {
+                format!("{}{}", current, &digits[current.len()..])
+            } else { digits };
+            let trimmed: String = new_val.chars().take(4).collect();
+            cp_digits.set(trimmed);
+        }
+    };
+
+    let cp_on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == "Backspace" {
+            let mut d = cp_digits.get_untracked();
+            d.pop();
+            cp_digits.set(d);
+            ev.prevent_default();
+        }
+    };
+
+    Effect::new(move |_| {
+        let d = cp_digits.get();
+        if d.len() == 4 {
+            let captured = d.clone();
+            cp_digits.set(String::new());
+            let phase = cp_phase.get_untracked();
+            match phase {
+                0 => {
+                    // Verify current PIN
+                    spawn_local(async move {
+                        let args = serde_wasm_bindgen::to_value(
+                            &serde_json::json!({ "pin": captured })
+                        ).unwrap_or(no_args());
+                        match call::<bool>("verify_pin", args).await {
+                            Ok(true) => { cp_phase.set(1); cp_msg.set(String::new()); }
+                            Ok(false) | Err(_) => {
+                                do_shake(cp_shake);
+                                cp_msg.set("Incorrect PIN".to_string());
+                            }
+                        }
+                    });
+                }
+                1 => { cp_first.set(captured); cp_phase.set(2); cp_msg.set(String::new()); }
+                2 => {
+                    let first = cp_first.get_untracked();
+                    if captured == first {
+                        spawn_local(async move {
+                            let args = serde_wasm_bindgen::to_value(
+                                &serde_json::json!({ "pin": captured })
+                            ).unwrap_or(no_args());
+                            match call::<()>("set_pin", args).await {
+                                Ok(_) => {
+                                    cp_msg.set("PIN changed successfully!".to_string());
+                                    cp_phase.set(0);
+                                    cp_first.set(String::new());
+                                    // Close modal after brief delay
+                                    spawn_local(async move {
+                                        delay_ms(1500).await;
+                                        show_change_pin.set(false);
+                                        cp_msg.set(String::new());
+                                    });
+                                }
+                                Err(e) => cp_msg.set(format!("Error: {e}")),
+                            }
+                        });
+                    } else {
+                        do_shake(cp_shake);
+                        cp_msg.set("PINs do not match \u{2014} please try again".to_string());
+                        cp_phase.set(1);
+                        cp_first.set(String::new());
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
     view! {
         <div class="card">
             <p class="section-title">"Settings"</p>
 
+            // Node URL
             <div class="field">
                 <label>"Node URL"</label>
-                <input
-                    type="text"
-                    placeholder="http://127.0.0.1:8545"
+                <input type="text" placeholder="http://127.0.0.1:8545"
                     prop:value=move || node_url.get()
-                    on:input=move |ev| node_url.set(event_target_value(&ev))
-                />
+                    on:input=move |ev| node_url.set(event_target_value(&ev)) />
             </div>
             <button class="primary" on:click=on_save>"Save & Reconnect"</button>
-
             {move || {
                 let s = save_msg.get();
                 if s.is_empty() { view! { <span></span> }.into_any() }
@@ -1170,8 +1651,9 @@ fn SettingsPanel(online: RwSignal<bool>) -> impl IntoView {
                 }
             }}
 
-            <div style="margin-top:8px;border-top:1px solid #1e2130;padding-top:16px">
-                <p class="label">"My Public Key (share with others so they can promise KX to you)"</p>
+            // Public Key
+            <div class="settings-section">
+                <p class="label">"My Public Key (share so others can promise KX to you)"</p>
                 <button on:click=on_show_pubkey disabled=move || pk_loading.get()>
                     {move || if pk_loading.get() { "Loading\u{2026}" } else { "Show Public Key" }}
                 </button>
@@ -1181,6 +1663,130 @@ fn SettingsPanel(online: RwSignal<bool>) -> impl IntoView {
                     else { view! { <p class="mono" style="font-size:10px;word-break:break-all;margin-top:8px">{pk}</p> }.into_any() }
                 }}
             </div>
+
+            // Security
+            <div class="settings-section">
+                <p class="label">"Security"</p>
+                <button on:click=move |_| {
+                    cp_phase.set(0); cp_digits.set(String::new());
+                    cp_msg.set(String::new()); show_change_pin.set(true);
+                }>"🔐 Change PIN"</button>
+            </div>
+
+            // About & Updates
+            <div class="settings-section">
+                <p class="label">"About"</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <button on:click=move |_| show_about.set(true)>"\u{2139} About ChronX"</button>
+                    <button on:click=move |_| show_updates.set(true)>"\u{1f504} Check for Updates"</button>
+                </div>
+            </div>
         </div>
+
+        // ── About modal ───────────────────────────────────────────────────────
+
+        {move || if show_about.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| show_about.set(false)>
+                    <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
+                        <img src=logo_src() alt="ChronX" style="width:70px;height:auto;margin:0 auto" />
+                        <p class="modal-title">"ChronX Wallet v1.0.0"</p>
+                        <div class="modal-body">
+                            <p>"The Future Payment Protocol"</p>
+                            <p>"Built on post-quantum cryptography"</p>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:6px;align-items:center">
+                            <a href="https://www.chronx.io" target="_blank" rel="noopener" class="modal-link">
+                                "chronx.io"
+                            </a>
+                            <a href="https://github.com/Counselco/chronx" target="_blank" rel="noopener" class="modal-link">
+                                "github.com/Counselco/chronx"
+                            </a>
+                        </div>
+                        <button class="primary" on:click=move |_| show_about.set(false)>"Close"</button>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── Check for updates modal ───────────────────────────────────────────
+
+        {move || if show_updates.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| show_updates.set(false)>
+                    <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
+                        <p class="modal-title">"\u{1f504} Check for Updates"</p>
+                        <div class="modal-body">
+                            <p>"You are running ChronX Wallet v1.0.0."</p>
+                            <p>"Check chronx.io for the latest version."</p>
+                        </div>
+                        <a href="https://www.chronx.io" target="_blank" rel="noopener" class="modal-link">
+                            "Visit chronx.io"
+                        </a>
+                        <button class="primary" on:click=move |_| show_updates.set(false)>"Close"</button>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── Change PIN modal ──────────────────────────────────────────────────
+
+        {move || if show_change_pin.get() {
+            let cp_title = move || match cp_phase.get() {
+                0 => "Enter Current PIN",
+                1 => "Enter New PIN",
+                _ => "Confirm New PIN",
+            };
+            view! {
+                <div class="modal-overlay" on:click=move |_| {
+                    show_change_pin.set(false);
+                    cp_digits.set(String::new());
+                    cp_msg.set(String::new());
+                }>
+                    <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
+                        <p class="modal-title">"Change PIN"</p>
+                        <p class="pin-subtitle">{cp_title}</p>
+
+                        // PIN blocks for Change PIN
+                        <div class=move || if cp_shake.get() { "pin-blocks-wrap pin-shake" } else { "pin-blocks-wrap" }>
+                            <div class="pin-blocks">
+                                {(0..4usize).map(|i| {
+                                    view! {
+                                        <div class=move || {
+                                            let len = cp_digits.get().len();
+                                            if len > i { "pin-block filled" }
+                                            else if len == i { "pin-block active" }
+                                            else { "pin-block" }
+                                        }>
+                                            {move || if cp_digits.get().len() > i { "\u{25cf}" } else { "" }}
+                                        </div>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        </div>
+
+                        {move || {
+                            let msg = cp_msg.get();
+                            if msg.is_empty() { view! { <span></span> }.into_any() }
+                            else {
+                                let cls = if msg.starts_with("PIN changed") { "msg success" } else { "pin-msg" };
+                                view! { <p class=cls>{msg}</p> }.into_any()
+                            }
+                        }}
+
+                        // Hidden capture input
+                        <input node_ref=cp_input_ref type="tel" inputmode="numeric"
+                            autocomplete="off" class="pin-hidden-input"
+                            on:input=cp_on_input on:keydown=cp_on_keydown />
+
+                        <button on:click=move |_| {
+                            show_change_pin.set(false);
+                            cp_digits.set(String::new());
+                            cp_msg.set(String::new());
+                        }>"Cancel"</button>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
     }
 }

@@ -1,3 +1,4 @@
+use sha2::{Sha256, Digest};
 use chronx_core::{
     constants::{CHRONOS_PER_KX, POW_INITIAL_DIFFICULTY},
     transaction::{Action, AuthScheme, Transaction, TransactionBody},
@@ -58,6 +59,8 @@ fn config_path(app: &AppHandle) -> PathBuf {
 #[derive(Serialize, Deserialize)]
 struct WalletConfig {
     node_url: String,
+    #[serde(default)]
+    pin_hash: Option<String>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -65,11 +68,25 @@ fn read_config(app: &AppHandle) -> WalletConfig {
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(WalletConfig { node_url: DEFAULT_RPC_URL.to_string() })
+        .unwrap_or(WalletConfig { node_url: DEFAULT_RPC_URL.to_string(), pin_hash: None })
 }
 
 fn rpc_url(app: &AppHandle) -> String {
     read_config(app).node_url
+}
+
+fn write_config(app: &AppHandle, cfg: &WalletConfig) -> Result<(), String> {
+    let path = config_path(app);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Creating config dir: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Writing config: {e}"))
+}
+
+fn hash_pin(pin: &str) -> String {
+    let result = Sha256::digest(pin.as_bytes());
+    result.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 // ── Types returned to the frontend ───────────────────────────────────────────
@@ -416,14 +433,9 @@ pub async fn get_node_url(app: AppHandle) -> String {
 /// Reads the existing config first to preserve all other fields.
 #[tauri::command]
 pub async fn set_node_url(app: AppHandle, url: String) -> Result<(), String> {
-    let path = config_path(&app);
     let mut cfg = read_config(&app);
     cfg.node_url = url;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Creating config dir: {e}"))?;
-    }
-    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| format!("Writing config: {e}"))
+    write_config(&app, &cfg)
 }
 
 /// Generate a fresh wallet keypair and save it (first-run, mainly for Android).
@@ -443,6 +455,75 @@ pub async fn generate_wallet(app: AppHandle) -> Result<String, String> {
     std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
     Ok(b58)
 }
+
+// ── PIN commands ──────────────────────────────────────────────────────────────
+
+/// Returns true if a PIN has been configured for this wallet.
+#[tauri::command]
+pub async fn check_pin_set(app: AppHandle) -> bool {
+    read_config(&app).pin_hash.is_some()
+}
+
+/// Hash the given PIN with SHA-256 and store it in the wallet config.
+#[tauri::command]
+pub async fn set_pin(app: AppHandle, pin: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    cfg.pin_hash = Some(hash_pin(&pin));
+    write_config(&app, &cfg)
+}
+
+/// Returns true if the given PIN matches the stored hash.
+#[tauri::command]
+pub async fn verify_pin(app: AppHandle, pin: String) -> Result<bool, String> {
+    let cfg = read_config(&app);
+    Ok(cfg.pin_hash.as_deref() == Some(hash_pin(&pin).as_str()))
+}
+
+// ── Transaction history ───────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TxHistoryEntry {
+    pub tx_id: String,
+    pub tx_type: String,
+    pub amount_chronos: Option<String>,
+    pub counterparty: Option<String>,
+    pub timestamp: i64,
+    pub status: String,
+}
+
+/// Fetch recent transactions for this wallet (up to 50).
+#[tauri::command]
+pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntry>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+
+    let result = rpc_call(&url, "chronx_getRecentTransactions", serde_json::json!([b58, 50]))
+        .await
+        .map_err(|e| format!("RPC failed: {e}"))?;
+
+    let raw: Vec<serde_json::Value> =
+        serde_json::from_value(result).map_err(|e| format!("Parsing history: {e}"))?;
+
+    Ok(raw.into_iter().map(|v| TxHistoryEntry {
+        tx_id:           v["tx_id"].as_str().unwrap_or("").to_string(),
+        tx_type:         v["tx_type"].as_str().unwrap_or("Transfer").to_string(),
+        amount_chronos:  v["amount_chronos"].as_str().map(|s| s.to_string()),
+        counterparty:    v["counterparty"].as_str().map(|s| s.to_string()),
+        timestamp:       v["timestamp"].as_i64().unwrap_or(0),
+        status:          v["status"].as_str().unwrap_or("Confirmed").to_string(),
+    }).collect())
+}
+
+// ── App version ───────────────────────────────────────────────────────────────
+
+/// Return the application version from Cargo.toml (mirrors tauri.conf.json version).
+#[tauri::command]
+pub async fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+// ── Incoming promises ─────────────────────────────────────────────────────────
 
 /// Fetch all **Pending** incoming timelocks for this wallet's account (max 20).
 /// These are locks sent to us that haven't been claimed yet.

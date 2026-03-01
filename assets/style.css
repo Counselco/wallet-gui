@@ -376,6 +376,305 @@ input[type="date"] { color-scheme: dark; }
 
 /* ── Mobile / Android tweaks ─────────────────────────────────────────────── */
 
+/* ── Incoming lock row ───────────────────────────────────────────────────── */
+
+.incoming-lock-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 10px 0;
+    border-bottom: 1px solid #1e2130;
+}
+.incoming-lock-row:last-child { border-bottom: none; }
+
+/* ── Splash screen ───────────────────────────────────────────────────────── */
+
+.splash-screen {
+    position: fixed;
+    inset: 0;
+    background: #0f1117;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 200;
+    animation: splash-fade-in 0.6s ease-out both;
+}
+
+@keyframes splash-fade-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+.splash-logo {
+    width: 100px;
+    height: auto;
+}
+
+.splash-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #d4a84b;
+    letter-spacing: 0.04em;
+}
+
+.splash-sub {
+    font-size: 12px;
+    color: #4b5563;
+    letter-spacing: 0.06em;
+}
+
+/* ── PIN screen ──────────────────────────────────────────────────────────── */
+
+.pin-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 80vh;
+    gap: 20px;
+    padding: 20px;
+}
+
+.pin-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    text-align: center;
+}
+
+.pin-subtitle {
+    font-size: 13px;
+    color: #6b7280;
+    text-align: center;
+    line-height: 1.5;
+}
+
+.pin-blocks-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.pin-blocks {
+    display: flex;
+    gap: 14px;
+}
+
+.pin-block {
+    width: 54px;
+    height: 62px;
+    border: 2px solid #2d3748;
+    border-radius: 10px;
+    background: #161b27;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    color: #fff;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.pin-block.active {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.2);
+}
+
+.pin-block.filled {
+    border-color: #4b5563;
+    color: #d4a84b;
+}
+
+/* Shake animation */
+@keyframes pin-shake {
+    0%, 100% { transform: translateX(0); }
+    15%       { transform: translateX(-10px); }
+    35%       { transform: translateX(10px); }
+    55%       { transform: translateX(-7px); }
+    75%       { transform: translateX(7px); }
+}
+
+.pin-shake { animation: pin-shake 0.45s ease-in-out; }
+
+/* Hidden capture input — off-screen but focusable (triggers numeric kb on Android) */
+.pin-hidden-input {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 44px;
+    font-size: 16px; /* prevents iOS auto-zoom */
+    opacity: 0.01;
+    background: #0f1117;
+    border: none;
+    color: transparent;
+    caret-color: transparent;
+    outline: none;
+    z-index: 10;
+}
+
+.pin-coming-soon {
+    font-size: 11px;
+    color: #374151;
+    text-align: center;
+    margin-top: 4px;
+}
+
+.pin-msg {
+    min-height: 20px;
+    font-size: 13px;
+    color: #f87171;
+    text-align: center;
+}
+
+.pin-lockout-msg {
+    font-size: 14px;
+    color: #facc15;
+    text-align: center;
+    font-weight: 500;
+}
+
+/* ── Modal overlay ───────────────────────────────────────────────────────── */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px;
+}
+
+.modal-card {
+    background: #161b27;
+    border: 1px solid #1e2845;
+    border-radius: 14px;
+    padding: 28px 24px;
+    max-width: 380px;
+    width: 100%;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.modal-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.modal-body {
+    font-size: 13px;
+    color: #8b9197;
+    line-height: 1.6;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.modal-link {
+    color: #3b82f6;
+    text-decoration: none;
+    font-size: 13px;
+}
+.modal-link:hover { color: #60a5fa; text-decoration: underline; }
+
+/* ── Transaction history ─────────────────────────────────────────────────── */
+
+.history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.history-row {
+    background: #0f1117;
+    border: 1px solid #1e2130;
+    border-radius: 8px;
+    padding: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.history-row:hover { border-color: #2d3748; }
+
+.history-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.history-type {
+    font-size: 12px;
+    font-weight: 600;
+    color: #8b9197;
+    white-space: nowrap;
+}
+
+.history-amount {
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.history-row-bottom {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    gap: 8px;
+}
+
+.history-addr {
+    font-size: 11px;
+    color: #4b5563;
+    font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.history-date {
+    font-size: 11px;
+    color: #4b5563;
+    white-space: nowrap;
+}
+
+.history-detail {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #1e2130;
+    font-size: 11px;
+    color: #6b7280;
+    font-family: 'Consolas', 'Monaco', monospace;
+    word-break: break-all;
+    line-height: 1.5;
+}
+
+/* ── Version footer ──────────────────────────────────────────────────────── */
+
+.version-footer {
+    text-align: center;
+    font-size: 11px;
+    color: #2d3748;
+    padding: 12px 0 4px;
+    letter-spacing: 0.04em;
+}
+
+/* ── Settings section divider ────────────────────────────────────────────── */
+
+.settings-section {
+    margin-top: 8px;
+    border-top: 1px solid #1e2130;
+    padding-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* ── Mobile / Android tweaks ─────────────────────────────────────────────── */
+
 @media (max-width: 400px) {
     .app { padding: 10px; }
     header { padding: 8px 0 12px; }
@@ -384,4 +683,5 @@ input[type="date"] { color-scheme: dark; }
     .balance { font-size: 24px; }
     .quick-dates { gap: 4px; }
     .tl-memo { max-width: 140px; }
+    .pin-block { width: 46px; height: 54px; font-size: 24px; }
 }

@@ -15,6 +15,11 @@ pub fn run() {
             commands::set_node_url,
             commands::generate_wallet,
             commands::get_pending_incoming,
+            commands::check_pin_set,
+            commands::set_pin,
+            commands::verify_pin,
+            commands::get_transaction_history,
+            commands::get_app_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ChronX Wallet");
