@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
-const DEFAULT_RPC_URL: &str = "http://127.0.0.1:8545";
+const DEFAULT_RPC_URL: &str = "https://rpc.chronx.io";
 
 // ── Platform-aware paths ──────────────────────────────────────────────────────
 
