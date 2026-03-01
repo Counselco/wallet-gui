@@ -11,7 +11,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [],
+    "icon": ["icons/icon.ico"],
     "android": {
       "minSdkVersion": 24
     }
