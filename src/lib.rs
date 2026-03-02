@@ -936,13 +936,29 @@ fn PinScreen(
 ) -> impl IntoView {
     let input_ref = NodeRef::<leptos::html::Input>::new();
 
-    // Auto-focus the hidden input whenever the PIN screen phase changes
+    // Auto-focus the hidden input whenever the PIN screen phase changes.
+    // We yield one microtask (Promise::resolve) so the NodeRef is populated
+    // before we call .focus() — NodeRef::get() returns None if called before
+    // the element is attached to the DOM.
+    let input_ref_focus = input_ref;
     Effect::new(move |_| {
         let _ = phase.get(); // track phase changes
-        if let Some(el) = input_ref.get() {
+        let ir = input_ref_focus;
+        spawn_local(async move {
+            let _ = JsFuture::from(Promise::resolve(&JsValue::UNDEFINED)).await;
+            if let Some(el) = ir.get() {
+                let _ = el.focus();
+            }
+        });
+    });
+
+    // Click anywhere on the pin-screen to re-focus the hidden input
+    let input_ref_click = input_ref;
+    let on_screen_click = move |_: web_sys::MouseEvent| {
+        if let Some(el) = input_ref_click.get() {
             let _ = el.focus();
         }
-    });
+    };
 
     // on_submit clones — one for on_input auto-submit, one for the Confirm button.
     // on_submit itself is moved into on_keydown (handles both digit auto-submit and Enter).
@@ -1021,7 +1037,7 @@ fn PinScreen(
                 <img src=logo_src() alt="ChronX" style="height:44px;width:auto;display:inline-block" />
             </div>
 
-            <div class="pin-screen">
+            <div class="pin-screen" on:click=on_screen_click>
                 // Title
                 <p class="pin-title">
                     {move || match phase.get() {
@@ -1093,12 +1109,17 @@ fn PinScreen(
                     }
                 }}
 
-                // Hidden input — captures keyboard on desktop and virtual keypad on Android
+                // Hidden input — captures keyboard on desktop and virtual keypad on Android.
+                // type="text" (not "tel") ensures preventDefault() on keydown actually
+                // suppresses the subsequent input event in Tauri/WebView2 on Windows,
+                // preventing double-counting when both on_keydown and on_input would fire.
                 <input
                     node_ref=input_ref
-                    type="tel"
+                    type="text"
                     inputmode="numeric"
+                    maxlength="4"
                     autocomplete="off"
+                    autofocus
                     class="pin-hidden-input"
                     on:keydown=on_keydown
                     on:input=on_input
