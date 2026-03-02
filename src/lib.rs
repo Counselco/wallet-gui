@@ -1687,7 +1687,7 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     "\u{1f550} Current UTC time: "
                     {move || utc_clock.get()}
                 </div>
-                <label>"Unlock Date &amp; Time (UTC)"</label>
+                <label>"Unlock Date \u{0026} Time (UTC)"</label>
                 <input type="datetime-local"
                     prop:min=move || min_datetime_str(3600)
                     prop:value=move || lock_date.get()
@@ -2085,6 +2085,11 @@ fn SettingsPanel(
     };
 
     let on_show_pubkey = move |_: web_sys::MouseEvent| {
+        // Toggle: if key is already visible, hide it
+        if !pubkey_hex.get_untracked().is_empty() {
+            pubkey_hex.set(String::new());
+            return;
+        }
         spawn_local(async move {
             pk_loading.set(true);
             match call::<String>("export_public_key", no_args()).await {
@@ -2107,27 +2112,46 @@ fn SettingsPanel(
         }
     });
 
-    let cp_on_input = move |ev: web_sys::Event| {
-        use wasm_bindgen::JsCast;
-        if let Some(input) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-            let val = input.value();
-            let digits: String = val.chars().filter(|c| c.is_ascii_digit()).take(4).collect();
-            input.set_value("");
-            let current = cp_digits.get_untracked();
-            let new_val = if digits.len() > current.len() {
-                format!("{}{}", current, &digits[current.len()..])
-            } else { digits };
-            let trimmed: String = new_val.chars().take(4).collect();
-            cp_digits.set(trimmed);
-        }
-    };
-
+    // Same keydown-first pattern as PinScreen to avoid double-fire bugs.
+    // On desktop: keydown fires first, prevent_default() stops on:input from seeing the char.
+    // On Android: keydown doesn't fire for virtual keyboard, so on:input handles digits.
     let cp_on_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Backspace" {
+        let key = ev.key();
+        if key.len() == 1 {
+            if let Some(ch) = key.chars().next() {
+                if ch.is_ascii_digit() {
+                    ev.prevent_default();
+                    let mut d = cp_digits.get_untracked();
+                    if d.len() < 4 {
+                        d.push(ch);
+                        cp_digits.set(d);
+                    }
+                }
+            }
+        } else if key == "Backspace" {
+            ev.prevent_default();
             let mut d = cp_digits.get_untracked();
             d.pop();
             cp_digits.set(d);
-            ev.prevent_default();
+        }
+    };
+
+    let cp_on_input = move |ev: web_sys::Event| {
+        use wasm_bindgen::JsCast;
+        if let Some(input) = ev.target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            let val = input.value();
+            // Always clear so the hidden input never accumulates text
+            input.set_value("");
+            // Only act if a digit is present (mobile virtual keyboard case)
+            if let Some(ch) = val.chars().find(|c| c.is_ascii_digit()) {
+                let mut d = cp_digits.get_untracked();
+                if d.len() < 4 {
+                    d.push(ch);
+                    cp_digits.set(d);
+                }
+            }
         }
     };
 
@@ -2213,7 +2237,13 @@ fn SettingsPanel(
             <div class="settings-section">
                 <p class="label">"My Public Key (share so others can promise KX to you)"</p>
                 <button on:click=on_show_pubkey disabled=move || pk_loading.get()>
-                    {move || if pk_loading.get() { "Loading\u{2026}" } else { "Show Public Key" }}
+                    {move || if pk_loading.get() {
+                        "Loading\u{2026}"
+                    } else if pubkey_hex.get().is_empty() {
+                        "Show Public Key"
+                    } else {
+                        "Hide Public Key"
+                    }}
                 </button>
                 {move || {
                     let pk = pubkey_hex.get();

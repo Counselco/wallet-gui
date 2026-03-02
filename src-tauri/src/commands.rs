@@ -589,67 +589,44 @@ pub struct TxHistoryEntry {
     pub unlock_date: Option<i64>,
 }
 
-/// Fetch recent transactions for this wallet (up to 50), including Promise (timelock) history.
+/// Fetch Promise (timelock) history for this wallet.
+/// Regular Transfer entries are omitted — the node does not return transfer amounts,
+/// so they provide no useful information. Self-sends were also excluded by the previous
+/// `action_count < 2` filter (the node counts self-transfers with action_count >= 2).
 #[tauri::command]
 pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntry>, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
     let b58 = kp.account_id.to_b58();
 
-    // ── Regular transfers ────────────────────────────────────────────────────
-    let result = rpc_call(&url, "chronx_getRecentTransactions", serde_json::json!([50]))
-        .await
-        .map_err(|e| format!("RPC failed: {e}"))?;
+    // ── Promise (timelock) transactions only ─────────────────────────────────
+    let tl_result = rpc_call(
+        &url, "chronx_getTimeLockContracts", serde_json::json!([b58])
+    ).await.map_err(|e| format!("RPC failed: {e}"))?;
 
-    let raw: Vec<serde_json::Value> =
-        serde_json::from_value(result).map_err(|e| format!("Parsing history: {e}"))?;
+    let locks: Vec<serde_json::Value> =
+        serde_json::from_value(tl_result).map_err(|e| format!("Parsing history: {e}"))?;
 
-    let mut entries: Vec<TxHistoryEntry> = raw
+    let mut entries: Vec<TxHistoryEntry> = locks
         .into_iter()
-        .filter(|v| {
-            // Only this account's TXs; skip promise TXs (fetched separately below)
-            v["from"].as_str() == Some(b58.as_str())
-                && v["action_count"].as_u64().unwrap_or(1) < 2
-        })
-        .map(|v| TxHistoryEntry {
-            tx_id:          v["tx_id"].as_str().unwrap_or("").to_string(),
-            tx_type:        "Transfer".to_string(),
-            amount_chronos: None,
-            counterparty:   None,
-            timestamp:      v["timestamp"].as_i64().unwrap_or(0),
-            status:         "Confirmed".to_string(),
-            unlock_date:    None,
+        .filter(|v| v["sender"].as_str() == Some(b58.as_str()))
+        .map(|v| {
+            let amount_chronos = v["amount_kx"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .map(|kx| format!("{}", (kx * CHRONOS_PER_KX as f64) as u128));
+            TxHistoryEntry {
+                tx_id:          v["lock_id"].as_str().unwrap_or("").to_string(),
+                tx_type:        "Promise Sent".to_string(),
+                amount_chronos,
+                counterparty:   v["memo"].as_str().map(|s| s.to_string()),
+                timestamp:      v["created_at"].as_i64().unwrap_or(0),
+                status:         v["status"].as_str().unwrap_or("Pending").to_string(),
+                unlock_date:    Some(v["unlock_at"].as_i64().unwrap_or(0)),
+            }
         })
         .collect();
 
-    // ── Promise (timelock) transactions ──────────────────────────────────────
-    if let Ok(tl_result) = rpc_call(
-        &url, "chronx_getTimeLockContracts", serde_json::json!([b58])
-    ).await {
-        if let Ok(locks) = serde_json::from_value::<Vec<serde_json::Value>>(tl_result) {
-            for v in locks {
-                // Only show locks sent BY this account
-                if v["sender"].as_str() != Some(b58.as_str()) {
-                    continue;
-                }
-                let amount_chronos = v["amount_kx"]
-                    .as_str()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|kx| format!("{}", (kx * CHRONOS_PER_KX as f64) as u128));
-                entries.push(TxHistoryEntry {
-                    tx_id:          v["lock_id"].as_str().unwrap_or("").to_string(),
-                    tx_type:        "Promise Sent".to_string(),
-                    amount_chronos,
-                    counterparty:   v["memo"].as_str().map(|s| s.to_string()),
-                    timestamp:      v["created_at"].as_i64().unwrap_or(0),
-                    status:         v["status"].as_str().unwrap_or("Pending").to_string(),
-                    unlock_date:    Some(v["unlock_at"].as_i64().unwrap_or(0)),
-                });
-            }
-        }
-    }
-
-    // Sort most-recent first
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(entries)
 }
@@ -676,14 +653,15 @@ pub struct UpdateInfo {
 /// Fetch https://chronx.io/version.json and compare with this build's version.
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateInfo, String> {
+    const FALLBACK: &str =
+        "Unable to check for updates \u{2014} please visit chronx.io for the latest version";
     let current = env!("CARGO_PKG_VERSION").to_string();
     let resp = reqwest::get("https://chronx.io/version.json")
         .await
-        .map_err(|e| format!("Network error: {e}"))?;
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {e}"))?;
+        .map_err(|_| FALLBACK.to_string())?;
+    let text = resp.text().await.map_err(|_| FALLBACK.to_string())?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|_| FALLBACK.to_string())?;
     let latest = json["version"].as_str().unwrap_or("").to_string();
     let download_url = json["download_url"]
         .as_str()
