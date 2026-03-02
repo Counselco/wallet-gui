@@ -842,6 +842,37 @@ pub async fn mark_notice_seen(app: AppHandle, id: String) -> Result<(), String> 
 
 /// Fetch all **Pending** incoming timelocks for this wallet's account (max 20).
 /// These are locks sent to us that haven't been claimed yet.
+/// POST to https://api.chronx.io/notify to trigger an email notification for an email lock.
+/// Fires best-effort — errors are logged but not surfaced to the user.
+#[tauri::command]
+pub async fn notify_email_recipient(
+    email: String,
+    amount_kx: f64,
+    unlock_at_unix: i64,
+    memo: Option<String>,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "to": email,
+        "amount": format!("{:.6}", amount_kx),
+        "unlock_at": unlock_at_unix,
+        "memo": memo,
+    });
+    let res = client
+        .post("https://api.chronx.io/notify")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Notify request failed: {e}"))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("Notify API returned {status}: {text}"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> {
     let url = rpc_url(&app);

@@ -1370,6 +1370,7 @@ fn AccountPanel(
                             }
                         }}
                     </p>
+                    <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
                     <p style="margin-top:8px;font-size:12px">
                         <a class="exchange-link" href="#" on:click=move |ev| {
                             ev.prevent_default();
@@ -1518,6 +1519,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     prop:value=move || amount.get()
                     on:input=move |ev| amount.set(event_target_value(&ev))
                     disabled=move || sending.get() />
+                <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
             </div>
             <button class="primary" on:click=on_send disabled=move || sending.get()>
                 {move || if sending.get() { "Sending\u{2026}" } else { "Send Transfer" }}
@@ -1699,6 +1701,7 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     prop:value=move || lock_amount.get()
                     on:input=move |ev| lock_amount.set(event_target_value(&ev))
                     disabled=move || locking.get() />
+                <p class="fee-free-line">"✓ No fees. Ever. Your full balance locks on-chain."</p>
             </div>
 
             <div class="field">
@@ -1840,18 +1843,30 @@ fn SendToEmailPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             sending.set(true);
             msg.set("Mining PoW\u{2026} (~10s)".into());
             let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                "email": email_str,
+                "email": email_str.clone(),
                 "amountKx": amt,
                 "unlockAtUnix": unlock_unix,
-                "memo": memo_opt,
+                "memo": memo_opt.clone(),
             })).unwrap_or(no_args());
             match call::<String>("create_email_timelock", args).await {
                 Ok(txid) => {
-                    msg.set(format!("Email lock created! ID: {txid}"));
+                    msg.set(format!("Sent! Notifying {email_str}\u{2026}"));
                     email.set(String::new());
                     amount.set(String::new());
                     lock_date.set(String::new());
                     memo.set(String::new());
+                    // Fire-and-forget email notification
+                    let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                        "email": email_str,
+                        "amountKx": amt,
+                        "unlockAtUnix": unlock_unix,
+                        "memo": memo_opt,
+                    })).unwrap_or(no_args());
+                    if call::<()>("notify_email_recipient", notify_args).await.is_ok() {
+                        msg.set(format!("Sent! Email notification delivered. ID: {txid}"));
+                    } else {
+                        msg.set(format!("Sent! (Email notification unavailable — api.chronx.io offline) ID: {txid}"));
+                    }
                     // Poll for nonce increment
                     let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                     for _ in 0..15u8 {
@@ -1897,6 +1912,7 @@ fn SendToEmailPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     prop:value=move || amount.get()
                     on:input=move |ev| amount.set(event_target_value(&ev))
                     disabled=move || sending.get() />
+                <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
             </div>
 
             <div class="field">

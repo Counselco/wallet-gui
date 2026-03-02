@@ -848,6 +848,25 @@ input[type="date"] { color-scheme: dark; }
 .exchange-link { color: #556677; font-size: 12px; text-decoration: none; }
 .exchange-link:hover { color: #d4a84b; text-decoration: underline; }
 
+/* ── Fee-free messaging ─────────────────────────────────────────────────────── */
+.fee-free-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 4px 10px;
+    background: rgba(201, 168, 76, 0.12);
+    border: 1px solid rgba(201, 168, 76, 0.35);
+    border-radius: 20px;
+    color: #c9a84c;
+    font-size: 12px;
+    font-weight: 600;
+}
+.fee-free-line {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: #c9a84c;
+    opacity: 0.85;
+}
+
 /* ── Notice badge on Settings tab ──────────────────────────────────────────── */
 .notice-badge {
     background: #e74c3c;
