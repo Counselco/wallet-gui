@@ -86,6 +86,10 @@ struct TxHistoryEntry {
     status: String,
     #[serde(default)]
     unlock_date: Option<i64>,
+    #[serde(default)]
+    cancellation_window_secs: Option<u32>,
+    #[serde(default)]
+    created_at: Option<i64>,
 }
 
 // ── Server-pushed types ───────────────────────────────────────────────────────
@@ -420,7 +424,7 @@ fn App() -> impl IntoView {
     let loading     = RwSignal::new(false);
     let err_msg     = RwSignal::new(String::new());
     let online      = RwSignal::new(false);
-    // 0=Account 1=Send 2=SendLater 3=Promises 4=History 5=Settings
+    // 0=Account 1=Send 2=SendLater 3=SendToEmail 4=Promises 5=History 6=Settings
     let active_tab  = RwSignal::new(0u8);
     let app_version = RwSignal::new("1.0.0".to_string());
 
@@ -772,11 +776,13 @@ fn App() -> impl IntoView {
                                 <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
                                     on:click=move |_| active_tab.set(2)>"⏳ Send Later"</button>
                                 <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(3)>"📋 Promises"</button>
+                                    on:click=move |_| active_tab.set(3)>"✉ Send to Email"</button>
                                 <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(4)>"📜 History"</button>
+                                    on:click=move |_| active_tab.set(4)>"📋 Promises"</button>
                                 <button class=move || if active_tab.get()==5 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(5)>
+                                    on:click=move |_| active_tab.set(5)>"📜 History"</button>
+                                <button class=move || if active_tab.get()==6 {"tab active"} else {"tab"}
+                                    on:click=move |_| active_tab.set(6)>
                                     "⚙ Settings"
                                     {move || {
                                         let unread = notices.get().iter()
@@ -801,9 +807,10 @@ fn App() -> impl IntoView {
                             }.into_any(),
                             1 => view! { <SendPanel info=info /> }.into_any(),
                             2 => view! { <SendLaterPanel info=info /> }.into_any(),
-                            3 => view! { <PromisesPanel /> }.into_any(),
-                            4 => view! { <HistoryPanel /> }.into_any(),
-                            5 => view! {
+                            3 => view! { <SendToEmailPanel info=info /> }.into_any(),
+                            4 => view! { <PromisesPanel /> }.into_any(),
+                            5 => view! { <HistoryPanel /> }.into_any(),
+                            6 => view! {
                                 <SettingsPanel
                                     online=online
                                     app_phase=app_phase
@@ -960,16 +967,25 @@ fn PinScreen(
         }
     };
 
-    // on_submit clones — one for on_input auto-submit, one for the Confirm button.
-    // on_submit itself is moved into on_keydown (handles both digit auto-submit and Enter).
-    let on_submit_input = on_submit.clone();
-    let on_submit_btn   = on_submit.clone();
+    // on_submit clones — one for the auto-submit Effect, one for the Confirm button.
+    let on_submit_auto = on_submit.clone();
+    let on_submit_btn  = on_submit.clone();
 
-    // Keydown handler — handles digits, Backspace, and Enter.
-    // Auto-submit on the 4th digit is done INSIDE the handler (not in a reactive Effect)
-    // to avoid Leptos signal write-back instability that prevents entering the first digit.
-    // On desktop: keydown fires before input; prevent_default() stops input from also firing.
-    // On Android: keydown does NOT fire for the virtual keyboard — handled by on_input instead.
+    // Auto-submit when 4th digit is entered — same Effect pattern as the working Change PIN.
+    // Handlers below ONLY push digits into the signal; this Effect handles the 4-digit trigger.
+    Effect::new(move |_| {
+        let d = pin_digits.get();
+        if d.len() == 4 {
+            let captured = d.clone();
+            pin_digits.set(String::new());
+            on_submit_auto(captured);
+        }
+    });
+
+    // Keydown handler — handles digits and Backspace.
+    // Same keydown-first pattern as Change PIN to avoid double-fire bugs.
+    // On desktop: keydown fires first, prevent_default() stops on:input from seeing the char.
+    // On Android: keydown doesn't fire for virtual keyboard, so on:input handles digits.
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         let key = ev.key();
         if key.len() == 1 {
@@ -979,13 +995,7 @@ fn PinScreen(
                     let mut d = pin_digits.get_untracked();
                     if d.len() < 4 {
                         d.push(ch);
-                        if d.len() == 4 {
-                            // Auto-submit: clear first so the Confirm button doesn't also fire
-                            pin_digits.set(String::new());
-                            on_submit(d);
-                        } else {
-                            pin_digits.set(d);
-                        }
+                        pin_digits.set(d);
                     }
                 }
             }
@@ -994,38 +1004,23 @@ fn PinScreen(
             let mut d = pin_digits.get_untracked();
             d.pop();
             pin_digits.set(d);
-        } else if key == "Enter" {
-            let d = pin_digits.get_untracked();
-            if d.len() == 4 {
-                ev.prevent_default();
-                pin_digits.set(String::new());
-                on_submit(d);
-            }
         }
     };
 
     // Input handler — handles Android virtual keyboard where keydown doesn't fire.
     // On desktop, keydown runs first with prevent_default(), so input.value() is empty here.
-    // Also auto-submits on the 4th digit for the mobile path.
     let on_input = move |ev: web_sys::Event| {
         use wasm_bindgen::JsCast;
         if let Some(input) = ev.target()
             .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
         {
             let val = input.value();
-            // Always clear so the hidden input never accumulates text
             input.set_value("");
-            // Only act if there's a digit present (mobile case)
             if let Some(ch) = val.chars().find(|c| c.is_ascii_digit()) {
                 let mut d = pin_digits.get_untracked();
                 if d.len() < 4 {
                     d.push(ch);
-                    if d.len() == 4 {
-                        pin_digits.set(String::new());
-                        on_submit_input(d);
-                    } else {
-                        pin_digits.set(d);
-                    }
+                    pin_digits.set(d);
                 }
             }
         }
@@ -1802,6 +1797,188 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
     }
 }
 
+// ── SendToEmailPanel ──────────────────────────────────────────────────────────
+
+#[component]
+fn SendToEmailPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
+    let email      = RwSignal::new(String::new());
+    let amount     = RwSignal::new(String::new());
+    let lock_date  = RwSignal::new(String::new());
+    let memo       = RwSignal::new(String::new());
+    let sending    = RwSignal::new(false);
+    let msg        = RwSignal::new(String::new());
+    let utc_clock  = RwSignal::new(String::new());
+
+    Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
+
+    let set_date = move |date: String| lock_date.set(date);
+
+    let on_send = move |_: web_sys::MouseEvent| {
+        let email_str  = email.get_untracked();
+        let amt_str    = amount.get_untracked();
+        let date_str   = lock_date.get_untracked();
+        let memo_str   = memo.get_untracked();
+
+        if email_str.is_empty() || !email_str.contains('@') {
+            msg.set("Error: enter a valid email address.".into()); return;
+        }
+        if amt_str.is_empty() { msg.set("Error: enter an amount.".into()); return; }
+        if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
+
+        let amt: f64 = match amt_str.parse() {
+            Ok(v) if v > 0.0 => v,
+            Ok(_) => { msg.set("Error: amount must be > 0.".into()); return; }
+            Err(_) => { msg.set("Error: invalid amount.".into()); return; }
+        };
+        let unlock_unix = match date_str_to_unix(&date_str) {
+            Some(t) => t,
+            None => { msg.set("Error: invalid date.".into()); return; }
+        };
+        let memo_opt = if memo_str.is_empty() { None } else { Some(memo_str) };
+
+        spawn_local(async move {
+            sending.set(true);
+            msg.set("Mining PoW\u{2026} (~10s)".into());
+            let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                "email": email_str,
+                "amountKx": amt,
+                "unlockAtUnix": unlock_unix,
+                "memo": memo_opt,
+            })).unwrap_or(no_args());
+            match call::<String>("create_email_timelock", args).await {
+                Ok(txid) => {
+                    msg.set(format!("Email lock created! ID: {txid}"));
+                    email.set(String::new());
+                    amount.set(String::new());
+                    lock_date.set(String::new());
+                    memo.set(String::new());
+                    // Poll for nonce increment
+                    let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
+                    for _ in 0..15u8 {
+                        delay_ms(1000).await;
+                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            if a.nonce > prev_nonce {
+                                info.set(Some(a));
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => msg.set(format!("Error: {e}")),
+            }
+            sending.set(false);
+        });
+    };
+
+    view! {
+        <div class="card">
+            <p class="section-title">"Send to Email"</p>
+
+            <div class="info-box" style="background:#1a1d27;border:1px solid #2a2d37;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+                <p style="font-size:12px;color:#9ca3af;line-height:1.5;margin:0">
+                    "The recipient will receive an email notification and has 72 hours to accept. "
+                    "If not accepted within 72 hours, your KX is automatically returned. "
+                    "You can also cancel an unaccepted email send from your History at any time."
+                </p>
+            </div>
+
+            <div class="field">
+                <label>"Recipient Email Address"</label>
+                <input type="email"
+                    placeholder="recipient@example.com"
+                    prop:value=move || email.get()
+                    on:input=move |ev| email.set(event_target_value(&ev))
+                    disabled=move || sending.get() />
+            </div>
+
+            <div class="field">
+                <label>"Amount (KX)"</label>
+                <input type="number" placeholder="0.000000" step="0.000001" min="0"
+                    prop:value=move || amount.get()
+                    on:input=move |ev| amount.set(event_target_value(&ev))
+                    disabled=move || sending.get() />
+            </div>
+
+            <div class="field">
+                <div class="utc-clock">
+                    "\u{1f550} Current UTC time: "
+                    {move || utc_clock.get()}
+                </div>
+                <label>"Unlock Date \u{0026} Time (UTC)"</label>
+                <input type="datetime-local"
+                    prop:min=move || min_datetime_str(3600)
+                    prop:value=move || lock_date.get()
+                    on:input=move |ev| lock_date.set(event_target_value(&ev))
+                    disabled=move || sending.get() />
+                {move || {
+                    let dt_str = lock_date.get();
+                    if dt_str.is_empty() {
+                        return view! { <span></span> }.into_any();
+                    }
+                    let unix = match date_str_to_unix(&dt_str) {
+                        Some(t) => t,
+                        None => return view! { <span></span> }.into_any(),
+                    };
+                    let now_secs = (js_sys::Date::now() / 1000.0) as i64;
+                    let diff = unix - now_secs;
+                    if diff <= 0 {
+                        return view! {
+                            <p class="msg error" style="margin-top:4px">"Date must be in the future"</p>
+                        }.into_any();
+                    }
+                    let days  = diff / 86400;
+                    let hours = (diff % 86400) / 3600;
+                    let text  = if days > 0 {
+                        format!("Unlocks in {days} days, {hours} hours from now (UTC)")
+                    } else {
+                        let mins = (diff % 3600) / 60;
+                        format!("Unlocks in {hours} hours, {mins} minutes from now (UTC)")
+                    };
+                    view! { <p class="unlock-countdown">{text}</p> }.into_any()
+                }}
+                <div class="quick-dates">
+                    <button type="button" class="pill"
+                        on:click=move |_| { let d=datetime_plus_months(1); set_date(d); }
+                        disabled=move || sending.get()>"1 mo"</button>
+                    <button type="button" class="pill"
+                        on:click=move |_| { let d=datetime_plus_years(1); set_date(d); }
+                        disabled=move || sending.get()>"1 yr"</button>
+                    <button type="button" class="pill"
+                        on:click=move |_| { let d=datetime_plus_years(5); set_date(d); }
+                        disabled=move || sending.get()>"5 yr"</button>
+                    <button type="button" class="pill"
+                        on:click=move |_| { let d=datetime_plus_years(10); set_date(d); }
+                        disabled=move || sending.get()>"10 yr"</button>
+                </div>
+            </div>
+
+            <div class="field">
+                <label>"Memo (optional, max 256 chars)"</label>
+                <textarea placeholder="e.g. Birthday gift for Alex"
+                    maxlength="256" rows="2"
+                    prop:value=move || memo.get()
+                    on:input=move |ev| memo.set(event_target_value(&ev))
+                    disabled=move || sending.get()></textarea>
+            </div>
+
+            <button class="primary" on:click=on_send disabled=move || sending.get()>
+                {move || if sending.get() { "Sending\u{2026}" } else { "Send to Email" }}
+            </button>
+
+            {move || {
+                let s = msg.get();
+                if s.is_empty() { view! { <span></span> }.into_any() }
+                else {
+                    let cls = if s.starts_with("Error") { "msg error" }
+                              else if s.starts_with("Mining") { "msg mining" }
+                              else { "msg success" };
+                    view! { <p class=cls>{s}</p> }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
 // ── PromisesPanel ─────────────────────────────────────────────────────────────
 
 #[component]
@@ -1938,7 +2115,11 @@ fn HistoryPanel() -> impl IntoView {
     let entries    = RwSignal::new(Vec::<TxHistoryEntry>::new());
     let h_loading  = RwSignal::new(false);
     let h_err      = RwSignal::new(String::new());
-    let expanded   = RwSignal::new(Option::<String>::None); // tx_id of expanded row
+    let expanded   = RwSignal::new(Option::<String>::None);
+    // Cancel confirmation modal state
+    let cancel_target  = RwSignal::new(Option::<String>::None); // lock_id to cancel
+    let cancel_busy    = RwSignal::new(false);
+    let cancel_msg     = RwSignal::new(String::new());
 
     let reload = move || {
         spawn_local(async move {
@@ -1995,7 +2176,6 @@ fn HistoryPanel() -> impl IntoView {
                                 let amount_display = entry.amount_chronos.as_deref()
                                     .map(|c| format!("{} KX", format_kx(c)))
                                     .unwrap_or_else(|| "\u{2014}".to_string());
-                                // For Promise Sent, show unlock date instead of counterparty
                                 let addr_display = if let Some(unlock_ts) = entry.unlock_date {
                                     format!("Unlocks {}", unix_to_date_str(unlock_ts))
                                 } else {
@@ -2005,6 +2185,23 @@ fn HistoryPanel() -> impl IntoView {
                                 };
                                 let date_display = format_utc_ts(entry.timestamp);
                                 let tx_id_short = shorten_addr(&entry.tx_id);
+
+                                // Determine if this entry can be cancelled
+                                let can_cancel = entry.status == "Pending"
+                                    && entry.cancellation_window_secs.map_or(false, |w| w > 0)
+                                    && entry.created_at.map_or(false, |ca| {
+                                        let window = entry.cancellation_window_secs.unwrap_or(0) as f64;
+                                        let deadline = (ca as f64 + window) * 1000.0; // ms
+                                        js_sys::Date::now() < deadline
+                                    });
+
+                                let status_display = if can_cancel {
+                                    "Pending \u{2014} subject to reversion".to_string()
+                                } else {
+                                    entry.status.clone()
+                                };
+
+                                let cancel_lock_id = entry.tx_id.clone();
 
                                 view! {
                                     <div class="history-row"
@@ -2027,10 +2224,27 @@ fn HistoryPanel() -> impl IntoView {
                                             <span class="history-date">{date_display}</span>
                                         </div>
                                         {move || {
-                                            if expanded.get().as_deref() == Some(tx_id.as_str()) {
+                                            let is_expanded = expanded.get().as_deref() == Some(tx_id.as_str());
+                                            if is_expanded {
+                                                let cancel_id = cancel_lock_id.clone();
                                                 view! {
                                                     <div class="history-detail">
-                                                        "TxID: " {tx_id_short.clone()}
+                                                        <p>"TxID: " {tx_id_short.clone()}</p>
+                                                        <p class="muted">"Status: " {status_display.clone()}</p>
+                                                        {if can_cancel {
+                                                            view! {
+                                                                <button
+                                                                    class="cancel-btn"
+                                                                    on:click=move |ev: web_sys::MouseEvent| {
+                                                                        ev.stop_propagation();
+                                                                        cancel_msg.set(String::new());
+                                                                        cancel_target.set(Some(cancel_id.clone()));
+                                                                    }
+                                                                >"Cancel Promise"</button>
+                                                            }.into_any()
+                                                        } else {
+                                                            view! { <span></span> }.into_any()
+                                                        }}
                                                     </div>
                                                 }.into_any()
                                             } else { view! { <span></span> }.into_any() }
@@ -2041,6 +2255,69 @@ fn HistoryPanel() -> impl IntoView {
                         </div>
                     }.into_any()
                 }
+            }}
+
+            // ── Cancel confirmation modal ────────────────────────────────────────
+            {move || if cancel_target.get().is_some() {
+                let lock_id = cancel_target.get_untracked().unwrap_or_default();
+                let lock_id_confirm = lock_id.clone();
+                view! {
+                    <div class="modal-overlay" on:click=move |_| {
+                        if !cancel_busy.get_untracked() { cancel_target.set(None); }
+                    }>
+                        <div class="modal" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                            <p class="modal-title">"Cancel Promise?"</p>
+                            <p class="modal-body">
+                                "Are you sure you wish to cancel this Promise? "
+                                "The KX will be returned to your balance immediately. "
+                                "This cannot be undone."
+                            </p>
+                            {move || {
+                                let msg = cancel_msg.get();
+                                if msg.is_empty() { view! { <span></span> }.into_any() }
+                                else { view! { <p class="error">{msg}</p> }.into_any() }
+                            }}
+                            <div class="modal-actions">
+                                <button
+                                    disabled=move || cancel_busy.get()
+                                    on:click=move |_| {
+                                        if !cancel_busy.get_untracked() {
+                                            cancel_target.set(None);
+                                        }
+                                    }
+                                >"No, Keep It"</button>
+                                <button
+                                    class="danger-btn"
+                                    disabled=move || cancel_busy.get()
+                                    on:click=move |_| {
+                                        let id = lock_id_confirm.clone();
+                                        cancel_busy.set(true);
+                                        cancel_msg.set(String::new());
+                                        spawn_local(async move {
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "lockIdHex": id })
+                                            ).unwrap_or(no_args());
+                                            match call::<String>("cancel_timelock", args).await {
+                                                Ok(_) => {
+                                                    cancel_target.set(None);
+                                                    cancel_busy.set(false);
+                                                    // Refresh the history list
+                                                    reload();
+                                                }
+                                                Err(e) => {
+                                                    cancel_msg.set(format!("Cancel failed: {e}"));
+                                                    cancel_busy.set(false);
+                                                }
+                                            }
+                                        });
+                                    }
+                                >{move || if cancel_busy.get() { "Cancelling\u{2026}" } else { "Yes, Cancel Promise" }}</button>
+                            </div>
+                        </div>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
             }}
         </div>
     }

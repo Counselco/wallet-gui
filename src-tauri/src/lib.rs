@@ -10,6 +10,8 @@ pub fn run() {
             commands::create_timelock,
             commands::get_timelocks,
             commands::claim_timelock,
+            commands::cancel_timelock,
+            commands::create_email_timelock,
             commands::export_public_key,
             commands::get_node_url,
             commands::set_node_url,

@@ -818,6 +818,32 @@ input[type="date"] { color-scheme: dark; }
 }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
+/* ── Cancel / Danger buttons ────────────────────────────────────────────────── */
+.cancel-btn {
+    background: #d4a84b;
+    color: #0f1117;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 6px;
+}
+.cancel-btn:hover { background: #e6b85c; }
+.danger-btn {
+    background: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.danger-btn:hover { background: #c0392b; }
+.danger-btn:disabled { opacity: 0.5; cursor: default; }
+.modal-body { color: #9ca3af; font-size: 13px; line-height: 1.5; }
+
 /* ── Exchange link ──────────────────────────────────────────────────────────── */
 .exchange-link { color: #556677; font-size: 12px; text-decoration: none; }
 .exchange-link:hover { color: #d4a84b; text-decoration: underline; }

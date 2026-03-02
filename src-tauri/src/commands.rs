@@ -381,6 +381,78 @@ pub async fn create_timelock(
         jurisdiction_hint: None,
         governance_proposal_id: None,
         client_ref: None,
+        recipient_email_hash: None,
+        claim_window_secs: None,
+        unclaimed_action: None,
+    }];
+
+    build_sign_mine_submit(&kp, actions, &url).await
+}
+
+/// Create an email-based timelock. The recipient is identified by email hash.
+/// Uses the sender's own pubkey as the on-chain recipient (the claim process
+/// is handled off-chain). Sets a 72-hour claim window with auto-revert.
+#[tauri::command]
+pub async fn create_email_timelock(
+    app: AppHandle,
+    email: String,
+    amount_kx: f64,
+    unlock_at_unix: i64,
+    memo: Option<String>,
+) -> Result<String, String> {
+    use chronx_core::account::UnclaimedAction;
+
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    if amount_kx <= 0.0 {
+        return Err("Amount must be greater than 0".to_string());
+    }
+    if !email.contains('@') {
+        return Err("Invalid email address".to_string());
+    }
+    let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u128;
+
+    let now = chrono::Utc::now().timestamp();
+    if unlock_at_unix <= now {
+        return Err("Unlock date must be in the future".to_string());
+    }
+    if unlock_at_unix < now + MIN_LOCK_DURATION_SECS {
+        let mins = MIN_LOCK_DURATION_SECS / 60;
+        return Err(format!("Unlock time must be at least {mins} minutes from now"));
+    }
+
+    // BLAKE3 hash of the recipient's email
+    let email_hash = chronx_crypto::blake3_hash(email.as_bytes());
+
+    // Use sender's own pubkey as on-chain recipient — claim is handled off-chain
+    let recipient = kp.public_key.clone();
+
+    let memo = memo.map(|m| {
+        if m.len() > 256 { m[..256].to_string() } else { m }
+    });
+
+    let actions = vec![Action::TimeLockCreate {
+        recipient,
+        amount: chronos,
+        unlock_at: unlock_at_unix,
+        memo,
+        cancellation_window_secs: Some(259_200), // 72 hours — sender can cancel anytime
+        notify_recipient: Some(true),
+        tags: None,
+        private: None,
+        expiry_policy: None,
+        split_policy: None,
+        claim_attempts_max: None,
+        recurring: None,
+        extension_data: None,
+        oracle_hint: None,
+        jurisdiction_hint: None,
+        governance_proposal_id: None,
+        client_ref: None,
+        recipient_email_hash: Some(email_hash),
+        claim_window_secs: Some(259_200), // 72 hours
+        unclaimed_action: Some(UnclaimedAction::RevertToSender),
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -513,6 +585,23 @@ pub async fn claim_timelock(app: AppHandle, lock_id_hex: String) -> Result<Strin
     build_sign_mine_submit(&kp, actions, &url).await
 }
 
+/// Cancel a timelock that is still within its cancellation window.
+/// `lock_id_hex` is the hex TxId of the lock to cancel.
+#[tauri::command]
+pub async fn cancel_timelock(app: AppHandle, lock_id_hex: String) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let lock_txid =
+        TxId::from_hex(&lock_id_hex).map_err(|e| format!("Invalid lock ID: {e}"))?;
+
+    let actions = vec![Action::CancelTimeLock {
+        lock_id: TimeLockId(lock_txid),
+    }];
+
+    build_sign_mine_submit(&kp, actions, &url).await
+}
+
 /// Return this wallet's Dilithium2 public key as hex (for sharing with others).
 #[tauri::command]
 pub async fn export_public_key(app: AppHandle) -> Result<String, String> {
@@ -587,6 +676,10 @@ pub struct TxHistoryEntry {
     pub timestamp: i64,
     pub status: String,
     pub unlock_date: Option<i64>,
+    #[serde(default)]
+    pub cancellation_window_secs: Option<u32>,
+    #[serde(default)]
+    pub created_at: Option<i64>,
 }
 
 /// Fetch Promise (timelock) history for this wallet.
@@ -615,14 +708,19 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                 .as_str()
                 .and_then(|s| s.parse::<f64>().ok())
                 .map(|kx| format!("{}", (kx * CHRONOS_PER_KX as f64) as u128));
+            let created_at = v["created_at"].as_i64().unwrap_or(0);
+            let cancellation_window_secs = v["cancellation_window_secs"]
+                .as_u64().map(|w| w as u32);
             TxHistoryEntry {
                 tx_id:          v["lock_id"].as_str().unwrap_or("").to_string(),
                 tx_type:        "Promise Sent".to_string(),
                 amount_chronos,
                 counterparty:   v["memo"].as_str().map(|s| s.to_string()),
-                timestamp:      v["created_at"].as_i64().unwrap_or(0),
+                timestamp:      created_at,
                 status:         v["status"].as_str().unwrap_or("Pending").to_string(),
                 unlock_date:    Some(v["unlock_at"].as_i64().unwrap_or(0)),
+                cancellation_window_secs,
+                created_at:     Some(created_at),
             }
         })
         .collect();
