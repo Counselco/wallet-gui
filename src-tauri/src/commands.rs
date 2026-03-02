@@ -604,15 +604,24 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
 
     // getRecentTransactions returns all chain TXs; filter to only this account's TXs.
     // Fields available: tx_id, timestamp, from, action_count, depth (no tx_type/amount).
+    // Heuristic: action_count >= 2 suggests a Promise (TimeLockCreate), else Transfer.
     Ok(raw.into_iter()
         .filter(|v| v["from"].as_str() == Some(b58.as_str()))
-        .map(|v| TxHistoryEntry {
-            tx_id:          v["tx_id"].as_str().unwrap_or("").to_string(),
-            tx_type:        "Transaction".to_string(),
-            amount_chronos: None,
-            counterparty:   None,
-            timestamp:      v["timestamp"].as_i64().unwrap_or(0),
-            status:         "Confirmed".to_string(),
+        .map(|v| {
+            let action_count = v["action_count"].as_u64().unwrap_or(1);
+            let tx_type = if action_count >= 2 {
+                "Promise".to_string()
+            } else {
+                "Transfer".to_string()
+            };
+            TxHistoryEntry {
+                tx_id:          v["tx_id"].as_str().unwrap_or("").to_string(),
+                tx_type,
+                amount_chronos: None,
+                counterparty:   None,
+                timestamp:      v["timestamp"].as_i64().unwrap_or(0),
+                status:         "Confirmed".to_string(),
+            }
         })
         .collect())
 }
@@ -623,6 +632,106 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
 #[tauri::command]
 pub async fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+// ── Check for updates ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UpdateInfo {
+    pub up_to_date: bool,
+    pub current: String,
+    pub latest: String,
+    pub download_url: String,
+    pub release_notes: String,
+}
+
+/// Fetch https://chronx.io/version.json and compare with this build's version.
+#[tauri::command]
+pub async fn check_for_updates() -> Result<UpdateInfo, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let resp = reqwest::get("https://chronx.io/version.json")
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {e}"))?;
+    let latest = json["version"].as_str().unwrap_or("").to_string();
+    let download_url = json["download_url"]
+        .as_str()
+        .unwrap_or("https://chronx.io/wallet")
+        .to_string();
+    let release_notes = json["release_notes"].as_str().unwrap_or("").to_string();
+    let up_to_date = latest.is_empty() || latest == current;
+    Ok(UpdateInfo { up_to_date, current, latest, download_url, release_notes })
+}
+
+// ── Notices ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Notice {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub severity: String, // "info" | "warning" | "critical"
+    pub date: String,
+}
+
+fn seen_notices_path(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("seen-notices.json")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        expand_tilde("~/.chronx/seen-notices.json")
+    }
+}
+
+fn read_seen_notices(app: &AppHandle) -> Vec<String> {
+    let path = seen_notices_path(app);
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Fetch all server notices from https://chronx.io/notices.json.
+#[tauri::command]
+pub async fn fetch_notices() -> Result<Vec<Notice>, String> {
+    let resp = reqwest::get("https://chronx.io/notices.json")
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {e}"))?;
+    let notices: Vec<Notice> =
+        serde_json::from_value(json["notices"].clone()).unwrap_or_default();
+    Ok(notices)
+}
+
+/// Return notice IDs that have already been marked as read locally.
+#[tauri::command]
+pub async fn get_seen_notices(app: AppHandle) -> Vec<String> {
+    read_seen_notices(&app)
+}
+
+/// Persistently mark a notice as read on this device.
+#[tauri::command]
+pub async fn mark_notice_seen(app: AppHandle, id: String) -> Result<(), String> {
+    let path = seen_notices_path(&app);
+    let mut ids = read_seen_notices(&app);
+    if !ids.contains(&id) {
+        ids.push(id);
+        let json = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
+        std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // ── Incoming promises ─────────────────────────────────────────────────────────

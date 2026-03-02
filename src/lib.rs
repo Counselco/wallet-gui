@@ -86,6 +86,26 @@ struct TxHistoryEntry {
     status: String,
 }
 
+// ── Server-pushed types ───────────────────────────────────────────────────────
+
+#[derive(Clone, serde::Deserialize)]
+struct Notice {
+    id: String,
+    title: String,
+    body: String,
+    severity: String, // "info" | "warning" | "critical"
+    date: String,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct UpdateInfo {
+    up_to_date: bool,
+    current: String,
+    latest: String,
+    download_url: String,
+    release_notes: String,
+}
+
 // ── App phase state machine ───────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
@@ -349,6 +369,11 @@ fn App() -> impl IntoView {
     let restore_msg    = RwSignal::new(String::new());
     let restore_busy   = RwSignal::new(false);
 
+    // Notices & update check
+    let notices        = RwSignal::new(Vec::<Notice>::new());
+    let seen_ids       = RwSignal::new(Vec::<String>::new());
+    let crit_dismissed = RwSignal::new(Vec::<String>::new());
+
     // Bug report modal
     let bug_modal_open = RwSignal::new(false);
     let bug_body       = RwSignal::new(String::new());
@@ -391,6 +416,16 @@ fn App() -> impl IntoView {
             if let Ok(v) = call::<String>("get_app_version", no_args()).await {
                 app_version.set(v);
             }
+
+            // Fetch notices & seen IDs in background (best effort)
+            spawn_local(async move {
+                if let Ok(ids) = call::<Vec<String>>("get_seen_notices", no_args()).await {
+                    seen_ids.set(ids);
+                }
+                if let Ok(n) = call::<Vec<Notice>>("fetch_notices", no_args()).await {
+                    notices.set(n);
+                }
+            });
 
             // Check wallet existence first — config.json may have a PIN hash
             // even after wallet.json has been deleted (e.g. device transfer).
@@ -627,6 +662,34 @@ fn App() -> impl IntoView {
 
             AppPhase::Wallet => view! {
                 <div class="app">
+                    // Critical notices banner
+                    {move || {
+                        let crits: Vec<Notice> = notices.get().into_iter()
+                            .filter(|n| n.severity == "critical" && !crit_dismissed.get().contains(&n.id))
+                            .collect();
+                        if crits.is_empty() {
+                            view! { <span></span> }.into_any()
+                        } else {
+                            view! {
+                                <div class="critical-notices-bar">
+                                    {crits.into_iter().map(|n| {
+                                        let nid = n.id.clone();
+                                        view! {
+                                            <div class="critical-notice-item">
+                                                <span>"⚠ " {n.title.clone()} " — " {n.body.clone()}</span>
+                                                <button class="critical-notice-close" on:click=move |_| {
+                                                    let mut d = crit_dismissed.get_untracked();
+                                                    d.push(nid.clone());
+                                                    crit_dismissed.set(d);
+                                                }>"✕"</button>
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+
                     // Header
                     <header>
                         <a href="https://www.chronx.io" target="_blank" rel="noopener" class="logo-link">
@@ -649,7 +712,19 @@ fn App() -> impl IntoView {
                                 <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
                                     on:click=move |_| active_tab.set(4)>"📜 History"</button>
                                 <button class=move || if active_tab.get()==5 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(5)>"⚙ Settings"</button>
+                                    on:click=move |_| active_tab.set(5)>
+                                    "⚙ Settings"
+                                    {move || {
+                                        let unread = notices.get().iter()
+                                            .filter(|n| !seen_ids.get().contains(&n.id))
+                                            .count();
+                                        if unread > 0 {
+                                            view! { <span class="notice-badge">{unread}</span> }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }
+                                    }}
+                                </button>
                             </nav>
                         </div>
                     </header>
@@ -665,7 +740,29 @@ fn App() -> impl IntoView {
                             3 => view! { <PromisesPanel /> }.into_any(),
                             4 => view! { <HistoryPanel /> }.into_any(),
                             5 => view! {
-                                <SettingsPanel online=online app_phase=app_phase pin_digits=pin_digits pin_msg=pin_msg pin_shake=pin_shake />
+                                <SettingsPanel
+                                    online=online
+                                    app_phase=app_phase
+                                    pin_digits=pin_digits
+                                    pin_msg=pin_msg
+                                    pin_shake=pin_shake
+                                    app_version=app_version
+                                    notices=notices
+                                    seen_ids=seen_ids
+                                    on_mark_seen=move |id: String| {
+                                        let mut ids = seen_ids.get_untracked();
+                                        if !ids.contains(&id) {
+                                            ids.push(id.clone());
+                                            seen_ids.set(ids);
+                                        }
+                                        spawn_local(async move {
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "id": id })
+                                            ).unwrap_or(no_args());
+                                            let _ = call::<()>("mark_notice_seen", args).await;
+                                        });
+                                    }
+                                />
                             }.into_any(),
                             _ => view! { <span></span> }.into_any(),
                         }}
@@ -1827,6 +1924,10 @@ fn SettingsPanel(
     pin_digits: RwSignal<String>,
     pin_msg: RwSignal<String>,
     pin_shake: RwSignal<bool>,
+    app_version: RwSignal<String>,
+    notices: RwSignal<Vec<Notice>>,
+    seen_ids: RwSignal<Vec<String>>,
+    on_mark_seen: impl Fn(String) + Clone + Send + 'static,
 ) -> impl IntoView {
     // These signals are available for future use in the Settings panel
     let _ = (app_phase, pin_digits, pin_msg, pin_shake);
@@ -1834,6 +1935,11 @@ fn SettingsPanel(
     let save_msg   = RwSignal::new(String::new());
     let pubkey_hex = RwSignal::new(String::new());
     let pk_loading = RwSignal::new(false);
+
+    // Update check state
+    let update_result   = RwSignal::new(Option::<UpdateInfo>::None);
+    let update_checking = RwSignal::new(false);
+    let update_err      = RwSignal::new(String::new());
 
     // Modal visibility
     let show_about   = RwSignal::new(false);
@@ -2009,6 +2115,53 @@ fn SettingsPanel(
                 }}
             </div>
 
+            // Notices
+            <div class="settings-section">
+                <p class="label">"Notices"</p>
+                {move || {
+                    let all = notices.get();
+                    let seen = seen_ids.get();
+                    let unread = all.iter().filter(|n| !seen.contains(&n.id)).count();
+                    if all.is_empty() {
+                        view! { <p class="muted">"No notices."</p> }.into_any()
+                    } else {
+                        let on_mark_c = on_mark_seen.clone();
+                        view! {
+                            <div>
+                                {if unread > 0 {
+                                    view! {
+                                        <p class="label" style="color:#e74c3c;margin-bottom:8px">
+                                            {unread} " unread"
+                                        </p>
+                                    }.into_any()
+                                } else { view! { <span></span> }.into_any() }}
+                                {all.into_iter().map(|n| {
+                                    let is_read = seen.contains(&n.id);
+                                    let nid = n.id.clone();
+                                    let on_mark_n = on_mark_c.clone();
+                                    view! {
+                                        <div class=format!("notice-card {}", n.severity)
+                                             style=format!("opacity:{}", if is_read { "0.55" } else { "1" })>
+                                            <p class="notice-card-title">{n.title.clone()}</p>
+                                            <p class="notice-card-date">{n.date.clone()}</p>
+                                            <p class="notice-card-body">{n.body.clone()}</p>
+                                            {if !is_read {
+                                                view! {
+                                                    <button class="notice-mark-read"
+                                                        on:click=move |_| on_mark_n(nid.clone())>
+                                                        "Mark as read"
+                                                    </button>
+                                                }.into_any()
+                                            } else { view! { <span></span> }.into_any() }}
+                                        </div>
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                        }.into_any()
+                    }
+                }}
+            </div>
+
             // Security
             <div class="settings-section">
                 <p class="label">"Security"</p>
@@ -2035,7 +2188,7 @@ fn SettingsPanel(
                 <div class="modal-overlay" on:click=move |_| show_about.set(false)>
                     <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
                         <img src=logo_src() alt="ChronX" style="width:70px;height:auto;margin:0 auto" />
-                        <p class="modal-title">"ChronX Wallet v1.0.0"</p>
+                        <p class="modal-title">"ChronX Wallet v" {move || app_version.get()}</p>
                         <div class="modal-body">
                             <p>"The Future Payment Protocol"</p>
                             <p>"Built on post-quantum cryptography"</p>
@@ -2057,18 +2210,86 @@ fn SettingsPanel(
         // ── Check for updates modal ───────────────────────────────────────────
 
         {move || if show_updates.get() {
+            let version = app_version.get();
             view! {
-                <div class="modal-overlay" on:click=move |_| show_updates.set(false)>
+                <div class="modal-overlay" on:click=move |_| {
+                    show_updates.set(false);
+                    update_result.set(None);
+                    update_err.set(String::new());
+                }>
                     <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
                         <p class="modal-title">"\u{1f504} Check for Updates"</p>
                         <div class="modal-body">
-                            <p>"You are running ChronX Wallet v1.0.0."</p>
-                            <p>"Check chronx.io for the latest version."</p>
+                            <p class="label">"Current version: " {version}</p>
+                            {move || {
+                                if update_checking.get() {
+                                    view! { <p class="muted">"Checking\u{2026}"</p> }.into_any()
+                                } else if let Some(info) = update_result.get() {
+                                    if info.up_to_date {
+                                        view! {
+                                            <p class="update-up-to-date">
+                                                "\u{2705} You are running the latest version ("
+                                                {info.current.clone()} ")"
+                                            </p>
+                                        }.into_any()
+                                    } else {
+                                        let dl_url = info.download_url.clone();
+                                        view! {
+                                            <div class="update-info">
+                                                <p class="update-available">
+                                                    "\u{1f504} Version " {info.latest.clone()} " is available"
+                                                </p>
+                                                {if !info.release_notes.is_empty() {
+                                                    view! {
+                                                        <p class="muted" style="font-size:12px;margin-top:4px">
+                                                            "What\u{2019}s new: " {info.release_notes.clone()}
+                                                        </p>
+                                                    }.into_any()
+                                                } else { view! { <span></span> }.into_any() }}
+                                                <button class="primary" style="margin-top:10px"
+                                                    on:click=move |_| {
+                                                        let url = dl_url.clone();
+                                                        spawn_local(async move {
+                                                            let args = serde_wasm_bindgen::to_value(
+                                                                &serde_json::json!({ "url": url })
+                                                            ).unwrap_or(no_args());
+                                                            let _ = call::<()>("open_url", args).await;
+                                                        });
+                                                    }>"\u{2b07} Download Update"</button>
+                                            </div>
+                                        }.into_any()
+                                    }
+                                } else {
+                                    let e = update_err.get();
+                                    if e.is_empty() {
+                                        view! { <span></span> }.into_any()
+                                    } else {
+                                        view! { <p class="msg error">{e}</p> }.into_any()
+                                    }
+                                }
+                            }}
                         </div>
-                        <a href="https://www.chronx.io" target="_blank" rel="noopener" class="modal-link">
-                            "Visit chronx.io"
-                        </a>
-                        <button class="primary" on:click=move |_| show_updates.set(false)>"Close"</button>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+                            <button on:click=move |_| {
+                                update_checking.set(true);
+                                update_result.set(None);
+                                update_err.set(String::new());
+                                spawn_local(async move {
+                                    match call::<UpdateInfo>("check_for_updates", no_args()).await {
+                                        Ok(info) => update_result.set(Some(info)),
+                                        Err(e)   => update_err.set(format!("Error: {e}")),
+                                    }
+                                    update_checking.set(false);
+                                });
+                            } disabled=move || update_checking.get()>
+                                {move || if update_checking.get() { "Checking\u{2026}" } else { "Check Now" }}
+                            </button>
+                            <button on:click=move |_| {
+                                show_updates.set(false);
+                                update_result.set(None);
+                                update_err.set(String::new());
+                            }>"Close"</button>
+                        </div>
                     </div>
                 </div>
             }.into_any()
