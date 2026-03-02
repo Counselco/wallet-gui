@@ -5,12 +5,6 @@ use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-// ── Diagnostic console logger ─────────────────────────────────────────────────
-macro_rules! clog {
-    ($($t:tt)*) => {{
-        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!($($t)*)));
-    }}
-}
 
 const LOGO_PNG: &[u8] = include_bytes!("../assets/chronx-logo.png");
 
@@ -774,15 +768,11 @@ fn App() -> impl IntoView {
                                 <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
                                     on:click=move |_| active_tab.set(1)>"↗ Send"</button>
                                 <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(2)>"⏳ Send Later"</button>
+                                    on:click=move |_| active_tab.set(2)>"📋 Promises"</button>
                                 <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(3)>"✉ Send to Email"</button>
+                                    on:click=move |_| active_tab.set(3)>"📜 History"</button>
                                 <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(4)>"📋 Promises"</button>
-                                <button class=move || if active_tab.get()==5 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(5)>"📜 History"</button>
-                                <button class=move || if active_tab.get()==6 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(6)>
+                                    on:click=move |_| active_tab.set(4)>
                                     "⚙ Settings"
                                     {move || {
                                         let unread = notices.get().iter()
@@ -806,11 +796,9 @@ fn App() -> impl IntoView {
                                 <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh />
                             }.into_any(),
                             1 => view! { <SendPanel info=info /> }.into_any(),
-                            2 => view! { <SendLaterPanel info=info /> }.into_any(),
-                            3 => view! { <SendToEmailPanel info=info /> }.into_any(),
-                            4 => view! { <PromisesPanel /> }.into_any(),
-                            5 => view! { <HistoryPanel /> }.into_any(),
-                            6 => view! {
+                            2 => view! { <PromisesPanel /> }.into_any(),
+                            3 => view! { <HistoryPanel /> }.into_any(),
+                            4 => view! {
                                 <SettingsPanel
                                     online=online
                                     app_phase=app_phase
@@ -1452,15 +1440,38 @@ fn AccountPanel(
     }
 }
 
-// ── SendPanel ─────────────────────────────────────────────────────────────────
+// ── SendPanel (unified: KX Address + Email Address × Send Now + Send Later) ───
 
 #[component]
 fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
-    let to_addr  = RwSignal::new(String::new());
+    let send_sub  = RwSignal::new(0u8); // 0=KX Address, 1=Email Address
+    let send_mode = RwSignal::new(0u8); // 0=Send Now,   1=Send Later
+
+    // KX Address fields
+    let to_addr   = RwSignal::new(String::new()); // base58 (Send Now)
+    let to_pubkey = RwSignal::new(String::new()); // pubkey hex (Send Later, blank=self)
+
+    // Email field
+    let email    = RwSignal::new(String::new());
+
+    // Shared fields
     let amount   = RwSignal::new(String::new());
+    let lock_date = RwSignal::new(String::new());
+    let memo     = RwSignal::new(String::new());
     let sending  = RwSignal::new(false);
-    let tx_msg   = RwSignal::new(String::new());
+    let msg      = RwSignal::new(String::new());
     let scan_msg = RwSignal::new(String::new());
+
+    let utc_clock = RwSignal::new(String::new());
+    Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
+
+    // Clear messages on tab/mode switch
+    Effect::new(move |_| {
+        send_sub.get(); send_mode.get();
+        msg.set(String::new()); scan_msg.set(String::new());
+    });
+
+    let set_date = move |date: String| lock_date.set(date);
 
     let on_scan_qr = move |_: web_sys::MouseEvent| {
         spawn_local(async move {
@@ -1469,7 +1480,11 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                 None => scan_msg.set("No file selected.".into()),
                 Some(file) => match scan_qr_file(file).await {
                     Ok(raw) => {
-                        to_addr.set(qr_extract_account_id(&raw));
+                        if send_mode.get_untracked() == 0 {
+                            to_addr.set(qr_extract_account_id(&raw));
+                        } else {
+                            to_pubkey.set(qr_extract_pubkey(&raw));
+                        }
                         scan_msg.set("Address filled from QR.".into());
                     }
                     Err(e) => scan_msg.set(format!("Scan failed: {e}")),
@@ -1479,452 +1494,266 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
     };
 
     let on_send = move |_: web_sys::MouseEvent| {
-        let to  = to_addr.get_untracked();
-        let amt_str = amount.get_untracked();
-        if to.is_empty() || amt_str.is_empty() {
-            tx_msg.set("Error: fill in both To and Amount.".into()); return;
-        }
-        let amt: f64 = match amt_str.parse() {
-            Ok(v) if v > 0.0 => v,
-            Ok(_) => { tx_msg.set("Error: amount must be > 0.".into()); return; }
-            Err(_) => { tx_msg.set("Error: invalid amount.".into()); return; }
-        };
-        spawn_local(async move {
-            sending.set(true);
-            tx_msg.set("Mining PoW\u{2026} (~10s)".into());
-            let args = serde_wasm_bindgen::to_value(
-                &serde_json::json!({ "to": to, "amountKx": amt })
-            ).unwrap_or(no_args());
-            match call::<String>("send_transfer", args).await {
-                Ok(txid) => {
-                    tx_msg.set(format!("Sent! TxId: {txid}"));
-                    to_addr.set(String::new());
-                    amount.set(String::new());
-                    if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                        info.set(Some(a));
-                    }
-                }
-                Err(e) => tx_msg.set(format!("Error: {e}")),
-            }
-            sending.set(false);
-        });
-    };
-
-    view! {
-        <div class="card">
-            <p class="section-title">"Send KX"</p>
-            <div class="field">
-                <label>"To (account ID)"</label>
-                <div style="display:flex;gap:8px;align-items:center">
-                    <input type="text" placeholder="Base-58 address\u{2026}" style="flex:1"
-                        prop:value=move || to_addr.get()
-                        on:input=move |ev| to_addr.set(event_target_value(&ev))
-                        disabled=move || sending.get() />
-                    <button type="button" style="white-space:nowrap" on:click=on_scan_qr
-                        disabled=move || sending.get()>"📷 Scan QR"</button>
-                </div>
-                {move || {
-                    let s = scan_msg.get();
-                    if s.is_empty() { view! { <span></span> }.into_any() }
-                    else {
-                        let cls = if s.starts_with("Scan failed") || s.starts_with("No file") { "msg error" } else { "msg success" };
-                        view! { <p class=cls style="margin-top:4px">{s}</p> }.into_any()
-                    }
-                }}
-            </div>
-            <div class="field">
-                <label>"Amount (KX)"</label>
-                <input type="number" placeholder="0.000000" step="0.000001" min="0"
-                    prop:value=move || amount.get()
-                    on:input=move |ev| amount.set(event_target_value(&ev))
-                    disabled=move || sending.get() />
-                <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
-            </div>
-            <button class="primary" on:click=on_send disabled=move || sending.get()>
-                {move || if sending.get() { "Sending\u{2026}" } else { "Send Transfer" }}
-            </button>
-            {move || {
-                let s = tx_msg.get();
-                if s.is_empty() { view! { <span></span> }.into_any() }
-                else {
-                    let cls = if s.starts_with("Error") { "msg error" }
-                              else if s.starts_with("Mining") { "msg mining" }
-                              else { "msg success" };
-                    view! { <p class=cls>{s}</p> }.into_any()
-                }
-            }}
-        </div>
-    }
-}
-
-// ── SendLaterPanel ────────────────────────────────────────────────────────────
-
-#[component]
-fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
-    let to_pubkey   = RwSignal::new(String::new());
-    let lock_amount = RwSignal::new(String::new());
-    let lock_date   = RwSignal::new(String::new());
-    let lock_memo   = RwSignal::new(String::new());
-    let locking     = RwSignal::new(false);
-    let lock_msg    = RwSignal::new(String::new());
-    let scan_msg    = RwSignal::new(String::new());
-    let utc_clock   = RwSignal::new(String::new());
-
-    // Start live UTC clock
-    Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
-
-    let set_date = move |date: String| lock_date.set(date);
-
-    let on_scan_qr = move |_: web_sys::MouseEvent| {
-        spawn_local(async move {
-            scan_msg.set(String::new());
-            match pick_image_file().await {
-                None => scan_msg.set("No file selected.".into()),
-                Some(file) => match scan_qr_file(file).await {
-                    Ok(raw) => {
-                        to_pubkey.set(qr_extract_pubkey(&raw));
-                        scan_msg.set("Recipient filled from QR.".into());
-                    }
-                    Err(e) => scan_msg.set(format!("Scan failed: {e}")),
-                },
-            }
-        });
-    };
-
-    let on_lock = move |_: web_sys::MouseEvent| {
-        let amt_str  = lock_amount.get_untracked();
-        let date_str = lock_date.get_untracked();
-        let memo_str = lock_memo.get_untracked();
-        let pubkey   = to_pubkey.get_untracked();
-        if amt_str.is_empty() { lock_msg.set("Error: enter an amount.".into()); return; }
-        if date_str.is_empty() { lock_msg.set("Error: choose an unlock date.".into()); return; }
-        let amt: f64 = match amt_str.parse() {
-            Ok(v) if v > 0.0 => v,
-            Ok(_) => { lock_msg.set("Error: amount must be > 0.".into()); return; }
-            Err(_) => { lock_msg.set("Error: invalid amount.".into()); return; }
-        };
-        let unlock_unix = match date_str_to_unix(&date_str) {
-            Some(t) => t,
-            None => { lock_msg.set("Error: invalid date.".into()); return; }
-        };
-        let memo = if memo_str.is_empty() { None } else { Some(memo_str) };
-        let to_pubkey_hex: Option<String> = if pubkey.is_empty() { None } else { Some(pubkey) };
-
-        spawn_local(async move {
-            locking.set(true);
-            lock_msg.set("Mining PoW\u{2026} (~10s)".into());
-            let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                "amountKx": amt,
-                "unlockAtUnix": unlock_unix,
-                "memo": memo,
-                "toPubkeyHex": to_pubkey_hex,
-            })).unwrap_or(no_args());
-            match call::<String>("create_timelock", args).await {
-                Ok(txid) => {
-                    clog!("[Promise] ✓ create_timelock OK — txid={txid}");
-                    lock_msg.set(format!("Promise made! ID: {txid}"));
-                    lock_amount.set(String::new());
-                    lock_date.set(String::new());
-                    lock_memo.set(String::new());
-                    to_pubkey.set(String::new());
-                    // Poll until the account nonce increments — proves the node has
-                    // committed the transaction and updated the balance.
-                    let prev_info = info.get_untracked();
-                    let prev_nonce = prev_info.as_ref().map(|a| a.nonce).unwrap_or(0);
-                    clog!(
-                        "[Promise] info before poll: {} — prev_nonce={}",
-                        if prev_info.is_some() { "Some" } else { "None" },
-                        prev_nonce
-                    );
-                    let mut updated = false;
-                    for i in 0..15u8 {
-                        delay_ms(1000).await;
-                        match call::<AccountInfo>("get_account_info", no_args()).await {
-                            Ok(a) => {
-                                clog!(
-                                    "[Promise] poll {i}: nonce={} balance_chronos={} spendable_chronos={}",
-                                    a.nonce, a.balance_chronos, a.spendable_chronos
-                                );
-                                if a.nonce > prev_nonce {
-                                    clog!("[Promise] ✓ nonce incremented ({prev_nonce} → {}) — updating info", a.nonce);
-                                    info.set(Some(a));
-                                    updated = true;
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                clog!("[Promise] poll {i}: get_account_info error: {e}");
-                            }
-                        }
-                    }
-                    if !updated {
-                        clog!("[Promise] ✗ nonce did not increment in 15s — TX likely rejected by node");
-                        lock_msg.set("⚠ Transaction not confirmed — the node may have rejected it. Check that your unlock date is at least 1 hour in the future.".to_string());
-                        match call::<AccountInfo>("get_account_info", no_args()).await {
-                            Ok(a) => {
-                                clog!(
-                                    "[Promise] final refresh: nonce={} balance_chronos={} spendable_chronos={}",
-                                    a.nonce, a.balance_chronos, a.spendable_chronos
-                                );
-                                info.set(Some(a));
-                            }
-                            Err(e) => clog!("[Promise] final refresh error: {e}"),
-                        }
-                    }
-                }
-                Err(e) => {
-                    clog!("[Promise] ✗ create_timelock error: {e}");
-                    lock_msg.set(format!("Error: {e}"));
-                }
-            }
-            locking.set(false);
-        });
-    };
-
-    view! {
-        <div class="card">
-            <p class="section-title">"Send Later"</p>
-
-            <div class="field">
-                <label>"To (recipient public key hex, or leave blank to promise to yourself)"</label>
-                <div style="display:flex;gap:8px;align-items:center">
-                    <input type="text"
-                        placeholder="Leave blank for self \u{b7} paste pubkey hex \u{b7} or scan QR\u{2026}"
-                        style="flex:1"
-                        prop:value=move || to_pubkey.get()
-                        on:input=move |ev| to_pubkey.set(event_target_value(&ev))
-                        disabled=move || locking.get() />
-                    <button type="button" style="white-space:nowrap" on:click=on_scan_qr
-                        disabled=move || locking.get()>"📷 Scan QR"</button>
-                </div>
-                {move || {
-                    let s = scan_msg.get();
-                    if s.is_empty() { view! { <span></span> }.into_any() }
-                    else {
-                        let cls = if s.starts_with("Scan failed") || s.starts_with("No file") { "msg error" } else { "msg success" };
-                        view! { <p class=cls style="margin-top:4px">{s}</p> }.into_any()
-                    }
-                }}
-                <p class="label" style="margin-top:4px">
-                    {move || if to_pubkey.get().is_empty() {
-                        "Promising to: yourself".to_string()
-                    } else {
-                        "Promising to: recipient (custom key)".to_string()
-                    }}
-                </p>
-            </div>
-
-            <div class="field">
-                <label>"Amount (KX)"</label>
-                <input type="number" placeholder="0.000000" step="0.000001" min="0"
-                    prop:value=move || lock_amount.get()
-                    on:input=move |ev| lock_amount.set(event_target_value(&ev))
-                    disabled=move || locking.get() />
-                <p class="fee-free-line">"✓ No fees. Ever. Your full balance locks on-chain."</p>
-            </div>
-
-            <div class="field">
-                <div class="utc-clock">
-                    "\u{1f550} Current UTC time: "
-                    {move || utc_clock.get()}
-                </div>
-                <label>"Unlock Date \u{0026} Time (UTC)"</label>
-                <input type="datetime-local"
-                    prop:min=move || min_datetime_str(3600)
-                    prop:value=move || lock_date.get()
-                    on:input=move |ev| lock_date.set(event_target_value(&ev))
-                    disabled=move || locking.get() />
-                // Countdown display
-                {move || {
-                    let dt_str = lock_date.get();
-                    if dt_str.is_empty() {
-                        return view! { <span></span> }.into_any();
-                    }
-                    let unix = match date_str_to_unix(&dt_str) {
-                        Some(t) => t,
-                        None => return view! { <span></span> }.into_any(),
-                    };
-                    let now_secs = (js_sys::Date::now() / 1000.0) as i64;
-                    let diff = unix - now_secs;
-                    if diff <= 0 {
-                        return view! {
-                            <p class="msg error" style="margin-top:4px">
-                                "Date must be in the future"
-                            </p>
-                        }.into_any();
-                    }
-                    let days  = diff / 86400;
-                    let hours = (diff % 86400) / 3600;
-                    let text  = if days > 0 {
-                        format!("Unlocks in {days} days, {hours} hours from now (UTC)")
-                    } else {
-                        let mins = (diff % 3600) / 60;
-                        format!("Unlocks in {hours} hours, {mins} minutes from now (UTC)")
-                    };
-                    view! {
-                        <p class="unlock-countdown">{text}</p>
-                    }.into_any()
-                }}
-                <div class="quick-dates">
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_months(1); set_date(d); }
-                        disabled=move || locking.get()>"1 mo"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(1); set_date(d); }
-                        disabled=move || locking.get()>"1 yr"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(5); set_date(d); }
-                        disabled=move || locking.get()>"5 yr"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(10); set_date(d); }
-                        disabled=move || locking.get()>"10 yr"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(25); set_date(d); }
-                        disabled=move || locking.get()>"25 yr"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(100); set_date(d); }
-                        disabled=move || locking.get()>"100 yr"</button>
-                </div>
-            </div>
-
-            <div class="field">
-                <label>"Memo (optional, max 256 chars)"</label>
-                <textarea placeholder="e.g. College fund for Maya \u{2014} do not touch until 2040"
-                    maxlength="256" rows="3"
-                    prop:value=move || lock_memo.get()
-                    on:input=move |ev| lock_memo.set(event_target_value(&ev))
-                    disabled=move || locking.get()></textarea>
-            </div>
-
-            <button class="primary danger" on:click=on_lock disabled=move || locking.get()>
-                {move || if locking.get() { "Promising\u{2026}" } else { "Make a Promise" }}
-            </button>
-
-            <p class="lock-warning">
-                "\u{26a0} Promised funds cannot be recovered before the unlock date. "
-                "This action is permanent and cannot be undone."
-            </p>
-
-            {move || {
-                let s = lock_msg.get();
-                if s.is_empty() { view! { <span></span> }.into_any() }
-                else {
-                    let cls = if s.starts_with("Error") { "msg error" }
-                              else if s.starts_with("Mining") { "msg mining" }
-                              else { "msg success" };
-                    view! { <p class=cls>{s}</p> }.into_any()
-                }
-            }}
-        </div>
-    }
-}
-
-// ── SendToEmailPanel ──────────────────────────────────────────────────────────
-
-#[component]
-fn SendToEmailPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
-    let email      = RwSignal::new(String::new());
-    let amount     = RwSignal::new(String::new());
-    let lock_date  = RwSignal::new(String::new());
-    let memo       = RwSignal::new(String::new());
-    let sending    = RwSignal::new(false);
-    let msg        = RwSignal::new(String::new());
-    let utc_clock  = RwSignal::new(String::new());
-
-    Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
-
-    let set_date = move |date: String| lock_date.set(date);
-
-    let on_send = move |_: web_sys::MouseEvent| {
-        let email_str  = email.get_untracked();
-        let amt_str    = amount.get_untracked();
-        let date_str   = lock_date.get_untracked();
-        let memo_str   = memo.get_untracked();
-
-        if email_str.is_empty() || !email_str.contains('@') {
-            msg.set("Error: enter a valid email address.".into()); return;
-        }
+        let sub  = send_sub.get_untracked();
+        let mode = send_mode.get_untracked();
+        let amt_str  = amount.get_untracked();
+        let memo_str = memo.get_untracked();
         if amt_str.is_empty() { msg.set("Error: enter an amount.".into()); return; }
-        if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
-
-        let amt: f64 = match amt_str.parse() {
+        let amt: f64 = match amt_str.parse::<f64>() {
             Ok(v) if v > 0.0 => v,
             Ok(_) => { msg.set("Error: amount must be > 0.".into()); return; }
             Err(_) => { msg.set("Error: invalid amount.".into()); return; }
         };
-        let unlock_unix = match date_str_to_unix(&date_str) {
-            Some(t) => t,
-            None => { msg.set("Error: invalid date.".into()); return; }
-        };
-        let memo_opt = if memo_str.is_empty() { None } else { Some(memo_str) };
+        let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
 
-        spawn_local(async move {
-            sending.set(true);
-            msg.set("Mining PoW\u{2026} (~10s)".into());
-            let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                "email": email_str.clone(),
-                "amountKx": amt,
-                "unlockAtUnix": unlock_unix,
-                "memo": memo_opt.clone(),
-            })).unwrap_or(no_args());
-            match call::<String>("create_email_timelock", args).await {
-                Ok(txid) => {
-                    msg.set(format!("Sent! Notifying {email_str}\u{2026}"));
-                    email.set(String::new());
-                    amount.set(String::new());
-                    lock_date.set(String::new());
-                    memo.set(String::new());
-                    // Fire-and-forget email notification
-                    let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                        "email": email_str,
-                        "amountKx": amt,
-                        "unlockAtUnix": unlock_unix,
-                        "memo": memo_opt,
-                    })).unwrap_or(no_args());
-                    if call::<()>("notify_email_recipient", notify_args).await.is_ok() {
-                        msg.set(format!("Sent! Email notification delivered. ID: {txid}"));
-                    } else {
-                        msg.set(format!("Sent! (Email notification unavailable — api.chronx.io offline) ID: {txid}"));
-                    }
-                    // Poll for nonce increment
-                    let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
-                    for _ in 0..15u8 {
-                        delay_ms(1000).await;
+        if sub == 0 && mode == 0 {
+            // KX + Send Now
+            let to = to_addr.get_untracked();
+            if to.is_empty() { msg.set("Error: enter a recipient address.".into()); return; }
+            spawn_local(async move {
+                sending.set(true);
+                msg.set("Mining PoW\u{2026} (~10s)".into());
+                let args = serde_wasm_bindgen::to_value(
+                    &serde_json::json!({ "to": to, "amountKx": amt })
+                ).unwrap_or(no_args());
+                match call::<String>("send_transfer", args).await {
+                    Ok(txid) => {
+                        msg.set(format!("Sent! TxId: {}", &txid[..16.min(txid.len())]));
+                        to_addr.set(String::new());
+                        amount.set(String::new());
                         if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                            if a.nonce > prev_nonce {
-                                info.set(Some(a));
-                                break;
+                            info.set(Some(a));
+                        }
+                    }
+                    Err(e) => msg.set(format!("Error: {e}")),
+                }
+                sending.set(false);
+            });
+        } else if sub == 0 && mode == 1 {
+            // KX + Send Later
+            let date_str = lock_date.get_untracked();
+            if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
+            let unlock_unix = match date_str_to_unix(&date_str) {
+                Some(t) => t,
+                None => { msg.set("Error: invalid date.".into()); return; }
+            };
+            let pubkey = to_pubkey.get_untracked();
+            let to_pubkey_hex: Option<String> = if pubkey.is_empty() { None } else { Some(pubkey) };
+            spawn_local(async move {
+                sending.set(true);
+                msg.set("Mining PoW\u{2026} (~10s)".into());
+                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                    "amountKx": amt,
+                    "unlockAtUnix": unlock_unix,
+                    "memo": memo_opt,
+                    "toPubkeyHex": to_pubkey_hex,
+                })).unwrap_or(no_args());
+                match call::<String>("create_timelock", args).await {
+                    Ok(txid) => {
+                        msg.set(format!("Promise made! ID: {}", &txid[..16.min(txid.len())]));
+                        amount.set(String::new());
+                        lock_date.set(String::new());
+                        memo.set(String::new());
+                        to_pubkey.set(String::new());
+                        let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
+                        for _ in 0..15u8 {
+                            delay_ms(1000).await;
+                            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                if a.nonce > prev_nonce { info.set(Some(a)); break; }
                             }
                         }
                     }
+                    Err(e) => msg.set(format!("Error: {e}")),
                 }
-                Err(e) => msg.set(format!("Error: {e}")),
+                sending.set(false);
+            });
+        } else if sub == 1 && mode == 0 {
+            // Email + Send Now (unlock = now + 1 hour)
+            let email_str = email.get_untracked();
+            if email_str.is_empty() || !email_str.contains('@') {
+                msg.set("Error: enter a valid email address.".into()); return;
             }
-            sending.set(false);
-        });
+            let unlock_unix = (js_sys::Date::now() / 1000.0) as i64 + 3600;
+            spawn_local(async move {
+                sending.set(true);
+                msg.set("Mining PoW\u{2026} (~10s)".into());
+                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                    "email": email_str.clone(),
+                    "amountKx": amt,
+                    "unlockAtUnix": unlock_unix,
+                    "memo": memo_opt.clone(),
+                })).unwrap_or(no_args());
+                match call::<String>("create_email_timelock", args).await {
+                    Ok(txid) => {
+                        email.set(String::new());
+                        amount.set(String::new());
+                        memo.set(String::new());
+                        let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                            "email": email_str,
+                            "amountKx": amt,
+                            "unlockAtUnix": unlock_unix,
+                            "memo": memo_opt,
+                        })).unwrap_or(no_args());
+                        if call::<()>("notify_email_recipient", notify_args).await.is_ok() {
+                            msg.set(format!("Sent! Email notification delivered. ID: {txid}"));
+                        } else {
+                            msg.set(format!("Sent! (Email notification unavailable) ID: {txid}"));
+                        }
+                        let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
+                        for _ in 0..15u8 {
+                            delay_ms(1000).await;
+                            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                if a.nonce > prev_nonce { info.set(Some(a)); break; }
+                            }
+                        }
+                    }
+                    Err(e) => msg.set(format!("Error: {e}")),
+                }
+                sending.set(false);
+            });
+        } else {
+            // Email + Send Later
+            let email_str = email.get_untracked();
+            if email_str.is_empty() || !email_str.contains('@') {
+                msg.set("Error: enter a valid email address.".into()); return;
+            }
+            let date_str = lock_date.get_untracked();
+            if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
+            let unlock_unix = match date_str_to_unix(&date_str) {
+                Some(t) => t,
+                None => { msg.set("Error: invalid date.".into()); return; }
+            };
+            spawn_local(async move {
+                sending.set(true);
+                msg.set("Mining PoW\u{2026} (~10s)".into());
+                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                    "email": email_str.clone(),
+                    "amountKx": amt,
+                    "unlockAtUnix": unlock_unix,
+                    "memo": memo_opt.clone(),
+                })).unwrap_or(no_args());
+                match call::<String>("create_email_timelock", args).await {
+                    Ok(txid) => {
+                        email.set(String::new());
+                        amount.set(String::new());
+                        lock_date.set(String::new());
+                        memo.set(String::new());
+                        let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                            "email": email_str,
+                            "amountKx": amt,
+                            "unlockAtUnix": unlock_unix,
+                            "memo": memo_opt,
+                        })).unwrap_or(no_args());
+                        if call::<()>("notify_email_recipient", notify_args).await.is_ok() {
+                            msg.set(format!("Sent! Email notification delivered. ID: {txid}"));
+                        } else {
+                            msg.set(format!("Sent! (Email notification unavailable) ID: {txid}"));
+                        }
+                        let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
+                        for _ in 0..15u8 {
+                            delay_ms(1000).await;
+                            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                if a.nonce > prev_nonce { info.set(Some(a)); break; }
+                            }
+                        }
+                    }
+                    Err(e) => msg.set(format!("Error: {e}")),
+                }
+                sending.set(false);
+            });
+        }
     };
 
     view! {
         <div class="card">
-            <p class="section-title">"Send to Email"</p>
 
-            <div class="info-box" style="background:#1a1d27;border:1px solid #2a2d37;border-radius:8px;padding:10px 12px;margin-bottom:12px">
-                <p style="font-size:12px;color:#9ca3af;line-height:1.5;margin:0">
-                    "The recipient will receive an email notification and has 72 hours to accept. "
-                    "If not accepted within 72 hours, your KX is automatically returned. "
-                    "You can also cancel an unaccepted email send from your History at any time."
-                </p>
+            // Sub-tabs: KX Address | Email Address
+            <div class="send-subtabs">
+                <button type="button"
+                    class=move || if send_sub.get()==0 { "send-subtab active" } else { "send-subtab" }
+                    on:click=move |_| { send_sub.set(0); lock_date.set(String::new()); }
+                    disabled=move || sending.get()>"KX Address"</button>
+                <button type="button"
+                    class=move || if send_sub.get()==1 { "send-subtab active" } else { "send-subtab" }
+                    on:click=move |_| { send_sub.set(1); lock_date.set(String::new()); }
+                    disabled=move || sending.get()>"Email Address"</button>
             </div>
 
-            <div class="field">
-                <label>"Recipient Email Address"</label>
-                <input type="email"
-                    placeholder="recipient@example.com"
-                    prop:value=move || email.get()
-                    on:input=move |ev| email.set(event_target_value(&ev))
-                    disabled=move || sending.get() />
+            // Mode: Send Now | Send Later BETA
+            <div class="send-mode-row">
+                <button type="button"
+                    class=move || if send_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                    on:click=move |_| { send_mode.set(0); lock_date.set(String::new()); }
+                    disabled=move || sending.get()>"Send Now"</button>
+                <button type="button"
+                    class=move || if send_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                    on:click=move |_| send_mode.set(1)
+                    disabled=move || sending.get()>"\u{23f3} Send Later BETA"</button>
             </div>
 
+            // KX or Email address field
+            {move || if send_sub.get() == 0 {
+                let lbl = if send_mode.get() == 0 { "To (account ID)" }
+                          else { "To (recipient public key hex \u{b7} leave blank to promise to yourself)" };
+                view! {
+                    <div class="field">
+                        <label>{lbl}</label>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            {move || if send_mode.get() == 0 {
+                                view! {
+                                    <input type="text" placeholder="Base-58 address\u{2026}" style="flex:1"
+                                        prop:value=move || to_addr.get()
+                                        on:input=move |ev| to_addr.set(event_target_value(&ev))
+                                        disabled=move || sending.get() />
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <input type="text"
+                                        placeholder="Leave blank for self \u{b7} paste pubkey hex or scan QR\u{2026}"
+                                        style="flex:1"
+                                        prop:value=move || to_pubkey.get()
+                                        on:input=move |ev| to_pubkey.set(event_target_value(&ev))
+                                        disabled=move || sending.get() />
+                                }.into_any()
+                            }}
+                            <button type="button" style="white-space:nowrap"
+                                on:click=on_scan_qr
+                                disabled=move || sending.get()>"📷 Scan QR"</button>
+                        </div>
+                        {move || {
+                            let s = scan_msg.get();
+                            if s.is_empty() { view! { <span></span> }.into_any() }
+                            else {
+                                let cls = if s.starts_with("Scan") || s.starts_with("No file") { "msg error" } else { "msg success" };
+                                view! { <p class=cls style="margin-top:4px">{s}</p> }.into_any()
+                            }
+                        }}
+                        {move || if send_mode.get() == 1 {
+                            view! {
+                                <p class="label" style="margin-top:4px">
+                                    {move || if to_pubkey.get().is_empty() {
+                                        "Promising to: yourself"
+                                    } else {
+                                        "Promising to: recipient (custom key)"
+                                    }}
+                                </p>
+                            }.into_any()
+                        } else { view! { <span></span> }.into_any() }}
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div class="field">
+                        <label>"Recipient Email Address"</label>
+                        <input type="email" placeholder="recipient@example.com"
+                            prop:value=move || email.get()
+                            on:input=move |ev| email.set(event_target_value(&ev))
+                            disabled=move || sending.get() />
+                    </div>
+                }.into_any()
+            }}
+
+            // Amount
             <div class="field">
                 <label>"Amount (KX)"</label>
                 <input type="number" placeholder="0.000000" step="0.000001" min="0"
@@ -1934,70 +1763,119 @@ fn SendToEmailPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                 <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
             </div>
 
-            <div class="field">
-                <div class="utc-clock">
-                    "\u{1f550} Current UTC time: "
-                    {move || utc_clock.get()}
-                </div>
-                <label>"Unlock Date \u{0026} Time (UTC)"</label>
-                <input type="datetime-local"
-                    prop:min=move || min_datetime_str(3600)
-                    prop:value=move || lock_date.get()
-                    on:input=move |ev| lock_date.set(event_target_value(&ev))
-                    disabled=move || sending.get() />
+            // Datetime picker — Send Later only
+            {move || if send_mode.get() == 1 {
+                view! {
+                    <div class="field">
+                        <div class="utc-clock">
+                            "\u{1f550} Current UTC time: " {move || utc_clock.get()}
+                        </div>
+                        <label>"Unlock Date \u{0026} Time (UTC)"</label>
+                        <input type="datetime-local"
+                            prop:min=move || min_datetime_str(3600)
+                            prop:value=move || lock_date.get()
+                            on:input=move |ev| lock_date.set(event_target_value(&ev))
+                            disabled=move || sending.get() />
+                        {move || {
+                            let dt_str = lock_date.get();
+                            if dt_str.is_empty() { return view! { <span></span> }.into_any(); }
+                            let unix = match date_str_to_unix(&dt_str) {
+                                Some(t) => t,
+                                None => return view! { <span></span> }.into_any(),
+                            };
+                            let now_secs = (js_sys::Date::now() / 1000.0) as i64;
+                            let diff = unix - now_secs;
+                            if diff <= 0 {
+                                return view! { <p class="msg error" style="margin-top:4px">"Date must be in the future"</p> }.into_any();
+                            }
+                            let days  = diff / 86400;
+                            let hours = (diff % 86400) / 3600;
+                            let text  = if days > 0 {
+                                format!("Unlocks in {days} days, {hours} hours from now (UTC)")
+                            } else {
+                                let mins = (diff % 3600) / 60;
+                                format!("Unlocks in {hours} hours, {mins} minutes from now (UTC)")
+                            };
+                            view! { <p class="unlock-countdown">{text}</p> }.into_any()
+                        }}
+                        <div class="quick-dates">
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_months(1); set_date(d); }
+                                disabled=move || sending.get()>"1 mo"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(1); set_date(d); }
+                                disabled=move || sending.get()>"1 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(5); set_date(d); }
+                                disabled=move || sending.get()>"5 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(10); set_date(d); }
+                                disabled=move || sending.get()>"10 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(25); set_date(d); }
+                                disabled=move || sending.get()>"25 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(100); set_date(d); }
+                                disabled=move || sending.get()>"100 yr"</button>
+                        </div>
+                    </div>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
+
+            // Memo — for Send Later or Email
+            {move || if send_mode.get() == 1 || send_sub.get() == 1 {
+                view! {
+                    <div class="field">
+                        <label>"Memo (optional, max 256 chars)"</label>
+                        <textarea placeholder="e.g. Birthday gift for Alex"
+                            maxlength="256" rows="2"
+                            prop:value=move || memo.get()
+                            on:input=move |ev| memo.set(event_target_value(&ev))
+                            disabled=move || sending.get()></textarea>
+                    </div>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
+
+            // Email info box
+            {move || if send_sub.get() == 1 {
+                let txt = if send_mode.get() == 0 {
+                    "The recipient has 72 hours to accept. If not accepted, your KX is automatically returned."
+                } else {
+                    "The recipient will receive an email and has 72 hours to accept. \
+                     If not accepted, your KX is automatically returned. \
+                     You can cancel from History at any time."
+                };
+                view! {
+                    <div style="background:#1a1d27;border:1px solid #2a2d37;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+                        <p style="font-size:12px;color:#9ca3af;line-height:1.5;margin:0">{txt}</p>
+                    </div>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
+
+            // Send Later warning
+            {move || if send_mode.get() == 1 {
+                view! {
+                    <p class="lock-warning">
+                        "\u{26a0} Promised funds cannot be recovered before the unlock date. "
+                        "This action is permanent and cannot be undone."
+                    </p>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
+
+            // Submit button
+            <button class=move || if send_mode.get()==1 { "primary danger" } else { "primary" }
+                on:click=on_send disabled=move || sending.get()>
                 {move || {
-                    let dt_str = lock_date.get();
-                    if dt_str.is_empty() {
-                        return view! { <span></span> }.into_any();
-                    }
-                    let unix = match date_str_to_unix(&dt_str) {
-                        Some(t) => t,
-                        None => return view! { <span></span> }.into_any(),
-                    };
-                    let now_secs = (js_sys::Date::now() / 1000.0) as i64;
-                    let diff = unix - now_secs;
-                    if diff <= 0 {
-                        return view! {
-                            <p class="msg error" style="margin-top:4px">"Date must be in the future"</p>
-                        }.into_any();
-                    }
-                    let days  = diff / 86400;
-                    let hours = (diff % 86400) / 3600;
-                    let text  = if days > 0 {
-                        format!("Unlocks in {days} days, {hours} hours from now (UTC)")
+                    if sending.get() {
+                        if send_sub.get() == 1 || send_mode.get() == 0 { "Sending\u{2026}" } else { "Promising\u{2026}" }
+                    } else if send_sub.get() == 1 {
+                        "Send to Email"
+                    } else if send_mode.get() == 1 {
+                        "Make a Promise"
                     } else {
-                        let mins = (diff % 3600) / 60;
-                        format!("Unlocks in {hours} hours, {mins} minutes from now (UTC)")
-                    };
-                    view! { <p class="unlock-countdown">{text}</p> }.into_any()
+                        "Send Transfer"
+                    }
                 }}
-                <div class="quick-dates">
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_months(1); set_date(d); }
-                        disabled=move || sending.get()>"1 mo"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(1); set_date(d); }
-                        disabled=move || sending.get()>"1 yr"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(5); set_date(d); }
-                        disabled=move || sending.get()>"5 yr"</button>
-                    <button type="button" class="pill"
-                        on:click=move |_| { let d=datetime_plus_years(10); set_date(d); }
-                        disabled=move || sending.get()>"10 yr"</button>
-                </div>
-            </div>
-
-            <div class="field">
-                <label>"Memo (optional, max 256 chars)"</label>
-                <textarea placeholder="e.g. Birthday gift for Alex"
-                    maxlength="256" rows="2"
-                    prop:value=move || memo.get()
-                    on:input=move |ev| memo.set(event_target_value(&ev))
-                    disabled=move || sending.get()></textarea>
-            </div>
-
-            <button class="primary" on:click=on_send disabled=move || sending.get()>
-                {move || if sending.get() { "Sending\u{2026}" } else { "Send to Email" }}
             </button>
 
             {move || {
@@ -2382,7 +2260,6 @@ fn SettingsPanel(
     // Update check state
     let update_result   = RwSignal::new(Option::<UpdateInfo>::None);
     let update_checking = RwSignal::new(false);
-    let update_err      = RwSignal::new(String::new());
 
     // Modal visibility
     let show_about   = RwSignal::new(false);
@@ -2634,7 +2511,6 @@ fn SettingsPanel(
                 <div class="modal-overlay" on:click=move |_| {
                     show_updates.set(false);
                     update_result.set(None);
-                    update_err.set(String::new());
                 }>
                     <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
                         <p class="modal-title">"\u{1f504} Check for Updates"</p>
@@ -2679,12 +2555,7 @@ fn SettingsPanel(
                                         }.into_any()
                                     }
                                 } else {
-                                    let e = update_err.get();
-                                    if e.is_empty() {
-                                        view! { <span></span> }.into_any()
-                                    } else {
-                                        view! { <p class="msg error">{e}</p> }.into_any()
-                                    }
+                                    view! { <span></span> }.into_any()
                                 }
                             }}
                         </div>
@@ -2692,11 +2563,10 @@ fn SettingsPanel(
                             <button on:click=move |_| {
                                 update_checking.set(true);
                                 update_result.set(None);
-                                update_err.set(String::new());
                                 spawn_local(async move {
                                     match call::<UpdateInfo>("check_for_updates", no_args()).await {
                                         Ok(info) => update_result.set(Some(info)),
-                                        Err(e)   => update_err.set(format!("Error: {e}")),
+                                        Err(_)   => {} // silent fail — no error shown
                                     }
                                     update_checking.set(false);
                                 });
@@ -2706,7 +2576,6 @@ fn SettingsPanel(
                             <button on:click=move |_| {
                                 show_updates.set(false);
                                 update_result.set(None);
-                                update_err.set(String::new());
                             }>"Close"</button>
                         </div>
                     </div>

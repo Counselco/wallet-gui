@@ -269,7 +269,8 @@ input:disabled, textarea:disabled { opacity: 0.45; }
 input[type="number"] { -moz-appearance: textfield; }
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
-input[type="date"] { color-scheme: dark; }
+input[type="date"],
+input[type="datetime-local"] { color-scheme: dark; }
 
 /* ── Status messages ─────────────────────────────────────────────────────── */
 
@@ -446,7 +447,8 @@ input[type="date"] { color-scheme: dark; }
 
 .pin-subtitle {
     font-size: 13px;
-    color: #6b7280;
+    font-weight: 700;
+    color: #e1e4ea;
     text-align: center;
     line-height: 1.5;
 }
@@ -989,3 +991,32 @@ input[type="date"] { color-scheme: dark; }
     color: #d4a84b;
     margin: 4px 0 6px;
 }
+
+/* ── Send sub-tabs and mode toggle ──────────────────────────────────────────── */
+.send-subtabs,
+.send-mode-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+.send-subtab,
+.send-mode-btn {
+    flex: 1;
+    padding: 8px 0;
+    border-radius: 6px;
+    border: 1px solid #2d3748;
+    background: #0f1117;
+    color: #6b7280;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.send-subtab.active,
+.send-mode-btn.active {
+    background: #1a1d27;
+    border-color: #d4a84b;
+    color: #d4a84b;
+}
+.send-subtab:hover:not(.active),
+.send-mode-btn:hover:not(.active) { background: #141720; color: #9ca3af; }

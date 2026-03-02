@@ -316,7 +316,20 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
     let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u128;
 
     let actions = vec![Action::Transfer { to: to_id, amount: chronos }];
-    build_sign_mine_submit(&kp, actions, &url).await
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+    let now = chrono::Utc::now().timestamp();
+    append_transfer_history(&app, &TxHistoryEntry {
+        tx_id: txid.clone(),
+        tx_type: "Transfer".to_string(),
+        amount_chronos: Some(format!("{}", chronos)),
+        counterparty: Some(to.clone()),
+        timestamp: now,
+        status: "Confirmed".to_string(),
+        unlock_date: None,
+        cancellation_window_secs: None,
+        created_at: Some(now),
+    });
+    Ok(txid)
 }
 
 /// Create a timelock commitment.
@@ -725,6 +738,15 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
         })
         .collect();
 
+    // Also include local transfer history (send_transfer appends here)
+    let local: Vec<TxHistoryEntry> = {
+        let path = transfer_history_path(&app);
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    };
+    entries.extend(local);
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(entries)
 }
@@ -748,26 +770,46 @@ pub struct UpdateInfo {
     pub release_notes: String,
 }
 
-/// Fetch https://chronx.io/version.json and compare with this build's version.
+/// Check the GitHub releases API for the latest wallet version.
+/// Silent fail: any network or parse error returns up_to_date = true (no error shown).
 #[tauri::command]
-pub async fn check_for_updates() -> Result<UpdateInfo, String> {
-    const FALLBACK: &str =
-        "Unable to check for updates \u{2014} please visit chronx.io for the latest version";
+pub async fn check_for_updates() -> UpdateInfo {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let resp = reqwest::get("https://chronx.io/version.json")
+    let silent_ok = UpdateInfo {
+        up_to_date: true,
+        current: current.clone(),
+        latest: current.clone(),
+        download_url: String::new(),
+        release_notes: String::new(),
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("ChronX-Wallet")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return silent_ok,
+    };
+    let resp = match client
+        .get("https://api.github.com/repos/Counselco/wallet-gui/releases/latest")
+        .send()
         .await
-        .map_err(|_| FALLBACK.to_string())?;
-    let text = resp.text().await.map_err(|_| FALLBACK.to_string())?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|_| FALLBACK.to_string())?;
-    let latest = json["version"].as_str().unwrap_or("").to_string();
-    let download_url = json["download_url"]
-        .as_str()
-        .unwrap_or("https://chronx.io/wallet")
-        .to_string();
-    let release_notes = json["release_notes"].as_str().unwrap_or("").to_string();
-    let up_to_date = latest.is_empty() || latest == current;
-    Ok(UpdateInfo { up_to_date, current, latest, download_url, release_notes })
+    {
+        Ok(r) => r,
+        Err(_) => return silent_ok,
+    };
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return silent_ok,
+    };
+    let tag = json["tag_name"].as_str().unwrap_or("");
+    let latest = tag.trim_start_matches('v').to_string();
+    if latest.is_empty() {
+        return silent_ok;
+    }
+    let up_to_date = latest == current;
+    let download_url = "https://chronx.io/dl/chronx-wallet-setup.exe".to_string();
+    UpdateInfo { up_to_date, current, latest, download_url, release_notes: String::new() }
 }
 
 // ── Notices ───────────────────────────────────────────────────────────────────
@@ -779,6 +821,33 @@ pub struct Notice {
     pub body: String,
     pub severity: String, // "info" | "warning" | "critical"
     pub date: String,
+}
+
+fn transfer_history_path(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("transfer-history.json")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        expand_tilde("~/.chronx/transfer-history.json")
+    }
+}
+
+fn append_transfer_history(app: &AppHandle, entry: &TxHistoryEntry) {
+    let path = transfer_history_path(app);
+    let mut entries: Vec<TxHistoryEntry> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    entries.push(entry.clone());
+    if let Ok(json) = serde_json::to_string(&entries) {
+        let _ = std::fs::write(&path, json);
+    }
 }
 
 fn seen_notices_path(app: &AppHandle) -> PathBuf {
