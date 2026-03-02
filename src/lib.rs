@@ -762,32 +762,32 @@ fn App() -> impl IntoView {
                                 <span class=move || if online.get() { "dot online" } else { "dot offline" }></span>
                                 {move || if online.get() { "Online" } else { "Offline" }}
                             </span>
-                            <nav class="tab-bar">
-                                <button class=move || if active_tab.get()==0 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(0)>"💰 Account"</button>
-                                <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(1)>"↗ Send"</button>
-                                <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(2)>"📋 Promises"</button>
-                                <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(3)>"📜 History"</button>
-                                <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(4)>
-                                    "⚙ Settings"
-                                    {move || {
-                                        let unread = notices.get().iter()
-                                            .filter(|n| !seen_ids.get().contains(&n.id))
-                                            .count();
-                                        if unread > 0 {
-                                            view! { <span class="notice-badge">{unread}</span> }.into_any()
-                                        } else {
-                                            view! { <span></span> }.into_any()
-                                        }
-                                    }}
-                                </button>
-                            </nav>
                         </div>
                     </header>
+                    <nav class="tab-bar">
+                        <button class=move || if active_tab.get()==0 {"tab active"} else {"tab"}
+                            on:click=move |_| active_tab.set(0)>"💰 Account"</button>
+                        <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
+                            on:click=move |_| active_tab.set(1)>"↗ Send"</button>
+                        <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
+                            on:click=move |_| active_tab.set(2)>"📋 Promises"</button>
+                        <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
+                            on:click=move |_| active_tab.set(3)>"📜 History"</button>
+                        <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
+                            on:click=move |_| active_tab.set(4)>
+                            "⚙ Settings"
+                            {move || {
+                                let unread = notices.get().iter()
+                                    .filter(|n| !seen_ids.get().contains(&n.id))
+                                    .count();
+                                if unread > 0 {
+                                    view! { <span class="notice-badge">{unread}</span> }.into_any()
+                                } else {
+                                    view! { <span></span> }.into_any()
+                                }
+                            }}
+                        </button>
+                    </nav>
 
                     // Main content
                     <div>
@@ -1440,6 +1440,19 @@ fn AccountPanel(
     }
 }
 
+fn is_valid_email(s: &str) -> bool {
+    let s = s.trim();
+    if let Some(at) = s.find('@') {
+        if at == 0 { return false; }
+        let domain = &s[at + 1..];
+        if let Some(dot) = domain.rfind('.') {
+            let tld = &domain[dot + 1..];
+            return dot > 0 && !tld.is_empty();
+        }
+    }
+    false
+}
+
 // ── SendPanel (unified: KX Address + Email Address × Send Now + Send Later) ───
 
 #[component]
@@ -1570,8 +1583,8 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
         } else if sub == 1 && mode == 0 {
             // Email + Send Now (unlock = now + 1 hour)
             let email_str = email.get_untracked();
-            if email_str.is_empty() || !email_str.contains('@') {
-                msg.set("Error: enter a valid email address.".into()); return;
+            if !is_valid_email(&email_str) {
+                msg.set("Please enter a valid email address.".into()); return;
             }
             let unlock_unix = (js_sys::Date::now() / 1000.0) as i64 + 3600;
             spawn_local(async move {
@@ -1614,8 +1627,8 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
         } else {
             // Email + Send Later
             let email_str = email.get_untracked();
-            if email_str.is_empty() || !email_str.contains('@') {
-                msg.set("Error: enter a valid email address.".into()); return;
+            if !is_valid_email(&email_str) {
+                msg.set("Please enter a valid email address.".into()); return;
             }
             let date_str = lock_date.get_untracked();
             if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
