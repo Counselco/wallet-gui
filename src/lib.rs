@@ -5,6 +5,13 @@ use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
+// ── Diagnostic console logger ─────────────────────────────────────────────────
+macro_rules! clog {
+    ($($t:tt)*) => {{
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!($($t)*)));
+    }}
+}
+
 const LOGO_PNG: &[u8] = include_bytes!("../assets/chronx-logo.png");
 
 fn logo_src() -> String {
@@ -1409,6 +1416,7 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             })).unwrap_or(no_args());
             match call::<String>("create_timelock", args).await {
                 Ok(txid) => {
+                    clog!("[Promise] ✓ create_timelock OK — txid={txid}");
                     lock_msg.set(format!("Promise made! ID: {txid}"));
                     lock_amount.set(String::new());
                     lock_date.set(String::new());
@@ -1416,25 +1424,53 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     to_pubkey.set(String::new());
                     // Poll until the account nonce increments — proves the node has
                     // committed the transaction and updated the balance.
-                    let prev_nonce = info.get_untracked().map(|a| a.nonce).unwrap_or(0);
+                    let prev_info = info.get_untracked();
+                    let prev_nonce = prev_info.as_ref().map(|a| a.nonce).unwrap_or(0);
+                    clog!(
+                        "[Promise] info before poll: {} — prev_nonce={}",
+                        if prev_info.is_some() { "Some" } else { "None" },
+                        prev_nonce
+                    );
                     let mut updated = false;
-                    for _ in 0..15u8 {
+                    for i in 0..15u8 {
                         delay_ms(1000).await;
-                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                            if a.nonce > prev_nonce {
-                                info.set(Some(a));
-                                updated = true;
-                                break;
+                        match call::<AccountInfo>("get_account_info", no_args()).await {
+                            Ok(a) => {
+                                clog!(
+                                    "[Promise] poll {i}: nonce={} balance_chronos={} spendable_chronos={}",
+                                    a.nonce, a.balance_chronos, a.spendable_chronos
+                                );
+                                if a.nonce > prev_nonce {
+                                    clog!("[Promise] ✓ nonce incremented ({prev_nonce} → {}) — updating info", a.nonce);
+                                    info.set(Some(a));
+                                    updated = true;
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                clog!("[Promise] poll {i}: get_account_info error: {e}");
                             }
                         }
                     }
                     if !updated {
-                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                            info.set(Some(a));
+                        clog!("[Promise] ✗ nonce did not increment in 15s — TX likely rejected by node");
+                        lock_msg.set("⚠ Transaction not confirmed — the node may have rejected it. Check that your unlock date is at least 1 hour in the future.".to_string());
+                        match call::<AccountInfo>("get_account_info", no_args()).await {
+                            Ok(a) => {
+                                clog!(
+                                    "[Promise] final refresh: nonce={} balance_chronos={} spendable_chronos={}",
+                                    a.nonce, a.balance_chronos, a.spendable_chronos
+                                );
+                                info.set(Some(a));
+                            }
+                            Err(e) => clog!("[Promise] final refresh error: {e}"),
                         }
                     }
                 }
-                Err(e) => lock_msg.set(format!("Error: {e}")),
+                Err(e) => {
+                    clog!("[Promise] ✗ create_timelock error: {e}");
+                    lock_msg.set(format!("Error: {e}"));
+                }
             }
             locking.set(false);
         });

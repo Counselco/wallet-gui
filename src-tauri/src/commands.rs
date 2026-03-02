@@ -3,7 +3,7 @@ use sha2::{Sha256, Digest};
 #[cfg(target_os = "android")]
 use tauri::Manager;
 use chronx_core::{
-    constants::{CHRONOS_PER_KX, POW_INITIAL_DIFFICULTY},
+    constants::{CHRONOS_PER_KX, MIN_LOCK_DURATION_SECS, POW_INITIAL_DIFFICULTY},
     transaction::{Action, AuthScheme, Transaction, TransactionBody},
     types::{AccountId, TimeLockId, TxId},
 };
@@ -269,6 +269,7 @@ pub async fn get_account_info(app: AppHandle) -> Result<AccountInfo, String> {
         .map_err(|e| format!("RPC failed: {e}"))?;
 
     if result.is_null() {
+        eprintln!("[get_account_info] chronx_getAccount returned null for {b58}");
         return Ok(AccountInfo {
             account_id: b58,
             balance_kx: "0".to_string(),
@@ -279,16 +280,24 @@ pub async fn get_account_info(app: AppHandle) -> Result<AccountInfo, String> {
         });
     }
 
+    let nonce = result["nonce"].as_u64().unwrap_or(0);
+    let balance_chronos = result["balance_chronos"].as_str().unwrap_or("0").to_string();
+    let spendable_chronos = result["spendable_chronos"].as_str().unwrap_or("0").to_string();
+    eprintln!(
+        "[get_account_info] {} — nonce={nonce} balance_chronos={balance_chronos} spendable_chronos={spendable_chronos}",
+        &b58[..8.min(b58.len())]
+    );
+
     Ok(AccountInfo {
         account_id: result["account_id"]
             .as_str()
             .map(|s| s.to_string())
             .unwrap_or(b58),
         balance_kx: result["balance_kx"].as_str().unwrap_or("0").to_string(),
-        balance_chronos: result["balance_chronos"].as_str().unwrap_or("0").to_string(),
+        balance_chronos,
         spendable_kx: result["spendable_kx"].as_str().unwrap_or("0").to_string(),
-        spendable_chronos: result["spendable_chronos"].as_str().unwrap_or("0").to_string(),
-        nonce: result["nonce"].as_u64().unwrap_or(0),
+        spendable_chronos,
+        nonce,
     })
 }
 
@@ -333,6 +342,10 @@ pub async fn create_timelock(
     let now = chrono::Utc::now().timestamp();
     if unlock_at_unix <= now {
         return Err("Unlock date must be in the future".to_string());
+    }
+    if unlock_at_unix < now + MIN_LOCK_DURATION_SECS {
+        let mins = MIN_LOCK_DURATION_SECS / 60;
+        return Err(format!("Unlock time must be at least {mins} minutes from now (chain minimum)"));
     }
 
     // Resolve recipient: use provided pubkey hex, or default to self.
@@ -380,12 +393,25 @@ pub async fn get_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> 
     let kp = load_keypair(&app)?;
     let b58 = kp.account_id.to_b58();
 
+    eprintln!("[get_timelocks] → chronx_getTimeLockContracts({}) at {url}", &b58[..8.min(b58.len())]);
+
     let result = rpc_call(&url, "chronx_getTimeLockContracts", serde_json::json!([b58]))
         .await
-        .map_err(|e| format!("RPC failed: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[get_timelocks] RPC error: {e}");
+            format!("RPC failed: {e}")
+        })?;
+
+    let raw_str = result.to_string();
+    eprintln!("[get_timelocks] raw response (first 500 chars): {}", &raw_str[..raw_str.len().min(500)]);
 
     let raw: Vec<serde_json::Value> =
-        serde_json::from_value(result).map_err(|e| format!("Parsing timelocks: {e}"))?;
+        serde_json::from_value(result).map_err(|e| {
+            eprintln!("[get_timelocks] parse error: {e}");
+            format!("Parsing timelocks: {e}")
+        })?;
+
+    eprintln!("[get_timelocks] parsed {} lock(s)", raw.len());
 
     let locks = raw
         .into_iter()
@@ -566,7 +592,8 @@ pub struct TxHistoryEntry {
 #[tauri::command]
 pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntry>, String> {
     let url = rpc_url(&app);
-    let _ = load_keypair(&app)?;  // ensure wallet exists before querying
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
 
     let result = rpc_call(&url, "chronx_getRecentTransactions", serde_json::json!([50]))
         .await
@@ -575,14 +602,19 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     let raw: Vec<serde_json::Value> =
         serde_json::from_value(result).map_err(|e| format!("Parsing history: {e}"))?;
 
-    Ok(raw.into_iter().map(|v| TxHistoryEntry {
-        tx_id:           v["tx_id"].as_str().unwrap_or("").to_string(),
-        tx_type:         v["tx_type"].as_str().unwrap_or("Transfer").to_string(),
-        amount_chronos:  None,
-        counterparty:    v["from"].as_str().map(|s| s.to_string()),
-        timestamp:       v["timestamp"].as_i64().unwrap_or(0),
-        status:          "Confirmed".to_string(),
-    }).collect())
+    // getRecentTransactions returns all chain TXs; filter to only this account's TXs.
+    // Fields available: tx_id, timestamp, from, action_count, depth (no tx_type/amount).
+    Ok(raw.into_iter()
+        .filter(|v| v["from"].as_str() == Some(b58.as_str()))
+        .map(|v| TxHistoryEntry {
+            tx_id:          v["tx_id"].as_str().unwrap_or("").to_string(),
+            tx_type:        "Transaction".to_string(),
+            amount_chronos: None,
+            counterparty:   None,
+            timestamp:      v["timestamp"].as_i64().unwrap_or(0),
+            status:         "Confirmed".to_string(),
+        })
+        .collect())
 }
 
 // ── App version ───────────────────────────────────────────────────────────────
