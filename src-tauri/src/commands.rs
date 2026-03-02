@@ -586,15 +586,17 @@ pub struct TxHistoryEntry {
     pub counterparty: Option<String>,
     pub timestamp: i64,
     pub status: String,
+    pub unlock_date: Option<i64>,
 }
 
-/// Fetch recent transactions for this wallet (up to 50).
+/// Fetch recent transactions for this wallet (up to 50), including Promise (timelock) history.
 #[tauri::command]
 pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntry>, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
     let b58 = kp.account_id.to_b58();
 
+    // ── Regular transfers ────────────────────────────────────────────────────
     let result = rpc_call(&url, "chronx_getRecentTransactions", serde_json::json!([50]))
         .await
         .map_err(|e| format!("RPC failed: {e}"))?;
@@ -602,28 +604,54 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     let raw: Vec<serde_json::Value> =
         serde_json::from_value(result).map_err(|e| format!("Parsing history: {e}"))?;
 
-    // getRecentTransactions returns all chain TXs; filter to only this account's TXs.
-    // Fields available: tx_id, timestamp, from, action_count, depth (no tx_type/amount).
-    // Heuristic: action_count >= 2 suggests a Promise (TimeLockCreate), else Transfer.
-    Ok(raw.into_iter()
-        .filter(|v| v["from"].as_str() == Some(b58.as_str()))
-        .map(|v| {
-            let action_count = v["action_count"].as_u64().unwrap_or(1);
-            let tx_type = if action_count >= 2 {
-                "Promise".to_string()
-            } else {
-                "Transfer".to_string()
-            };
-            TxHistoryEntry {
-                tx_id:          v["tx_id"].as_str().unwrap_or("").to_string(),
-                tx_type,
-                amount_chronos: None,
-                counterparty:   None,
-                timestamp:      v["timestamp"].as_i64().unwrap_or(0),
-                status:         "Confirmed".to_string(),
-            }
+    let mut entries: Vec<TxHistoryEntry> = raw
+        .into_iter()
+        .filter(|v| {
+            // Only this account's TXs; skip promise TXs (fetched separately below)
+            v["from"].as_str() == Some(b58.as_str())
+                && v["action_count"].as_u64().unwrap_or(1) < 2
         })
-        .collect())
+        .map(|v| TxHistoryEntry {
+            tx_id:          v["tx_id"].as_str().unwrap_or("").to_string(),
+            tx_type:        "Transfer".to_string(),
+            amount_chronos: None,
+            counterparty:   None,
+            timestamp:      v["timestamp"].as_i64().unwrap_or(0),
+            status:         "Confirmed".to_string(),
+            unlock_date:    None,
+        })
+        .collect();
+
+    // ── Promise (timelock) transactions ──────────────────────────────────────
+    if let Ok(tl_result) = rpc_call(
+        &url, "chronx_getTimeLockContracts", serde_json::json!([b58])
+    ).await {
+        if let Ok(locks) = serde_json::from_value::<Vec<serde_json::Value>>(tl_result) {
+            for v in locks {
+                // Only show locks sent BY this account
+                if v["sender"].as_str() != Some(b58.as_str()) {
+                    continue;
+                }
+                let amount_chronos = v["amount_kx"]
+                    .as_str()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|kx| format!("{}", (kx * CHRONOS_PER_KX as f64) as u128));
+                entries.push(TxHistoryEntry {
+                    tx_id:          v["lock_id"].as_str().unwrap_or("").to_string(),
+                    tx_type:        "Promise Sent".to_string(),
+                    amount_chronos,
+                    counterparty:   v["memo"].as_str().map(|s| s.to_string()),
+                    timestamp:      v["created_at"].as_i64().unwrap_or(0),
+                    status:         v["status"].as_str().unwrap_or("Pending").to_string(),
+                    unlock_date:    Some(v["unlock_at"].as_i64().unwrap_or(0)),
+                });
+            }
+        }
+    }
+
+    // Sort most-recent first
+    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    Ok(entries)
 }
 
 // ── App version ───────────────────────────────────────────────────────────────

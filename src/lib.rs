@@ -84,6 +84,8 @@ struct TxHistoryEntry {
     counterparty: Option<String>,
     timestamp: i64,
     status: String,
+    #[serde(default)]
+    unlock_date: Option<i64>,
 }
 
 // ── Server-pushed types ───────────────────────────────────────────────────────
@@ -225,39 +227,101 @@ fn qr_extract_pubkey(raw: &str) -> String {
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
-fn today_str() -> String {
-    let d = js_sys::Date::new_0();
-    let y = d.get_utc_full_year();
-    let m = d.get_utc_month() + 1;
-    let day = d.get_utc_date();
-    format!("{y:04}-{m:02}-{day:02}")
+/// Format a UTC Unix timestamp as "YYYY-MM-DDTHH:MM" for datetime-local inputs.
+fn unix_to_datetime_local_str(unix: i64) -> String {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(unix as f64 * 1000.0));
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}",
+        d.get_utc_full_year(),
+        d.get_utc_month() + 1,
+        d.get_utc_date(),
+        d.get_utc_hours(),
+        d.get_utc_minutes()
+    )
 }
 
+/// Parse "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM" as UTC Unix seconds.
 fn date_str_to_unix(s: &str) -> Option<i64> {
-    if s.len() != 10 { return None; }
-    let utc_str = format!("{s}T00:00:00Z");
+    let utc_str = if s.len() == 10 {
+        format!("{s}T00:00:00Z")
+    } else if s.len() >= 16 {
+        format!("{}:00Z", &s[..16])
+    } else {
+        return None;
+    };
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(&utc_str));
     let ms = d.get_time();
     if ms.is_nan() { return None; }
     Some((ms / 1000.0) as i64)
 }
 
-fn date_plus_months(months: u32) -> String {
+/// Returns "YYYY-MM-DDTHH:MM" for now + given seconds (UTC), for datetime-local min attr.
+fn min_datetime_str(extra_secs: i64) -> String {
+    let unix = (js_sys::Date::now() / 1000.0) as i64 + extra_secs;
+    unix_to_datetime_local_str(unix)
+}
+
+/// Returns "YYYY-MM-DDTHH:MM" for now + N months (same hour/minute, UTC).
+fn datetime_plus_months(months: u32) -> String {
     let d = js_sys::Date::new_0();
     let mut y = d.get_utc_full_year() as u32;
     let mut m = d.get_utc_month() + months;
     y += m / 12;
     m %= 12;
-    let day = d.get_utc_date();
-    format!("{y:04}-{m1:02}-{day:02}", m1 = m + 1)
+    format!(
+        "{y:04}-{m1:02}-{day:02}T{h:02}:{min:02}",
+        m1 = m + 1,
+        day = d.get_utc_date(),
+        h = d.get_utc_hours(),
+        min = d.get_utc_minutes()
+    )
 }
 
-fn date_plus_years(years: u32) -> String {
+/// Returns "YYYY-MM-DDTHH:MM" for now + N years (same hour/minute, UTC).
+fn datetime_plus_years(years: u32) -> String {
     let d = js_sys::Date::new_0();
-    let y = d.get_utc_full_year() as u32 + years;
-    let m = d.get_utc_month() + 1;
-    let day = d.get_utc_date();
-    format!("{y:04}-{m:02}-{day:02}")
+    format!(
+        "{y:04}-{m:02}-{day:02}T{h:02}:{min:02}",
+        y = d.get_utc_full_year() as u32 + years,
+        m = d.get_utc_month() + 1,
+        day = d.get_utc_date(),
+        h = d.get_utc_hours(),
+        min = d.get_utc_minutes()
+    )
+}
+
+/// Format Unix timestamp as a short UTC date string "YYYY-MM-DD".
+fn unix_to_date_str(ts: i64) -> String {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
+    format!(
+        "{:04}-{:02}-{:02}",
+        d.get_utc_full_year(),
+        d.get_utc_month() + 1,
+        d.get_utc_date()
+    )
+}
+
+// ── UTC clock ticker ──────────────────────────────────────────────────────────
+
+fn utc_clock_str() -> String {
+    let d = js_sys::Date::new_0();
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        d.get_utc_full_year(),
+        d.get_utc_month() + 1,
+        d.get_utc_date(),
+        d.get_utc_hours(),
+        d.get_utc_minutes(),
+        d.get_utc_seconds()
+    )
+}
+
+fn start_utc_clock_tick(clock: RwSignal<String>) {
+    clock.set(utc_clock_str());
+    spawn_local(async move {
+        delay_ms(1000).await;
+        start_utc_clock_tick(clock);
+    });
 }
 
 // ── Clipboard ─────────────────────────────────────────────────────────────────
@@ -1464,6 +1528,10 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
     let locking     = RwSignal::new(false);
     let lock_msg    = RwSignal::new(String::new());
     let scan_msg    = RwSignal::new(String::new());
+    let utc_clock   = RwSignal::new(String::new());
+
+    // Start live UTC clock
+    Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
 
     let set_date = move |date: String| lock_date.set(date);
 
@@ -1573,8 +1641,6 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
         });
     };
 
-    let today = today_str();
-
     view! {
         <div class="card">
             <p class="section-title">"Send Later"</p>
@@ -1617,29 +1683,65 @@ fn SendLaterPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             </div>
 
             <div class="field">
-                <label>"Unlock Date (UTC)"</label>
-                <input type="date" min=today
+                <div class="utc-clock">
+                    "\u{1f550} Current UTC time: "
+                    {move || utc_clock.get()}
+                </div>
+                <label>"Unlock Date &amp; Time (UTC)"</label>
+                <input type="datetime-local"
+                    prop:min=move || min_datetime_str(3600)
                     prop:value=move || lock_date.get()
                     on:input=move |ev| lock_date.set(event_target_value(&ev))
                     disabled=move || locking.get() />
+                // Countdown display
+                {move || {
+                    let dt_str = lock_date.get();
+                    if dt_str.is_empty() {
+                        return view! { <span></span> }.into_any();
+                    }
+                    let unix = match date_str_to_unix(&dt_str) {
+                        Some(t) => t,
+                        None => return view! { <span></span> }.into_any(),
+                    };
+                    let now_secs = (js_sys::Date::now() / 1000.0) as i64;
+                    let diff = unix - now_secs;
+                    if diff <= 0 {
+                        return view! {
+                            <p class="msg error" style="margin-top:4px">
+                                "Date must be in the future"
+                            </p>
+                        }.into_any();
+                    }
+                    let days  = diff / 86400;
+                    let hours = (diff % 86400) / 3600;
+                    let text  = if days > 0 {
+                        format!("Unlocks in {days} days, {hours} hours from now (UTC)")
+                    } else {
+                        let mins = (diff % 3600) / 60;
+                        format!("Unlocks in {hours} hours, {mins} minutes from now (UTC)")
+                    };
+                    view! {
+                        <p class="unlock-countdown">{text}</p>
+                    }.into_any()
+                }}
                 <div class="quick-dates">
                     <button type="button" class="pill"
-                        on:click=move |_| { let d=date_plus_months(1); set_date(d); }
+                        on:click=move |_| { let d=datetime_plus_months(1); set_date(d); }
                         disabled=move || locking.get()>"1 mo"</button>
                     <button type="button" class="pill"
-                        on:click=move |_| { let d=date_plus_years(1); set_date(d); }
+                        on:click=move |_| { let d=datetime_plus_years(1); set_date(d); }
                         disabled=move || locking.get()>"1 yr"</button>
                     <button type="button" class="pill"
-                        on:click=move |_| { let d=date_plus_years(5); set_date(d); }
+                        on:click=move |_| { let d=datetime_plus_years(5); set_date(d); }
                         disabled=move || locking.get()>"5 yr"</button>
                     <button type="button" class="pill"
-                        on:click=move |_| { let d=date_plus_years(10); set_date(d); }
+                        on:click=move |_| { let d=datetime_plus_years(10); set_date(d); }
                         disabled=move || locking.get()>"10 yr"</button>
                     <button type="button" class="pill"
-                        on:click=move |_| { let d=date_plus_years(25); set_date(d); }
+                        on:click=move |_| { let d=datetime_plus_years(25); set_date(d); }
                         disabled=move || locking.get()>"25 yr"</button>
                     <button type="button" class="pill"
-                        on:click=move |_| { let d=date_plus_years(100); set_date(d); }
+                        on:click=move |_| { let d=datetime_plus_years(100); set_date(d); }
                         disabled=move || locking.get()>"100 yr"</button>
                 </div>
             </div>
@@ -1862,16 +1964,21 @@ fn HistoryPanel() -> impl IntoView {
                                 let tx_id = entry.tx_id.clone();
                                 let tx_id_for_toggle = tx_id.clone();
                                 let type_icon = match entry.tx_type.as_str() {
-                                    "TimeLockCreate" => "\u{23f3}",
-                                    "TimeLockClaim"  => "\u{2705}",
-                                    _                => "\u{2197}",
+                                    "Promise Sent" | "TimeLockCreate" => "\u{23f3}",
+                                    "TimeLockClaim" => "\u{2705}",
+                                    _ => "\u{2197}",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
                                     .map(|c| format!("{} KX", format_kx(c)))
                                     .unwrap_or_else(|| "\u{2014}".to_string());
-                                let addr_display = entry.counterparty.as_deref()
-                                    .map(shorten_addr)
-                                    .unwrap_or_default();
+                                // For Promise Sent, show unlock date instead of counterparty
+                                let addr_display = if let Some(unlock_ts) = entry.unlock_date {
+                                    format!("Unlocks {}", unix_to_date_str(unlock_ts))
+                                } else {
+                                    entry.counterparty.as_deref()
+                                        .map(shorten_addr)
+                                        .unwrap_or_default()
+                                };
                                 let date_display = format_utc_ts(entry.timestamp);
                                 let tx_id_short = shorten_addr(&entry.tx_id);
 

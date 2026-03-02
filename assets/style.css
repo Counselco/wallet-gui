@@ -897,3 +897,21 @@ input[type="date"] { color-scheme: dark; }
 }
 .update-up-to-date { color: #2ecc71; font-size: 13px; margin-top: 8px; }
 .update-available  { color: #d4a84b; font-size: 13px; font-weight: 600; }
+
+/* ── UTC clock & datetime picker ────────────────────────────────────────────── */
+.utc-clock {
+    font-size: 12px;
+    color: #8899aa;
+    font-family: monospace;
+    background: rgba(212,168,75,0.06);
+    border: 1px solid rgba(212,168,75,0.15);
+    border-radius: 6px;
+    padding: 5px 10px;
+    margin-bottom: 8px;
+    display: block;
+}
+.unlock-countdown {
+    font-size: 12px;
+    color: #d4a84b;
+    margin: 4px 0 6px;
+}
