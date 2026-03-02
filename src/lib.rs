@@ -930,6 +930,136 @@ fn SplashScreen() -> impl IntoView {
     }
 }
 
+// ── PinInput — shared PIN digit entry component ───────────────────────────────
+// ONE component used by every PIN screen. This is the single source of truth
+// for PIN input behaviour — fixing it here fixes all screens simultaneously.
+//
+// Pattern: keydown-first on desktop (prevent_default() suppresses the input
+// event in Tauri/WebView2), on-screen keypad buttons for mobile. There is
+// NO on:input handler and NO call to input.set_value() — ever. Those were
+// the root cause of the infinite-loop bug (set_value re-fires on:input on
+// some WebView builds, stalling the input after the first digit).
+//
+// Auto-focus: whenever `digits` becomes empty the hidden input is focused
+// automatically, covering initial mount, post-submit, and phase transitions.
+
+#[component]
+fn PinInput(
+    digits: RwSignal<String>,
+    shake:  RwSignal<bool>,
+) -> impl IntoView {
+    let input_ref = NodeRef::<leptos::html::Input>::new();
+
+    // Focus whenever digits is cleared (initial mount, after each submit,
+    // after every phase transition). Yield one microtask so the NodeRef is
+    // populated before focus() is called.
+    Effect::new(move |_| {
+        if digits.get().is_empty() {
+            let ir = input_ref;
+            spawn_local(async move {
+                let _ = JsFuture::from(Promise::resolve(&JsValue::UNDEFINED)).await;
+                if let Some(el) = ir.get() { let _ = el.focus(); }
+            });
+        }
+    });
+
+    // Clicking anywhere in the component re-focuses the hidden input.
+    let on_wrap_click = move |_: web_sys::MouseEvent| {
+        if let Some(el) = input_ref.get() { let _ = el.focus(); }
+    };
+
+    // Keydown — desktop digit capture. prevent_default() suppresses the
+    // subsequent input event in Tauri/WebView2, so no on:input is needed.
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        let key = ev.key();
+        if key.len() == 1 {
+            if let Some(ch) = key.chars().next() {
+                if ch.is_ascii_digit() {
+                    ev.prevent_default();
+                    let mut d = digits.get_untracked();
+                    if d.len() < 4 { d.push(ch); digits.set(d); }
+                }
+            }
+        } else if key == "Backspace" {
+            ev.prevent_default();
+            let mut d = digits.get_untracked();
+            d.pop();
+            digits.set(d);
+        }
+    };
+
+    view! {
+        <div class="pin-input-wrap" on:click=on_wrap_click>
+            // Dot display
+            <div class=move || if shake.get() { "pin-blocks-wrap pin-shake" } else { "pin-blocks-wrap" }>
+                <div class="pin-blocks">
+                    {(0..4usize).map(|i| view! {
+                        <div class=move || {
+                            let len = digits.get().len();
+                            if len > i { "pin-block filled" }
+                            else if len == i { "pin-block active" }
+                            else { "pin-block" }
+                        }>
+                            {move || if digits.get().len() > i { "\u{25cf}" } else { "" }}
+                        </div>
+                    }).collect_view()}
+                </div>
+            </div>
+
+            // Hidden input — type="text" (not "tel") ensures prevent_default()
+            // on keydown suppresses the input event in Tauri/WebView2 on Windows.
+            // Deliberately NO on:input — eliminates set_value() infinite loop.
+            <input
+                node_ref=input_ref
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
+                class="pin-hidden-input"
+                on:keydown=on_keydown
+            />
+
+            // On-screen keypad — mobile digit entry via button clicks,
+            // which bypass the input event system entirely.
+            <div class="pin-keypad">
+                {["1","2","3","4","5","6","7","8","9","","0","\u{232b}"]
+                    .iter()
+                    .map(|&label| {
+                        if label.is_empty() {
+                            view! {
+                                <button type="button" class="pin-key blank" disabled=true></button>
+                            }.into_any()
+                        } else if label == "\u{232b}" {
+                            view! {
+                                <button type="button" class="pin-key back"
+                                    on:click=move |ev| {
+                                        ev.stop_propagation();
+                                        let mut d = digits.get_untracked();
+                                        d.pop();
+                                        digits.set(d);
+                                    }>
+                                    {label}
+                                </button>
+                            }.into_any()
+                        } else {
+                            let ch = label.chars().next().unwrap();
+                            view! {
+                                <button type="button" class="pin-key"
+                                    on:click=move |ev| {
+                                        ev.stop_propagation();
+                                        let mut d = digits.get_untracked();
+                                        if d.len() < 4 { d.push(ch); digits.set(d); }
+                                    }>
+                                    {label}
+                                </button>
+                            }.into_any()
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
+        </div>
+    }
+}
+
 // ── PinScreen ─────────────────────────────────────────────────────────────────
 
 #[component]
@@ -941,90 +1071,18 @@ fn PinScreen(
     countdown: RwSignal<u32>,
     on_submit: impl Fn(String) + Clone + Send + 'static,
 ) -> impl IntoView {
-    let input_ref = NodeRef::<leptos::html::Input>::new();
-
-    // Auto-focus the hidden input whenever the PIN screen phase changes.
-    // We yield one microtask (Promise::resolve) so the NodeRef is populated
-    // before we call .focus() — NodeRef::get() returns None if called before
-    // the element is attached to the DOM.
-    let input_ref_focus = input_ref;
-    Effect::new(move |_| {
-        let _ = phase.get(); // track phase changes
-        let ir = input_ref_focus;
-        spawn_local(async move {
-            let _ = JsFuture::from(Promise::resolve(&JsValue::UNDEFINED)).await;
-            if let Some(el) = ir.get() {
-                let _ = el.focus();
-            }
-        });
-    });
-
-    // Click anywhere on the pin-screen to re-focus the hidden input
-    let input_ref_click = input_ref;
-    let on_screen_click = move |_: web_sys::MouseEvent| {
-        if let Some(el) = input_ref_click.get() {
-            let _ = el.focus();
-        }
-    };
-
-    // on_submit clones — one for the auto-submit Effect, one for the Confirm button.
     let on_submit_auto = on_submit.clone();
     let on_submit_btn  = on_submit.clone();
 
-    // Auto-submit when 4th digit is entered — same Effect pattern as the working Change PIN.
-    // Handlers below ONLY push digits into the signal; this Effect handles the 4-digit trigger.
+    // Auto-submit when 4th digit is entered.
     Effect::new(move |_| {
         let d = pin_digits.get();
         if d.len() == 4 {
             let captured = d.clone();
-            pin_digits.set(String::new());
+            pin_digits.set(String::new()); // clearing triggers PinInput auto-focus
             on_submit_auto(captured);
         }
     });
-
-    // Keydown handler — handles digits and Backspace.
-    // Same keydown-first pattern as Change PIN to avoid double-fire bugs.
-    // On desktop: keydown fires first, prevent_default() stops on:input from seeing the char.
-    // On Android: keydown doesn't fire for virtual keyboard, so on:input handles digits.
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        let key = ev.key();
-        if key.len() == 1 {
-            if let Some(ch) = key.chars().next() {
-                if ch.is_ascii_digit() {
-                    ev.prevent_default();
-                    let mut d = pin_digits.get_untracked();
-                    if d.len() < 4 {
-                        d.push(ch);
-                        pin_digits.set(d);
-                    }
-                }
-            }
-        } else if key == "Backspace" {
-            ev.prevent_default();
-            let mut d = pin_digits.get_untracked();
-            d.pop();
-            pin_digits.set(d);
-        }
-    };
-
-    // Input handler — handles Android virtual keyboard where keydown doesn't fire.
-    // On desktop, keydown runs first with prevent_default(), so input.value() is empty here.
-    let on_input = move |ev: web_sys::Event| {
-        use wasm_bindgen::JsCast;
-        if let Some(input) = ev.target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-        {
-            let val = input.value();
-            input.set_value("");
-            if let Some(ch) = val.chars().find(|c| c.is_ascii_digit()) {
-                let mut d = pin_digits.get_untracked();
-                if d.len() < 4 {
-                    d.push(ch);
-                    pin_digits.set(d);
-                }
-            }
-        }
-    };
 
     view! {
         <div class="app">
@@ -1032,8 +1090,7 @@ fn PinScreen(
                 <img src=logo_src() alt="ChronX" style="height:44px;width:auto;display:inline-block" />
             </div>
 
-            <div class="pin-screen" on:click=on_screen_click>
-                // Title
+            <div class="pin-screen">
                 <p class="pin-title">
                     {move || match phase.get() {
                         AppPhase::PinSetup   => "Create Your PIN",
@@ -1043,7 +1100,6 @@ fn PinScreen(
                     }}
                 </p>
 
-                // Subtitle
                 <p class="pin-subtitle">
                     {move || match phase.get() {
                         AppPhase::PinSetup   => "Choose a 4-digit PIN to secure your wallet",
@@ -1053,23 +1109,8 @@ fn PinScreen(
                     }}
                 </p>
 
-                // PIN blocks
-                <div class=move || if pin_shake.get() { "pin-blocks-wrap pin-shake" } else { "pin-blocks-wrap" }>
-                    <div class="pin-blocks">
-                        {(0..4usize).map(|i| {
-                            view! {
-                                <div class=move || {
-                                    let len = pin_digits.get().len();
-                                    if len > i { "pin-block filled" }
-                                    else if len == i { "pin-block active" }
-                                    else { "pin-block" }
-                                }>
-                                    {move || if pin_digits.get().len() > i { "\u{25cf}" } else { "" }}
-                                </div>
-                            }
-                        }).collect_view()}
-                    </div>
-                </div>
+                // Shared PIN digit entry: dots + hidden keyboard input + on-screen keypad
+                <PinInput digits=pin_digits shake=pin_shake />
 
                 // Confirm button — appears when all 4 digits are entered
                 {move || if pin_digits.get().len() == 4 {
@@ -1087,15 +1128,12 @@ fn PinScreen(
                     view! { <span></span> }.into_any()
                 }}
 
-                // Message / countdown
                 {move || {
                     let c = countdown.get();
                     let msg = pin_msg.get();
                     if c > 0 {
                         view! {
-                            <p class="pin-lockout-msg">
-                                "\u{23f1} Please wait " {c} " seconds"
-                            </p>
+                            <p class="pin-lockout-msg">"\u{23f1} Please wait " {c} " seconds"</p>
                         }.into_any()
                     } else if !msg.is_empty() {
                         view! { <p class="pin-msg">{msg}</p> }.into_any()
@@ -1103,25 +1141,6 @@ fn PinScreen(
                         view! { <span></span> }.into_any()
                     }
                 }}
-
-                // Hidden input — captures keyboard on desktop and virtual keypad on Android.
-                // type="text" (not "tel") ensures preventDefault() on keydown actually
-                // suppresses the subsequent input event in Tauri/WebView2 on Windows,
-                // preventing double-counting when both on_keydown and on_input would fire.
-                <input
-                    node_ref=input_ref
-                    type="text"
-                    inputmode="numeric"
-                    maxlength="4"
-                    autocomplete="off"
-                    autofocus
-                    class="pin-hidden-input"
-                    on:keydown=on_keydown
-                    on:input=on_input
-                />
-
-                // Coming soon helper
-                <p class="pin-coming-soon">"Biometric / Windows Hello \u{2014} Coming Soon"</p>
             </div>
         </div>
     }
@@ -2417,61 +2436,7 @@ fn SettingsPanel(
         });
     };
 
-    // Change PIN: handle submit on 4 digits
-    let cp_input_ref = NodeRef::<leptos::html::Input>::new();
-
-    Effect::new(move |_| {
-        let _ = show_change_pin.get();
-        if let Some(el) = cp_input_ref.get() {
-            if show_change_pin.get_untracked() {
-                let _ = el.focus();
-            }
-        }
-    });
-
-    // Same keydown-first pattern as PinScreen to avoid double-fire bugs.
-    // On desktop: keydown fires first, prevent_default() stops on:input from seeing the char.
-    // On Android: keydown doesn't fire for virtual keyboard, so on:input handles digits.
-    let cp_on_keydown = move |ev: web_sys::KeyboardEvent| {
-        let key = ev.key();
-        if key.len() == 1 {
-            if let Some(ch) = key.chars().next() {
-                if ch.is_ascii_digit() {
-                    ev.prevent_default();
-                    let mut d = cp_digits.get_untracked();
-                    if d.len() < 4 {
-                        d.push(ch);
-                        cp_digits.set(d);
-                    }
-                }
-            }
-        } else if key == "Backspace" {
-            ev.prevent_default();
-            let mut d = cp_digits.get_untracked();
-            d.pop();
-            cp_digits.set(d);
-        }
-    };
-
-    let cp_on_input = move |ev: web_sys::Event| {
-        use wasm_bindgen::JsCast;
-        if let Some(input) = ev.target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-        {
-            let val = input.value();
-            // Always clear so the hidden input never accumulates text
-            input.set_value("");
-            // Only act if a digit is present (mobile virtual keyboard case)
-            if let Some(ch) = val.chars().find(|c| c.is_ascii_digit()) {
-                let mut d = cp_digits.get_untracked();
-                if d.len() < 4 {
-                    d.push(ch);
-                    cp_digits.set(d);
-                }
-            }
-        }
-    };
-
+    // Change PIN: auto-submit Effect (digit capture is handled by the shared PinInput component).
     Effect::new(move |_| {
         let d = cp_digits.get();
         if d.len() == 4 {
@@ -2767,23 +2732,8 @@ fn SettingsPanel(
                         <p class="modal-title">"Change PIN"</p>
                         <p class="pin-subtitle">{cp_title}</p>
 
-                        // PIN blocks for Change PIN
-                        <div class=move || if cp_shake.get() { "pin-blocks-wrap pin-shake" } else { "pin-blocks-wrap" }>
-                            <div class="pin-blocks">
-                                {(0..4usize).map(|i| {
-                                    view! {
-                                        <div class=move || {
-                                            let len = cp_digits.get().len();
-                                            if len > i { "pin-block filled" }
-                                            else if len == i { "pin-block active" }
-                                            else { "pin-block" }
-                                        }>
-                                            {move || if cp_digits.get().len() > i { "\u{25cf}" } else { "" }}
-                                        </div>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        </div>
+                        // Shared PIN digit entry — same component as login screen
+                        <PinInput digits=cp_digits shake=cp_shake />
 
                         {move || {
                             let msg = cp_msg.get();
@@ -2793,11 +2743,6 @@ fn SettingsPanel(
                                 view! { <p class=cls>{msg}</p> }.into_any()
                             }
                         }}
-
-                        // Hidden capture input
-                        <input node_ref=cp_input_ref type="tel" inputmode="numeric"
-                            autocomplete="off" class="pin-hidden-input"
-                            on:input=cp_on_input on:keydown=cp_on_keydown />
 
                         <button on:click=move |_| {
                             show_change_pin.set(false);

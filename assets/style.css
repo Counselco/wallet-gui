@@ -848,6 +848,35 @@ input[type="date"] { color-scheme: dark; }
 .exchange-link { color: #556677; font-size: 12px; text-decoration: none; }
 .exchange-link:hover { color: #d4a84b; text-decoration: underline; }
 
+/* ── Pin keypad (on-screen keypad for mobile — replaces on:input + set_value) ── */
+.pin-input-wrap { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; }
+.pin-keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    width: 222px;
+    margin: 18px auto 0;
+}
+.pin-key {
+    height: 54px;
+    border-radius: 8px;
+    background: #1e2130;
+    border: 1px solid #2d3748;
+    color: #e5e7eb;
+    font-size: 22px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.pin-key:hover  { background: #252a3a; }
+.pin-key:active { background: #2d3748; }
+.pin-key.back   { font-size: 18px; color: #9ca3af; }
+.pin-key.blank  { background: transparent; border-color: transparent; pointer-events: none; }
+@media (max-width: 400px) {
+    .pin-keypad { width: 186px; gap: 8px; }
+    .pin-key    { height: 46px; font-size: 20px; }
+}
+
 /* ── Fee-free messaging ─────────────────────────────────────────────────────── */
 .fee-free-badge {
     display: inline-block;
