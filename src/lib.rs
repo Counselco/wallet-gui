@@ -944,25 +944,16 @@ fn PinScreen(
         }
     });
 
-    // on_submit clones — auto Effect, keydown Enter, and Confirm button
-    let on_submit_auto   = on_submit.clone();
-    let on_submit_btn    = on_submit.clone();
-    let on_submit_enter  = on_submit.clone();
+    // on_submit clones — one for on_input auto-submit, one for the Confirm button.
+    // on_submit itself is moved into on_keydown (handles both digit auto-submit and Enter).
+    let on_submit_input = on_submit.clone();
+    let on_submit_btn   = on_submit.clone();
 
-    // Auto-submit when 4th digit is entered.
-    // Clears pin_digits first to prevent double-fire from Confirm button.
-    Effect::new(move |_| {
-        let d = pin_digits.get();
-        if d.len() == 4 {
-            let captured = d.clone();
-            pin_digits.set(String::new()); // clear before submit to block Confirm button race
-            on_submit_auto(captured);
-        }
-    });
-
-    // Keydown handler — handles digits and Backspace.
-    // On desktop: keydown fires before input, prevent_default() stops input from firing.
-    // On Android: keydown does NOT fire for virtual keyboard — handled by on_input instead.
+    // Keydown handler — handles digits, Backspace, and Enter.
+    // Auto-submit on the 4th digit is done INSIDE the handler (not in a reactive Effect)
+    // to avoid Leptos signal write-back instability that prevents entering the first digit.
+    // On desktop: keydown fires before input; prevent_default() stops input from also firing.
+    // On Android: keydown does NOT fire for the virtual keyboard — handled by on_input instead.
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         let key = ev.key();
         if key.len() == 1 {
@@ -972,7 +963,13 @@ fn PinScreen(
                     let mut d = pin_digits.get_untracked();
                     if d.len() < 4 {
                         d.push(ch);
-                        pin_digits.set(d);
+                        if d.len() == 4 {
+                            // Auto-submit: clear first so the Confirm button doesn't also fire
+                            pin_digits.set(String::new());
+                            on_submit(d);
+                        } else {
+                            pin_digits.set(d);
+                        }
                     }
                 }
             }
@@ -986,27 +983,33 @@ fn PinScreen(
             if d.len() == 4 {
                 ev.prevent_default();
                 pin_digits.set(String::new());
-                on_submit_enter(d);
+                on_submit(d);
             }
         }
     };
 
     // Input handler — handles Android virtual keyboard where keydown doesn't fire.
-    // On desktop, keydown runs first with prevent_default(), so input.value() will be empty here.
+    // On desktop, keydown runs first with prevent_default(), so input.value() is empty here.
+    // Also auto-submits on the 4th digit for the mobile path.
     let on_input = move |ev: web_sys::Event| {
         use wasm_bindgen::JsCast;
         if let Some(input) = ev.target()
             .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
         {
             let val = input.value();
-            // Always clear the hidden input so it never accumulates text
+            // Always clear so the hidden input never accumulates text
             input.set_value("");
             // Only act if there's a digit present (mobile case)
             if let Some(ch) = val.chars().find(|c| c.is_ascii_digit()) {
                 let mut d = pin_digits.get_untracked();
                 if d.len() < 4 {
                     d.push(ch);
-                    pin_digits.set(d);
+                    if d.len() == 4 {
+                        pin_digits.set(String::new());
+                        on_submit_input(d);
+                    } else {
+                        pin_digits.set(d);
+                    }
                 }
             }
         }
