@@ -373,7 +373,7 @@ pub async fn create_timelock(
     // from accidentally creating very short locks).
     const WALLET_MIN_LOCK_SECS: i64 = 86_400; // 1 day
     if unlock_at_unix < now + WALLET_MIN_LOCK_SECS {
-        return Err("Unlock date must be at least 1 day from now. Promises are meant to last.".to_string());
+        return Err("Unlock date must be at least 24 hours from now.".to_string());
     }
 
     // Resolve recipient: use provided pubkey hex, or default to self.
@@ -454,7 +454,7 @@ pub async fn create_email_timelock(
     // Wallet enforces 1-day minimum for email locks too.
     const WALLET_MIN_LOCK_SECS: i64 = 86_400; // 1 day
     if unlock_at_unix < now + WALLET_MIN_LOCK_SECS {
-        return Err("Unlock date must be at least 1 day from now. Promises are meant to last.".to_string());
+        return Err("Unlock date must be at least 24 hours from now.".to_string());
     }
 
     // ── Generate claim secret ──────────────────────────────────────────────────
@@ -794,25 +794,6 @@ pub struct TxHistoryEntry {
     pub claim_code: Option<String>,
 }
 
-/// Parse a KX decimal string (e.g. "1.123456") into chronos (grains) without
-/// floating-point, preserving all 6 digits of sub-KX precision.
-fn kx_str_to_chronos(s: &str) -> Option<u128> {
-    let parts: Vec<&str> = s.split('.').collect();
-    let integer: u128 = parts[0].parse().ok()?;
-    let fractional: u128 = if parts.len() > 1 {
-        let frac = parts[1];
-        let padded = if frac.len() >= 6 {
-            frac[..6].to_string()
-        } else {
-            format!("{:0<6}", frac)
-        };
-        padded.parse().ok()?
-    } else {
-        0
-    };
-    Some(integer * 1_000_000 + fractional)
-}
-
 /// Fetch Promise (timelock) history for this wallet.
 /// Regular Transfer entries are omitted — the node does not return transfer amounts,
 /// so they provide no useful information. Self-sends were also excluded by the previous
@@ -848,13 +829,20 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
         .filter(|v| v["sender"].as_str() == Some(b58.as_str()))
         .map(|v| {
             let lock_id = v["lock_id"].as_str().unwrap_or("").to_string();
-            let amount_chronos = v["amount_kx"]
-                .as_str()
-                .and_then(kx_str_to_chronos)
-                .map(|c| format!("{}", c));
+            let amount_chronos = Some(v["amount_chronos"]
+                .as_str().unwrap_or("0").to_string());
             let created_at = v["created_at"].as_i64().unwrap_or(0);
-            let cancellation_window_secs = v["cancellation_window_secs"]
-                .as_u64().map(|w| w as u32);
+            let unlock_at = v["unlock_at"].as_i64().unwrap_or(0);
+            let is_email = email_map.contains_key(&lock_id);
+            // RPC does not expose cancellation_window_secs, so compute from
+            // protocol rules: email locks → 72h, locks ≥ 1 year → 24h.
+            let cancellation_window_secs: Option<u32> = if is_email {
+                Some(259_200) // 72 hours
+            } else if unlock_at - created_at >= 365 * 86_400 {
+                Some(86_400) // 24 hours
+            } else {
+                None
+            };
             // Enrich with email and claim_code if this was an email send
             let (tx_type, counterparty, claim_code) =
                 if let Some((email, code)) = email_map.get(&lock_id) {
