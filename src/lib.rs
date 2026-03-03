@@ -479,6 +479,9 @@ fn App() -> impl IntoView {
     // Deep link claim code (from chronx://claim?code=KX-...)
     let deep_link_code = RwSignal::new(String::new());
 
+    // Update available flag (checked on load for Settings badge)
+    let update_available = RwSignal::new(false);
+
     // Best-effort check: if claim_email is set, query node for pending email locks
     let check_email = move || {
         spawn_local(async move {
@@ -538,6 +541,10 @@ fn App() -> impl IntoView {
                 }
                 if let Ok(n) = call::<Vec<Notice>>("fetch_notices", no_args()).await {
                     notices.set(n);
+                }
+                // Check for wallet updates (best effort)
+                if let Ok(upd) = call::<UpdateInfo>("check_for_updates", no_args()).await {
+                    update_available.set(!upd.up_to_date);
                 }
             });
 
@@ -845,7 +852,10 @@ fn App() -> impl IntoView {
                                 let unread = notices.get().iter()
                                     .filter(|n| !seen_ids.get().contains(&n.id))
                                     .count();
-                                if unread > 0 {
+                                let has_update = update_available.get();
+                                if has_update {
+                                    view! { <span class="update-badge" title="Update available">"!"</span> }.into_any()
+                                } else if unread > 0 {
                                     view! { <span class="notice-badge">{unread}</span> }.into_any()
                                 } else {
                                     view! { <span></span> }.into_any()
@@ -1469,6 +1479,9 @@ fn AccountPanel(
                         {move || if qr_svg.get().is_empty() { "\u{1f4f7} QR" } else { "Hide QR" }}
                     </button>
                 </div>
+                <p class="muted" style="font-size:11px;margin-top:4px">
+                    "\u{1f512} This is your public wallet address \u{2014} safe to share. Never share your private key."
+                </p>
 
                 {move || {
                     let svg = qr_svg.get();
@@ -1527,11 +1540,11 @@ fn AccountPanel(
                                 ev.prevent_default();
                                 spawn_local(async move {
                                     let args = serde_wasm_bindgen::to_value(
-                                        &serde_json::json!({ "url": "https://coinmarketcap.com/currencies/chronx/" })
+                                        &serde_json::json!({ "url": "https://chronx.io/exchange.html" })
                                     ).unwrap_or(no_args());
                                     let _ = call::<()>("open_url", args).await;
                                 });
-                            }>"\u{1f4c8} View KX on CoinMarketCap"</a>
+                            }>"Convert KX \u{2194} USDC"</a>
                         </p>
                     </div>
                     <button on:click=on_refresh disabled=move || loading.get()>
@@ -1545,111 +1558,7 @@ fn AccountPanel(
                     else { view! { <p class="error">{e}</p> }.into_any() }
                 }}
 
-                {move || {
-                    let locks = incoming.get();
-                    if inc_loading.get() {
-                        view! { <p class="muted" style="margin-top:12px">"Checking incoming promises\u{2026}"</p> }.into_any()
-                    } else if locks.is_empty() {
-                        view! { <span></span> }.into_any()
-                    } else {
-                        let inc_total = locks.len();
-                        let inc_total_pages = if inc_total == 0 { 1 } else { (inc_total + INC_PAGE_SIZE - 1) / INC_PAGE_SIZE };
-                        let inc_pg = inc_page.get().min(inc_total_pages.saturating_sub(1));
-                        let rows: Vec<_> = locks.into_iter()
-                            .skip(inc_pg * INC_PAGE_SIZE)
-                            .take(INC_PAGE_SIZE)
-                            .map(|lock| {
-                            let now = (js_sys::Date::now() / 1000.0) as i64;
-                            let matured = lock.unlock_at <= now && lock.status == "Pending";
-                            let unlock_date = {
-                                let d = js_sys::Date::new(
-                                    &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
-                                );
-                                format!("{:04}-{:02}-{:02}",
-                                    d.get_utc_full_year(),
-                                    d.get_utc_month() + 1,
-                                    d.get_utc_date())
-                            };
-                            let lock_id = lock.lock_id.clone();
-                            let on_claim_inc = move |_: web_sys::MouseEvent| {
-                                let lid = lock_id.clone();
-                                spawn_local(async move {
-                                    inc_claim_msg.set("Mining PoW\u{2026}".into());
-                                    let args = serde_wasm_bindgen::to_value(
-                                        &serde_json::json!({ "lockIdHex": lid })
-                                    ).unwrap_or(no_args());
-                                    match call::<String>("claim_timelock", args).await {
-                                        Ok(txid) => {
-                                            inc_claim_msg.set(format!("Claimed! TxId: {}", &txid[..16]));
-                                            // Refresh incoming list + balance
-                                            if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
-                                                incoming.set(locks);
-                                            }
-                                            if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                                info.set(Some(fresh));
-                                            }
-                                        }
-                                        Err(e) => inc_claim_msg.set(format!("Error: {e}")),
-                                    }
-                                });
-                            };
-                            view! {
-                                <div class="incoming-lock-row">
-                                    <span class="tl-amount" style="color:#d4a84b">
-                                        {format_kx(&lock.amount_chronos)} " KX"
-                                    </span>
-                                    <span class="tl-unlock">{if matured { "Ready to claim!" } else { "Unlocks " }}</span>
-                                    {if !matured { Some(view! { <span class="tl-unlock">{unlock_date}</span> }) } else { None }}
-                                    {lock.memo.map(|m| view! { <span class="tl-memo">{m}</span> })}
-                                    {if matured {
-                                        view! {
-                                            <button class="claim-btn"
-                                                style="background:#d4a84b;color:#0a0a0a;margin-top:4px;padding:4px 12px;border-radius:4px;border:none;cursor:pointer;font-weight:600"
-                                                on:click=on_claim_inc>
-                                                "Claim Now"
-                                            </button>
-                                        }.into_any()
-                                    } else {
-                                        view! { <span></span> }.into_any()
-                                    }}
-                                </div>
-                            }
-                        }).collect();
-                        view! {
-                            <div style="margin-top:12px;border-top:1px solid #1e2130;padding-top:12px">
-                                <p class="label">"Incoming Promises"</p>
-                                {move || {
-                                    let m = inc_claim_msg.get();
-                                    if m.is_empty() { view! { <span></span> }.into_any() }
-                                    else { view! { <p class="msg" style="font-size:12px;margin:4px 0">{m}</p> }.into_any() }
-                                }}
-                                <div class="timelock-list">{rows}</div>
-                                {if inc_total_pages > 1 {
-                                    view! {
-                                        <div class="pagination-bar">
-                                            <button class="pill"
-                                                disabled={move || inc_page.get() == 0}
-                                                on:click={move |_| inc_page.update(|p| if *p > 0 { *p -= 1; })}>
-                                                "\u{2190} Prev"
-                                            </button>
-                                            <span class="page-indicator">
-                                                {format!("Page {} of {}", inc_pg + 1, inc_total_pages)}
-                                            </span>
-                                            <button class="pill"
-                                                disabled={move || inc_page.get() >= inc_total_pages - 1}
-                                                on:click={move |_| { inc_page.update(|p| { *p += 1; }); }}>
-                                                "Next \u{2192}"
-                                            </button>
-                                        </div>
-                                    }.into_any()
-                                } else { view! { <span></span> }.into_any() }}
-                            </div>
-                        }.into_any()
-                    }
-                }}
-            </div>
-
-            // ── Got a claim code? ────────────────────────────────────────────
+            // ── Got a claim code? (top of receive tab) ──────────────────────
             <div class="card" style="margin-top:12px;border:1px solid rgba(212,168,75,0.3)">
                 <p style="font-size:15px;font-weight:700;color:#d4a84b;margin:0 0 6px">"Got a claim code?"</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
@@ -1715,6 +1624,129 @@ fn AccountPanel(
                     }
                 }}
             </div>
+
+                {move || {
+                    let locks = incoming.get();
+                    if inc_loading.get() {
+                        view! { <p class="muted" style="margin-top:12px">"Checking incoming promises\u{2026}"</p> }.into_any()
+                    } else if locks.is_empty() {
+                        view! { <span></span> }.into_any()
+                    } else {
+                        let inc_total = locks.len();
+                        let inc_total_pages = if inc_total == 0 { 1 } else { (inc_total + INC_PAGE_SIZE - 1) / INC_PAGE_SIZE };
+                        let inc_pg = inc_page.get().min(inc_total_pages.saturating_sub(1));
+                        let rows: Vec<_> = locks.into_iter()
+                            .skip(inc_pg * INC_PAGE_SIZE)
+                            .take(INC_PAGE_SIZE)
+                            .map(|lock| {
+                            let now = (js_sys::Date::now() / 1000.0) as i64;
+                            let matured = lock.unlock_at <= now && lock.status == "Pending";
+                            let is_email_lock = lock.claim_secret_hash.is_some();
+                            let unlock_date = {
+                                let d = js_sys::Date::new(
+                                    &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
+                                );
+                                format!("{:04}-{:02}-{:02}",
+                                    d.get_utc_full_year(),
+                                    d.get_utc_month() + 1,
+                                    d.get_utc_date())
+                            };
+                            let lock_id = lock.lock_id.clone();
+                            let on_claim_inc = move |_: web_sys::MouseEvent| {
+                                let lid = lock_id.clone();
+                                spawn_local(async move {
+                                    inc_claim_msg.set("Mining PoW\u{2026}".into());
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({ "lockIdHex": lid })
+                                    ).unwrap_or(no_args());
+                                    match call::<String>("claim_timelock", args).await {
+                                        Ok(txid) => {
+                                            inc_claim_msg.set(format!("Claimed! TxId: {}", &txid[..16]));
+                                            // Refresh incoming list + balance
+                                            if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
+                                                incoming.set(locks);
+                                            }
+                                            if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                                info.set(Some(fresh));
+                                            }
+                                        }
+                                        Err(e) => inc_claim_msg.set(format!("Error: {e}")),
+                                    }
+                                });
+                            };
+                            // Matured address-to-address locks: show "Disbursed" (auto-available)
+                            // Matured email locks: show "Claim Now" (needs claim code)
+                            let matured_label = if matured && !is_email_lock {
+                                "Disbursed \u{2014} funds in your balance"
+                            } else if matured {
+                                "Ready to claim!"
+                            } else {
+                                "Unlocks "
+                            };
+                            view! {
+                                <div class="incoming-lock-row">
+                                    <span class="tl-amount" style="color:#d4a84b">
+                                        {format_kx(&lock.amount_chronos)} " KX"
+                                    </span>
+                                    <span class={if matured && !is_email_lock { "tl-unlock disbursed" } else { "tl-unlock" }}>
+                                        {matured_label}
+                                    </span>
+                                    {if !matured { Some(view! { <span class="tl-unlock">{unlock_date}</span> }) } else { None }}
+                                    {lock.memo.map(|m| view! { <span class="tl-memo">{m}</span> })}
+                                    {if matured && is_email_lock {
+                                        view! {
+                                            <button class="claim-btn"
+                                                style="background:#d4a84b;color:#0a0a0a;margin-top:4px;padding:4px 12px;border-radius:4px;border:none;cursor:pointer;font-weight:600"
+                                                on:click=on_claim_inc>
+                                                "Claim Now"
+                                            </button>
+                                        }.into_any()
+                                    } else if matured && !is_email_lock {
+                                        view! {
+                                            <span style="color:#2ecc71;font-size:12px;font-weight:600;margin-top:4px;display:block">
+                                                "\u{2705} Promise Kept"
+                                            </span>
+                                        }.into_any()
+                                    } else {
+                                        view! { <span></span> }.into_any()
+                                    }}
+                                </div>
+                            }
+                        }).collect();
+                        view! {
+                            <div style="margin-top:12px;border-top:1px solid #1e2130;padding-top:12px">
+                                <p class="label">"Incoming Promises"</p>
+                                {move || {
+                                    let m = inc_claim_msg.get();
+                                    if m.is_empty() { view! { <span></span> }.into_any() }
+                                    else { view! { <p class="msg" style="font-size:12px;margin:4px 0">{m}</p> }.into_any() }
+                                }}
+                                <div class="timelock-list">{rows}</div>
+                                {if inc_total_pages > 1 {
+                                    view! {
+                                        <div class="pagination-bar">
+                                            <button class="pill"
+                                                disabled={move || inc_page.get() == 0}
+                                                on:click={move |_| inc_page.update(|p| if *p > 0 { *p -= 1; })}>
+                                                "\u{2190} Prev"
+                                            </button>
+                                            <span class="page-indicator">
+                                                {format!("Page {} of {}", inc_pg + 1, inc_total_pages)}
+                                            </span>
+                                            <button class="pill"
+                                                disabled={move || inc_page.get() >= inc_total_pages - 1}
+                                                on:click={move |_| { inc_page.update(|p| { *p += 1; }); }}>
+                                                "Next \u{2192}"
+                                            </button>
+                                        </div>
+                                    }.into_any()
+                                } else { view! { <span></span> }.into_any() }}
+                            </div>
+                        }.into_any()
+                    }
+                }}
+            </div>
+
         </div>
 
         // ── Send sub-tab ────────────────────────────────────────────────────
@@ -3559,6 +3591,16 @@ fn SettingsPanel(
     let update_result   = RwSignal::new(Option::<UpdateInfo>::None);
     let update_checking = RwSignal::new(false);
 
+    // Export/Import state
+    let show_export       = RwSignal::new(false);
+    let export_confirmed  = RwSignal::new(false);
+    let export_key        = RwSignal::new(String::new());
+    let export_loading    = RwSignal::new(false);
+    let show_import       = RwSignal::new(false);
+    let import_key        = RwSignal::new(String::new());
+    let import_msg        = RwSignal::new(String::new());
+    let import_busy       = RwSignal::new(false);
+
     // Modal visibility
     let show_about   = RwSignal::new(false);
     let show_updates = RwSignal::new(false);
@@ -3724,7 +3766,14 @@ fn SettingsPanel(
                 {move || {
                     let pk = pubkey_hex.get();
                     if pk.is_empty() { view! { <span></span> }.into_any() }
-                    else { view! { <p class="mono" style="font-size:10px;word-break:break-all;margin-top:8px">{pk}</p> }.into_any() }
+                    else { view! {
+                        <div>
+                            <p class="mono" style="font-size:10px;word-break:break-all;margin-top:8px">{pk}</p>
+                            <p class="muted" style="font-size:11px;margin-top:4px">
+                                "\u{1f512} This is your public key \u{2014} safe to share. Never share your private key."
+                            </p>
+                        </div>
+                    }.into_any() }
                 }}
             </div>
 
@@ -3800,6 +3849,32 @@ fn SettingsPanel(
                     cp_phase.set(0); cp_digits.set(String::new());
                     cp_msg.set(String::new()); show_change_pin.set(true);
                 }>"🔐 Change PIN"</button>
+            </div>
+
+            // Backup Your Wallet
+            <div class="settings-section">
+                <p class="label">"Backup Your Wallet"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                    "Export your private key to back up your wallet. Without it, your KX cannot be recovered."
+                </p>
+                <button on:click=move |_| {
+                    export_confirmed.set(false);
+                    export_key.set(String::new());
+                    show_export.set(true);
+                }>"🔑 Export Private Key"</button>
+            </div>
+
+            // Restore Wallet
+            <div class="settings-section">
+                <p class="label">"Restore Wallet"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                    "Import a private key to restore a wallet on this device."
+                </p>
+                <button on:click=move |_| {
+                    import_key.set(String::new());
+                    import_msg.set(String::new());
+                    show_import.set(true);
+                }>"📥 Import Private Key"</button>
             </div>
 
             // My Emails for KX Claims (up to 3)
@@ -4014,6 +4089,159 @@ fn SettingsPanel(
                             cp_digits.set(String::new());
                             cp_msg.set(String::new());
                         }>"Cancel"</button>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── Export Private Key modal ──────────────────────────────────────────
+
+        {move || if show_export.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| {
+                    if !export_loading.get_untracked() { show_export.set(false); }
+                }>
+                    <div class="modal-card" style="max-width:440px" on:click=move |ev| ev.stop_propagation()>
+                        <p class="modal-title">"🔑 Export Private Key"</p>
+                        {move || {
+                            if !export_confirmed.get() {
+                                // Step 1: Warning + confirmation
+                                view! {
+                                    <div class="modal-body" style="text-align:left">
+                                        <div class="export-warning">
+                                            <p style="font-weight:700;color:#f87171;margin-bottom:8px">
+                                                "⚠ Read carefully before proceeding:"
+                                            </p>
+                                            <ul style="font-size:13px;line-height:1.8;color:#c7cdd4;padding-left:18px">
+                                                <li>"Your private key is the ONLY way to access your KX."</li>
+                                                <li>"If you lose it, your funds are gone forever."</li>
+                                                <li>"No one — not even ChronX — can recover it."</li>
+                                                <li>"Never share your private key with anyone."</li>
+                                                <li>"Never paste it into a website."</li>
+                                                <li>"Write it down and store it somewhere safe offline."</li>
+                                            </ul>
+                                            <p style="font-weight:700;color:#e74c3c;margin-top:12px;font-size:13px">
+                                                "ChronX will NEVER ask for your private key. Anyone who asks for it is trying to steal your funds."
+                                            </p>
+                                        </div>
+                                        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+                                            <button class="primary" on:click=move |_| {
+                                                export_confirmed.set(true);
+                                                export_loading.set(true);
+                                                spawn_local(async move {
+                                                    match call::<String>("export_secret_key", no_args()).await {
+                                                        Ok(key) => export_key.set(key),
+                                                        Err(e)  => export_key.set(format!("Error: {e}")),
+                                                    }
+                                                    export_loading.set(false);
+                                                });
+                                            }>"I Understand — Show My Key"</button>
+                                            <button on:click=move |_| show_export.set(false)>"Cancel"</button>
+                                        </div>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                // Step 2: Key display
+                                let key = export_key.get();
+                                if export_loading.get() {
+                                    view! { <p class="muted">"Loading\u{2026}"</p> }.into_any()
+                                } else {
+                                    let key_copy = key.clone();
+                                    view! {
+                                        <div class="modal-body" style="text-align:left">
+                                            <p class="muted" style="font-size:12px;margin-bottom:8px">
+                                                "Your private backup key (copy and store safely):"
+                                            </p>
+                                            <div class="export-key-box">
+                                                <p class="mono" style="font-size:10px;word-break:break-all;user-select:all">
+                                                    {key.clone()}
+                                                </p>
+                                            </div>
+                                            <button class="primary" style="margin-top:8px" on:click=move |_| {
+                                                let k = key_copy.clone();
+                                                spawn_local(async move { copy_to_clipboard(k).await; });
+                                            }>"📋 Copy to Clipboard"</button>
+                                            <p class="muted" style="font-size:11px;margin-top:10px">
+                                                "Store this somewhere safe. Consider writing it on paper and keeping it in a secure location."
+                                            </p>
+                                            <button style="margin-top:8px" on:click=move |_| {
+                                                export_key.set(String::new());
+                                                export_confirmed.set(false);
+                                                show_export.set(false);
+                                            }>"Done"</button>
+                                        </div>
+                                    }.into_any()
+                                }
+                            }
+                        }}
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── Import Private Key modal ──────────────────────────────────────────
+
+        {move || if show_import.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| {
+                    if !import_busy.get_untracked() { show_import.set(false); }
+                }>
+                    <div class="modal-card" style="max-width:440px" on:click=move |ev| ev.stop_propagation()>
+                        <p class="modal-title">"📥 Import Private Key"</p>
+                        <div class="modal-body" style="text-align:left">
+                            <div class="export-warning" style="margin-bottom:12px">
+                                <p style="font-weight:700;color:#f87171;font-size:13px">
+                                    "⚠ Importing a private key will replace your current wallet. Make sure you have backed up your current private key first."
+                                </p>
+                            </div>
+                            <p class="label" style="margin-bottom:6px">"Paste your backup key:"</p>
+                            <textarea
+                                class="restore-textarea"
+                                style="width:100%;min-height:80px;font-family:monospace;font-size:11px"
+                                placeholder="Paste your ChronX wallet backup key here"
+                                prop:value=move || import_key.get()
+                                on:input=move |ev| {
+                                    import_key.set(event_target_value(&ev));
+                                    import_msg.set(String::new());
+                                }
+                            ></textarea>
+                            {move || {
+                                let m = import_msg.get();
+                                if m.is_empty() { view! { <span></span> }.into_any() }
+                                else {
+                                    let cls = if m.starts_with("Error") || m.starts_with("Invalid") || m.starts_with("A wallet") { "msg error" } else { "msg success" };
+                                    view! { <p class=cls>{m}</p> }.into_any()
+                                }
+                            }}
+                            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+                                <button class="primary"
+                                    disabled=move || import_busy.get() || import_key.get().trim().is_empty()
+                                    on:click=move |_| {
+                                        let key = import_key.get_untracked().trim().to_string();
+                                        import_busy.set(true);
+                                        import_msg.set(String::new());
+                                        spawn_local(async move {
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "backupKey": key })
+                                            ).unwrap_or(no_args());
+                                            match call::<String>("restore_wallet", args).await {
+                                                Ok(acct) => {
+                                                    import_msg.set(format!("Wallet restored! Account: {}", acct));
+                                                    // Delay then reload
+                                                    delay_ms(2000).await;
+                                                    let _ = web_sys::window().map(|w| w.location().reload());
+                                                }
+                                                Err(e) => import_msg.set(format!("{e}")),
+                                            }
+                                            import_busy.set(false);
+                                        });
+                                    }>
+                                    {move || if import_busy.get() { "Restoring\u{2026}" } else { "Restore Wallet" }}
+                                </button>
+                                <button disabled=move || import_busy.get()
+                                    on:click=move |_| show_import.set(false)>"Cancel"</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             }.into_any()
