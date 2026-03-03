@@ -167,6 +167,15 @@ pub struct EmailSeriesResult {
     pub claim_code: String,
 }
 
+/// Returned by `claim_by_code` — auto-finds and claims all matching locks.
+#[derive(Debug, Serialize, Clone)]
+pub struct ClaimByCodeResult {
+    pub tx_id: String,
+    pub claimed_count: usize,
+    pub total_chronos: String,
+    pub lock_ids: Vec<String>,
+}
+
 // ── RPC helper ────────────────────────────────────────────────────────────────
 
 async fn rpc_call(
@@ -720,6 +729,106 @@ pub async fn claim_email_timelock(
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
+}
+
+/// Claim one or more timelocks using only a claim code (no Lock ID needed).
+///
+/// The wallet computes BLAKE3(uppercase(code)) and scans all known locks
+/// (email locks for registered claim emails + pending incoming locks) for
+/// matching `claim_secret_hash`. All matches are claimed in a single transaction.
+#[tauri::command]
+pub async fn claim_by_code(app: AppHandle, claim_code: String) -> Result<ClaimByCodeResult, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let normalized = claim_code.trim().to_uppercase();
+
+    if normalized.is_empty() {
+        return Err("Enter a claim code".to_string());
+    }
+
+    // Compute the target hash: BLAKE3(normalized_code)
+    let target_hash = hex::encode(blake3::hash(normalized.as_bytes()).as_bytes());
+
+    // Gather candidate locks from multiple sources
+    let mut candidates: Vec<TimeLockInfo> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Source 1: email locks for registered claim emails
+    let cfg = read_config(&app);
+    let emails = cfg.claim_emails.unwrap_or_default();
+    for email in &emails {
+        if email.trim().is_empty() { continue; }
+        let hash_hex = hex::encode(blake3::hash(email.to_lowercase().as_bytes()).as_bytes());
+        if let Ok(result) = rpc_call(&url, "chronx_getEmailLocks", serde_json::json!([hash_hex])).await {
+            if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
+                for v in raw {
+                    let lock = parse_timelock_json(&v);
+                    if seen.insert(lock.lock_id.clone()) {
+                        candidates.push(lock);
+                    }
+                }
+            }
+        }
+    }
+
+    // Source 2: pending incoming locks for this wallet
+    let b58 = kp.account_id.to_b58();
+    if let Ok(result) = rpc_call(&url, "chronx_getPendingIncoming", serde_json::json!([b58])).await {
+        if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
+            for v in raw {
+                let lock = parse_timelock_json(&v);
+                if seen.insert(lock.lock_id.clone()) {
+                    candidates.push(lock);
+                }
+            }
+        }
+    }
+
+    // Source 3: this wallet's own timelocks (for self-sends)
+    if let Ok(result) = rpc_call(&url, "chronx_getTimeLockContracts", serde_json::json!([b58])).await {
+        if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
+            for v in raw {
+                let lock = parse_timelock_json(&v);
+                if seen.insert(lock.lock_id.clone()) {
+                    candidates.push(lock);
+                }
+            }
+        }
+    }
+
+    // Filter: Pending locks with matching claim_secret_hash
+    let matches: Vec<&TimeLockInfo> = candidates.iter()
+        .filter(|l| l.status == "Pending"
+            && l.claim_secret_hash.as_deref() == Some(target_hash.as_str()))
+        .collect();
+
+    if matches.is_empty() {
+        return Err("No matching locks found for this code. Make sure your claim email is set in Settings.".to_string());
+    }
+
+    // Build claim actions for all matching locks
+    let actions: Vec<Action> = matches.iter().map(|l| {
+        let lock_txid = TxId::from_hex(&l.lock_id).unwrap();
+        Action::TimeLockClaimWithSecret {
+            lock_id: TimeLockId(lock_txid),
+            claim_secret: normalized.clone(),
+        }
+    }).collect();
+
+    let claimed_count = actions.len();
+    let total_chronos: u128 = matches.iter()
+        .map(|l| l.amount_chronos.parse::<u128>().unwrap_or(0))
+        .sum();
+    let lock_ids: Vec<String> = matches.iter().map(|l| l.lock_id.clone()).collect();
+
+    let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+
+    Ok(ClaimByCodeResult {
+        tx_id,
+        claimed_count,
+        total_chronos: total_chronos.to_string(),
+        lock_ids,
+    })
 }
 
 /// Cancel a timelock that is still within its cancellation window.

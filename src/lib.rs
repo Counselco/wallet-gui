@@ -83,6 +83,15 @@ struct EmailSeriesResult {
     claim_code: String,
 }
 
+/// Returned by `claim_by_code`.
+#[derive(Clone, Deserialize, Default)]
+struct ClaimByCodeResult {
+    tx_id: String,
+    claimed_count: usize,
+    total_chronos: String,
+    lock_ids: Vec<String>,
+}
+
 #[derive(Clone, Deserialize, Default)]
 struct TxHistoryEntry {
     tx_id: String,
@@ -1226,7 +1235,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v1.4.16"
+                    "ChronX Wallet v1.4.17"
                 </p>
             </div>
         </div>
@@ -2583,161 +2592,77 @@ fn PromisesPanel(
                 }
             }}
 
-            // ── Claim with Code (standalone + series) ──────────────────────────
+            // ── Claim with Code (unified — one field, auto-finds matching locks) ──
             {
-                let standalone_lock_id = RwSignal::new(String::new());
                 // Pre-fill from deep link if available
                 let dl_code = deep_link_code.get_untracked();
-                let standalone_code    = RwSignal::new(dl_code.clone());
+                let claim_code_input = RwSignal::new(dl_code.clone());
                 if !dl_code.is_empty() {
                     deep_link_code.set(String::new()); // consume it
                 }
-                let standalone_msg     = RwSignal::new(String::new());
-                let standalone_busy    = RwSignal::new(false);
-                let series_claim_code  = RwSignal::new(String::new());
-                let series_msg         = RwSignal::new(String::new());
-                let series_busy        = RwSignal::new(false);
+                let claim_msg  = RwSignal::new(String::new());
+                let claim_busy = RwSignal::new(false);
                 view! {
-                    // Series claim: appears when multiple pending email locks exist
-                    {move || {
-                        let locks = email_locks.get();
-                        let my_id = info.get().map(|a| a.account_id).unwrap_or_default();
-                        let pending_cross: Vec<&TimeLockInfo> = locks.iter()
-                            .filter(|l| l.sender != my_id && l.status == "Pending")
-                            .collect();
-                        if pending_cross.len() < 2 {
-                            return view! { <span></span> }.into_any();
-                        }
-                        let lock_ids: Vec<String> = pending_cross.iter().map(|l| l.lock_id.clone()).collect();
-                        let count = pending_cross.len();
-                        let total: u128 = pending_cross.iter()
-                            .map(|l| l.amount_chronos.parse::<u128>().unwrap_or(0))
-                            .sum();
-                        view! {
-                            <div class="claim-code-section" style="margin:16px 0;padding:14px;border:1px solid #d4a84b;border-radius:10px;background:#1a1a10">
-                                <p class="section-title" style="color:#d4a84b">
-                                    {format!("Claim Series ({count} promises, {} KX total)", format_kx(&total.to_string()))}
-                                </p>
-                                <p class="muted" style="font-size:12px;margin-bottom:8px">
-                                    "Enter one claim code to claim all promises in this series at once."
-                                </p>
-                                <input
-                                    type="text"
-                                    placeholder="KX-XXXX-XXXX-XXXX-XXXX"
-                                    class="input-field claim-code-input"
-                                    style="font-family:monospace;font-size:13px;letter-spacing:1px;text-align:center;margin-bottom:8px"
-                                    prop:value=move || series_claim_code.get()
-                                    on:input=move |ev| series_claim_code.set(event_target_value(&ev))
-                                />
-                                <button
-                                    class="btn-primary"
-                                    style="width:100%;background:#d4a84b;color:#0a0a0a;font-weight:700"
-                                    disabled=move || series_busy.get()
-                                    on:click=move |_| {
-                                        let code = series_claim_code.get_untracked().trim().to_string();
-                                        if code.is_empty() {
-                                            series_msg.set("Enter your claim code".into());
-                                            return;
-                                        }
-                                        let ids = lock_ids.clone();
-                                        series_busy.set(true);
-                                        spawn_local(async move {
-                                            series_msg.set("Mining PoW\u{2026}".into());
-                                            let args = serde_wasm_bindgen::to_value(
-                                                &serde_json::json!({ "lockIds": ids, "claimCode": code })
-                                            ).unwrap_or(no_args());
-                                            match call::<Vec<String>>("claim_email_series", args).await {
-                                                Ok(txids) => {
-                                                    series_msg.set(format!("Claimed {} promises!", txids.len()));
-                                                    series_claim_code.set(String::new());
-                                                    // Remove claimed locks
-                                                    email_locks.update(|locks| {
-                                                        locks.retain(|l| !ids.contains(&l.lock_id));
-                                                    });
-                                                }
-                                                Err(e) => series_msg.set(format!("Error: {e}")),
-                                            }
-                                            series_busy.set(false);
-                                        });
-                                    }
-                                >
-                                    {move || if series_busy.get() { "Claiming\u{2026}" } else { "Claim All" }}
-                                </button>
-                                {move || {
-                                    let s = series_msg.get();
-                                    if s.is_empty() { view! { <span></span> }.into_any() }
-                                    else {
-                                        let cls = if s.starts_with("Error") || s.starts_with("Enter") { "msg error" }
-                                                  else if s.starts_with("Mining") || s.starts_with("Claiming") { "msg mining" }
-                                                  else { "msg success" };
-                                        view! { <p class=cls style="margin-top:6px">{s}</p> }.into_any()
-                                    }
-                                }}
-                            </div>
-                        }.into_any()
-                    }}
-
-                    // Single lock claim with code
                     <div class="claim-code-section" style="margin:16px 0;padding:14px;border:1px solid #333;border-radius:10px;background:#151515">
                         <p class="section-title">"Claim with Code"</p>
                         <p class="muted" style="font-size:12px;margin-bottom:8px">
-                            "Have a claim code? Enter the Lock ID and code below to claim your KX."
+                            "Received a claim code? Paste it below to claim your KX."
                         </p>
-                        <input
-                            type="text"
-                            placeholder="Lock ID (hex)"
-                            class="input-field"
-                            style="font-family:monospace;font-size:12px;margin-bottom:6px"
-                            prop:value=move || standalone_lock_id.get()
-                            on:input=move |ev| standalone_lock_id.set(event_target_value(&ev))
-                        />
                         <input
                             type="text"
                             placeholder="KX-XXXX-XXXX-XXXX-XXXX"
                             class="input-field claim-code-input"
                             style="font-family:monospace;font-size:13px;letter-spacing:1px;text-align:center;margin-bottom:8px"
-                            prop:value=move || standalone_code.get()
-                            on:input=move |ev| standalone_code.set(event_target_value(&ev))
+                            prop:value=move || claim_code_input.get()
+                            on:input=move |ev| claim_code_input.set(event_target_value(&ev))
                         />
                         <button
                             class="btn-primary"
-                            style="width:100%"
-                            disabled=move || standalone_busy.get()
+                            style="width:100%;background:#d4a84b;color:#0a0a0a;font-weight:700"
+                            disabled=move || claim_busy.get()
                             on:click=move |_| {
-                                let lid = standalone_lock_id.get_untracked().trim().to_string();
-                                let code = standalone_code.get_untracked().trim().to_string();
-                                if lid.is_empty() || code.is_empty() {
-                                    standalone_msg.set("Enter both Lock ID and claim code".into());
+                                let code = claim_code_input.get_untracked().trim().to_string();
+                                if code.is_empty() {
+                                    claim_msg.set("Enter your claim code".into());
                                     return;
                                 }
-                                standalone_busy.set(true);
+                                claim_busy.set(true);
                                 spawn_local(async move {
-                                    standalone_msg.set("Mining PoW\u{2026}".into());
+                                    claim_msg.set("Searching for matching locks\u{2026}".into());
                                     let args = serde_wasm_bindgen::to_value(
-                                        &serde_json::json!({ "lockIdHex": lid, "claimCode": code })
+                                        &serde_json::json!({ "claimCode": code })
                                     ).unwrap_or(no_args());
-                                    match call::<String>("claim_email_timelock", args).await {
-                                        Ok(txid) => {
-                                            standalone_msg.set(format!("Claimed! TxId: {txid}"));
-                                            standalone_lock_id.set(String::new());
-                                            standalone_code.set(String::new());
-                                            // Also remove from email_locks if present
-                                            email_locks.update(|locks| locks.retain(|l| l.lock_id != lid));
+                                    match call::<ClaimByCodeResult>("claim_by_code", args).await {
+                                        Ok(result) => {
+                                            let kx = format_kx(&result.total_chronos);
+                                            if result.claimed_count == 1 {
+                                                claim_msg.set(format!("Claimed {kx} KX!"));
+                                            } else {
+                                                claim_msg.set(format!("Claimed {} promises ({kx} KX total)!", result.claimed_count));
+                                            }
+                                            claim_code_input.set(String::new());
+                                            // Remove claimed locks from email_locks
+                                            let ids = result.lock_ids;
+                                            email_locks.update(|locks| locks.retain(|l| !ids.contains(&l.lock_id)));
+                                            // Refresh balance
+                                            if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                                info.set(Some(fresh));
+                                            }
                                         }
-                                        Err(e) => standalone_msg.set(format!("Error: {e}")),
+                                        Err(e) => claim_msg.set(format!("Error: {e}")),
                                     }
-                                    standalone_busy.set(false);
+                                    claim_busy.set(false);
                                 });
                             }
                         >
-                            {move || if standalone_busy.get() { "Claiming\u{2026}" } else { "Claim Now" }}
+                            {move || if claim_busy.get() { "Claiming\u{2026}" } else { "Claim Now" }}
                         </button>
                         {move || {
-                            let s = standalone_msg.get();
+                            let s = claim_msg.get();
                             if s.is_empty() { view! { <span></span> }.into_any() }
                             else {
                                 let cls = if s.starts_with("Error") || s.starts_with("Enter") { "msg error" }
-                                          else if s.starts_with("Mining") || s.starts_with("Claiming") { "msg mining" }
+                                          else if s.starts_with("Search") || s.starts_with("Claiming") { "msg mining" }
                                           else { "msg success" };
                                 view! { <p class=cls style="margin-top:6px">{s}</p> }.into_any()
                             }

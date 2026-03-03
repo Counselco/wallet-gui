@@ -52,6 +52,7 @@ pub fn run() {
             commands::save_email_send,
             commands::check_email_timelocks,
             commands::claim_email_timelock,
+            commands::claim_by_code,
             commands::get_claim_emails,
             commands::set_claim_emails,
             commands::create_email_timelock_series,
