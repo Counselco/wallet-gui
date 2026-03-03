@@ -721,6 +721,25 @@ input[type="datetime-local"] { color-scheme: dark; }
     gap: 10px;
 }
 
+.pin-len-btn {
+    flex: 1;
+    padding: 8px 0;
+    border: 1px solid #2a2d3e;
+    border-radius: 8px;
+    background: #13152a;
+    color: #8888aa;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.pin-len-btn:hover { border-color: #c9a84c; color: #c9a84c; }
+.pin-len-btn.active {
+    border-color: #c9a84c;
+    background: rgba(201,168,76,0.12);
+    color: #c9a84c;
+    font-weight: 700;
+}
+
 /* ── Mobile / Android tweaks ─────────────────────────────────────────────── */
 
 @media (max-width: 400px) {
@@ -984,18 +1003,14 @@ input[type="datetime-local"] { color-scheme: dark; }
     user-select: all;
 }
 .update-badge {
-    background: #e74c3c;
-    color: #fff;
-    font-size: 10px;
-    font-weight: 700;
-    border-radius: 50%;
-    width: 16px;
-    height: 16px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-left: 4px;
+    font-size: 12px;
+    margin-left: 3px;
     vertical-align: middle;
+    animation: bell-pulse 2s ease-in-out infinite;
+}
+@keyframes bell-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 /* ── Critical notices banner ────────────────────────────────────────────────── */

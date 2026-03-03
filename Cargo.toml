@@ -23,6 +23,12 @@ web-sys              = { version = "0.3", features = [
     "FileList",
     "HtmlInputElement",
     "HtmlBodyElement",
+    "HtmlElement",
+    "Document",
+    "Element",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
     "Node",
 ] }
 serde                = { version = "1", features = ["derive"] }

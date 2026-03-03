@@ -65,12 +65,18 @@ struct WalletConfig {
     node_url: String,
     #[serde(default)]
     pin_hash: Option<String>,
+    /// PIN length: 4, 6, or 8. Default 4 if missing.
+    #[serde(default)]
+    pin_length: Option<u8>,
     /// Legacy single claim email (kept for backward compat with old config files).
     #[serde(default)]
     claim_email: Option<String>,
     /// Up to 3 claim email addresses stored locally for incoming email-lock discovery.
     #[serde(default)]
     claim_emails: Option<Vec<String>>,
+    /// Account IDs of cold storage wallets (address book).
+    #[serde(default)]
+    cold_wallets: Option<Vec<String>>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -81,8 +87,10 @@ fn read_config(app: &AppHandle) -> WalletConfig {
         .unwrap_or(WalletConfig {
             node_url: DEFAULT_RPC_URL.to_string(),
             pin_hash: None,
+            pin_length: None,
             claim_email: None,
             claim_emails: None,
+            cold_wallets: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -150,6 +158,13 @@ pub struct TimeLockInfo {
 pub struct EmailLockResult {
     pub tx_id: String,
     pub claim_code: String,
+}
+
+/// Returned by `generate_cold_wallet` — a new keypair that is NOT saved to disk.
+#[derive(Debug, Serialize, Clone)]
+pub struct ColdWalletResult {
+    pub account_id: String,
+    pub private_key_b64: String,
 }
 
 /// Input for a single entry in a Promise Series.
@@ -909,6 +924,54 @@ pub async fn set_pin(app: AppHandle, pin: String) -> Result<(), String> {
 pub async fn verify_pin(app: AppHandle, pin: String) -> Result<bool, String> {
     let cfg = read_config(&app);
     Ok(cfg.pin_hash.as_deref() == Some(hash_pin(&pin).as_str()))
+}
+
+/// Returns the configured PIN length (4, 6, or 8). Defaults to 4.
+#[tauri::command]
+pub async fn get_pin_length(app: AppHandle) -> u8 {
+    read_config(&app).pin_length.unwrap_or(4)
+}
+
+/// Set the PIN length preference (4, 6, or 8).
+#[tauri::command]
+pub async fn set_pin_length(app: AppHandle, length: u8) -> Result<(), String> {
+    if length != 4 && length != 6 && length != 8 {
+        return Err("PIN length must be 4, 6, or 8".to_string());
+    }
+    let mut cfg = read_config(&app);
+    cfg.pin_length = Some(length);
+    write_config(&app, &cfg)
+}
+
+// ── Cold storage ──────────────────────────────────────────────────────────────
+
+/// Generate a new Dilithium2 keypair for cold storage. Returns base64 of the
+/// full keypair JSON and the account ID. The private key is NOT saved to disk.
+#[tauri::command]
+pub async fn generate_cold_wallet() -> Result<ColdWalletResult, String> {
+    let kp = KeyPair::generate();
+    let account_id = kp.account_id.to_b58();
+    let json = serde_json::to_string(&kp).map_err(|e| e.to_string())?;
+    let private_key_b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
+    Ok(ColdWalletResult { account_id, private_key_b64 })
+}
+
+/// Save a cold wallet account ID to the local address book.
+#[tauri::command]
+pub async fn save_cold_wallet(app: AppHandle, account_id: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut wallets = cfg.cold_wallets.unwrap_or_default();
+    if !wallets.contains(&account_id) {
+        wallets.push(account_id);
+    }
+    cfg.cold_wallets = Some(wallets);
+    write_config(&app, &cfg)
+}
+
+/// Get the list of saved cold wallet account IDs.
+#[tauri::command]
+pub async fn get_cold_wallets(app: AppHandle) -> Vec<String> {
+    read_config(&app).cold_wallets.unwrap_or_default()
 }
 
 // ── Claim-email commands ──────────────────────────────────────────────────────

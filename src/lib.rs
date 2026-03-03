@@ -83,6 +83,13 @@ struct EmailSeriesResult {
     claim_code: String,
 }
 
+/// Returned by `generate_cold_wallet`.
+#[derive(Clone, Deserialize, Default)]
+struct ColdWalletResult {
+    account_id: String,
+    private_key_b64: String,
+}
+
 /// Returned by `claim_by_code`.
 #[derive(Clone, Deserialize, Default)]
 struct ClaimByCodeResult {
@@ -365,6 +372,38 @@ async fn copy_to_clipboard(text: String) {
     }
 }
 
+// ── Save text as file download ────────────────────────────────────────────────
+
+fn save_text_file(filename: &str, content: &str) {
+    use wasm_bindgen::JsCast;
+    if let Some(win) = web_sys::window() {
+        if let Some(doc) = win.document() {
+            let blob_parts = js_sys::Array::new();
+            blob_parts.push(&wasm_bindgen::JsValue::from_str(content));
+            if let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(
+                &blob_parts,
+                web_sys::BlobPropertyBag::new().type_("text/plain"),
+            ) {
+                if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
+                    if let Ok(a) = doc.create_element("a") {
+                        let _ = a.set_attribute("href", &url);
+                        let _ = a.set_attribute("download", filename);
+                        a.set_attribute("style", "display:none").ok();
+                        if let Some(body) = doc.body() {
+                            let _ = body.append_child(&a);
+                            if let Some(html) = a.dyn_ref::<web_sys::HtmlElement>() {
+                                html.click();
+                            }
+                            let _ = body.remove_child(&a);
+                        }
+                        let _ = web_sys::Url::revoke_object_url(&url);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Delay ─────────────────────────────────────────────────────────────────────
 
 async fn delay_ms(ms: u32) {
@@ -482,6 +521,9 @@ fn App() -> impl IntoView {
     // Update available flag (checked on load for Settings badge)
     let update_available = RwSignal::new(false);
 
+    // PIN length (loaded from config; default 4)
+    let pin_len = RwSignal::new(4u8);
+
     // Best-effort check: if claim_email is set, query node for pending email locks
     let check_email = move || {
         spawn_local(async move {
@@ -532,6 +574,10 @@ fn App() -> impl IntoView {
             // Load app version (best effort)
             if let Ok(v) = call::<String>("get_app_version", no_args()).await {
                 app_version.set(v);
+            }
+            // Load PIN length preference
+            if let Ok(len) = call::<u8>("get_pin_length", no_args()).await {
+                if len == 4 || len == 6 || len == 8 { pin_len.set(len); }
             }
 
             // Fetch notices & seen IDs in background (best effort)
@@ -790,6 +836,7 @@ fn App() -> impl IntoView {
                     pin_msg=pin_msg
                     pin_shake=pin_shake
                     countdown=countdown
+                    pin_len=pin_len.get()
                     on_submit=handle_pin
                 />
             }.into_any(),
@@ -854,7 +901,7 @@ fn App() -> impl IntoView {
                                     .count();
                                 let has_update = update_available.get();
                                 if has_update {
-                                    view! { <span class="update-badge" title="Update available">"!"</span> }.into_any()
+                                    view! { <span class="update-badge" title="Update available">"\u{1f514}"</span> }.into_any()
                                 } else if unread > 0 {
                                     view! { <span class="notice-badge">{unread}</span> }.into_any()
                                 } else {
@@ -922,6 +969,8 @@ fn App() -> impl IntoView {
                                     app_version=app_version
                                     notices=notices
                                     seen_ids=seen_ids
+                                    pin_len=pin_len
+                                    update_available=update_available
                                     on_mark_seen=move |id: String| {
                                         let mut ids = seen_ids.get_untracked();
                                         if !ids.contains(&id) {
@@ -1049,7 +1098,9 @@ fn SplashScreen() -> impl IntoView {
 fn PinInput(
     digits: RwSignal<String>,
     shake:  RwSignal<bool>,
+    #[prop(default = 4)] pin_len: u8,
 ) -> impl IntoView {
+    let max_len = pin_len as usize;
     let input_ref = NodeRef::<leptos::html::Input>::new();
 
     // Focus whenever digits is cleared (initial mount, after each submit,
@@ -1079,7 +1130,7 @@ fn PinInput(
                 if ch.is_ascii_digit() {
                     ev.prevent_default();
                     let mut d = digits.get_untracked();
-                    if d.len() < 4 { d.push(ch); digits.set(d); }
+                    if d.len() < max_len { d.push(ch); digits.set(d); }
                 }
             }
         } else if key == "Backspace" {
@@ -1090,12 +1141,14 @@ fn PinInput(
         }
     };
 
+    let dots: Vec<usize> = (0..max_len).collect();
+
     view! {
         <div class="pin-input-wrap" on:click=on_wrap_click>
             // Dot display
             <div class=move || if shake.get() { "pin-blocks-wrap pin-shake" } else { "pin-blocks-wrap" }>
                 <div class="pin-blocks">
-                    {(0..4usize).map(|i| view! {
+                    {dots.into_iter().map(|i| view! {
                         <div class=move || {
                             let len = digits.get().len();
                             if len > i { "pin-block filled" }
@@ -1149,7 +1202,7 @@ fn PinInput(
                                     on:click=move |ev| {
                                         ev.stop_propagation();
                                         let mut d = digits.get_untracked();
-                                        if d.len() < 4 { d.push(ch); digits.set(d); }
+                                        if d.len() < max_len { d.push(ch); digits.set(d); }
                                     }>
                                     {label}
                                 </button>
@@ -1171,15 +1224,17 @@ fn PinScreen(
     pin_msg: RwSignal<String>,
     pin_shake: RwSignal<bool>,
     countdown: RwSignal<u32>,
+    #[prop(default = 4)] pin_len: u8,
     on_submit: impl Fn(String) + Clone + Send + 'static,
 ) -> impl IntoView {
+    let target_len = pin_len as usize;
     let on_submit_auto = on_submit.clone();
     let on_submit_btn  = on_submit.clone();
 
-    // Auto-submit when 4th digit is entered.
+    // Auto-submit when all digits are entered.
     Effect::new(move |_| {
         let d = pin_digits.get();
-        if d.len() == 4 {
+        if d.len() == target_len {
             let captured = d.clone();
             pin_digits.set(String::new()); // clearing triggers PinInput auto-focus
             on_submit_auto(captured);
@@ -1204,23 +1259,23 @@ fn PinScreen(
 
                 <p class="pin-subtitle">
                     {move || match phase.get() {
-                        AppPhase::PinSetup   => "Choose a 4-digit PIN to secure your wallet",
-                        AppPhase::PinConfirm => "Enter the same PIN again to confirm",
-                        AppPhase::PinUnlock  => "Enter your PIN to access your wallet",
-                        _ => "",
+                        AppPhase::PinSetup   => format!("Choose a {}-digit PIN to secure your wallet", pin_len),
+                        AppPhase::PinConfirm => "Enter the same PIN again to confirm".to_string(),
+                        AppPhase::PinUnlock  => "Enter your PIN to access your wallet".to_string(),
+                        _ => String::new(),
                     }}
                 </p>
 
                 // Shared PIN digit entry: dots + hidden keyboard input + on-screen keypad
-                <PinInput digits=pin_digits shake=pin_shake />
+                <PinInput digits=pin_digits shake=pin_shake pin_len=pin_len />
 
-                // Confirm button — appears when all 4 digits are entered
-                {move || if pin_digits.get().len() == 4 {
+                // Confirm button — appears when all digits are entered
+                {move || if pin_digits.get().len() == target_len {
                     let on_submit_btn2 = on_submit_btn.clone();
                     view! {
                         <button class="pin-confirm-btn" on:click=move |_| {
                             let d = pin_digits.get_untracked();
-                            if d.len() == 4 {
+                            if d.len() == target_len {
                                 pin_digits.set(String::new());
                                 on_submit_btn2(d);
                             }
@@ -3579,6 +3634,8 @@ fn SettingsPanel(
     notices: RwSignal<Vec<Notice>>,
     seen_ids: RwSignal<Vec<String>>,
     on_mark_seen: impl Fn(String) + Clone + Send + 'static,
+    pin_len: RwSignal<u8>,
+    update_available: RwSignal<bool>,
 ) -> impl IntoView {
     // These signals are available for future use in the Settings panel
     let _ = (app_phase, pin_digits, pin_msg, pin_shake);
@@ -3600,6 +3657,21 @@ fn SettingsPanel(
     let import_key        = RwSignal::new(String::new());
     let import_msg        = RwSignal::new(String::new());
     let import_busy       = RwSignal::new(false);
+
+    // Cold storage state
+    let show_cold         = RwSignal::new(false);
+    let cold_result       = RwSignal::new(Option::<(String, String)>::None); // (account_id, private_key_b64)
+    let cold_generating   = RwSignal::new(false);
+    let cold_saved        = RwSignal::new(false);
+    let cold_wallets      = RwSignal::new(Vec::<String>::new());
+
+    // Load cold wallets list on mount
+    Effect::new(move |_| {
+        spawn_local(async move {
+            let wallets = call::<Vec<String>>("get_cold_wallets", no_args()).await.unwrap_or_default();
+            cold_wallets.set(wallets);
+        });
+    });
 
     // Modal visibility
     let show_about   = RwSignal::new(false);
@@ -3675,7 +3747,7 @@ fn SettingsPanel(
     // Change PIN: auto-submit Effect (digit capture is handled by the shared PinInput component).
     Effect::new(move |_| {
         let d = cp_digits.get();
-        if d.len() == 4 {
+        if d.len() == pin_len.get() as usize {
             let captured = d.clone();
             cp_digits.set(String::new());
             let phase = cp_phase.get_untracked();
@@ -3780,6 +3852,20 @@ fn SettingsPanel(
             // Notices
             <div class="settings-section">
                 <p class="label">"Notices"</p>
+                {move || if update_available.get() {
+                    view! {
+                        <div class="update-card" style="background:rgba(201,168,76,0.1);border:1px solid rgba(201,168,76,0.3);border-radius:8px;padding:12px;margin-bottom:8px">
+                            <p style="font-weight:700;color:#c9a84c;font-size:13px">
+                                "\u{1f514} A new version of ChronX Wallet is available!"
+                            </p>
+                            <p class="muted" style="font-size:12px;margin-top:4px">
+                                "Go to Check for Updates below to download the latest version."
+                            </p>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }}
                 {move || {
                     let all = notices.get();
                     let seen = seen_ids.get();
@@ -3849,6 +3935,33 @@ fn SettingsPanel(
                     cp_phase.set(0); cp_digits.set(String::new());
                     cp_msg.set(String::new()); show_change_pin.set(true);
                 }>"🔐 Change PIN"</button>
+
+                <p class="muted" style="font-size:12px;margin-top:12px;margin-bottom:6px">"PIN Length"</p>
+                <div style="display:flex;gap:8px">
+                    {[4u8, 6, 8].into_iter().map(|n| {
+                        view! {
+                            <button
+                                class=move || if pin_len.get() == n { "pin-len-btn active" } else { "pin-len-btn" }
+                                on:click=move |_| {
+                                    if pin_len.get() != n {
+                                        // Changing PIN length requires re-setting the PIN
+                                        pin_len.set(n);
+                                        spawn_local(async move {
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "length": n })
+                                            ).unwrap_or(no_args());
+                                            let _ = call::<()>("set_pin_length", args).await;
+                                        });
+                                        // Open Change PIN modal so user sets a new PIN at the new length
+                                        cp_phase.set(0); cp_digits.set(String::new());
+                                        cp_msg.set(format!("PIN length changed to {} digits. Enter current PIN, then set a new {}-digit PIN.", n, n));
+                                        show_change_pin.set(true);
+                                    }
+                                }
+                            >{format!("{} digits", n)}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
             </div>
 
             // Backup Your Wallet
@@ -3875,6 +3988,41 @@ fn SettingsPanel(
                     import_msg.set(String::new());
                     show_import.set(true);
                 }>"📥 Import Private Key"</button>
+            </div>
+
+            // Cold Storage Wallet Generator
+            <div class="settings-section">
+                <p class="label">"Cold Storage"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                    "Generate an offline wallet for long-term cold storage. "
+                    "The private key is shown once \u{2014} save it somewhere safe. You can send KX to its address at any time."
+                </p>
+                <button on:click=move |_| {
+                    cold_result.set(None);
+                    cold_saved.set(false);
+                    show_cold.set(true);
+                }>"🧊 Generate Cold Wallet"</button>
+                {move || {
+                    let wallets = cold_wallets.get();
+                    if wallets.is_empty() {
+                        view! { <span></span> }.into_any()
+                    } else {
+                        view! {
+                            <div style="margin-top:8px">
+                                <p class="muted" style="font-size:11px;margin-bottom:4px">
+                                    {format!("Generated cold wallets ({})", wallets.len())}
+                                </p>
+                                {wallets.into_iter().map(|w| {
+                                    view! {
+                                        <p class="muted" style="font-size:11px;font-family:monospace;word-break:break-all;padding:2px 0">
+                                            {w}
+                                        </p>
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                        }.into_any()
+                    }
+                }}
             </div>
 
             // My Emails for KX Claims (up to 3)
@@ -4073,7 +4221,7 @@ fn SettingsPanel(
                         <p class="pin-subtitle">{cp_title}</p>
 
                         // Shared PIN digit entry — same component as login screen
-                        <PinInput digits=cp_digits shake=cp_shake />
+                        <PinInput digits=cp_digits shake=cp_shake pin_len=pin_len.get() />
 
                         {move || {
                             let msg = cp_msg.get();
@@ -4157,10 +4305,20 @@ fn SettingsPanel(
                                                     {key.clone()}
                                                 </p>
                                             </div>
-                                            <button class="primary" style="margin-top:8px" on:click=move |_| {
-                                                let k = key_copy.clone();
-                                                spawn_local(async move { copy_to_clipboard(k).await; });
-                                            }>"📋 Copy to Clipboard"</button>
+                                            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+                                                <button class="primary" on:click=move |_| {
+                                                    let k = key_copy.clone();
+                                                    spawn_local(async move { copy_to_clipboard(k).await; });
+                                                }>"📋 Copy to Clipboard"</button>
+                                                {
+                                                    let key_file = key.clone();
+                                                    view! {
+                                                        <button on:click=move |_| {
+                                                            save_text_file("chronx-backup-key.txt", &key_file);
+                                                        }>"💾 Save to File"</button>
+                                                    }
+                                                }
+                                            </div>
                                             <p class="muted" style="font-size:11px;margin-top:10px">
                                                 "Store this somewhere safe. Consider writing it on paper and keeping it in a secure location."
                                             </p>
@@ -4241,6 +4399,97 @@ fn SettingsPanel(
                                 <button disabled=move || import_busy.get()
                                     on:click=move |_| show_import.set(false)>"Cancel"</button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── Cold Storage Wallet modal ────────────────────────────────────────
+
+        {move || if show_cold.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| show_cold.set(false)>
+                    <div class="modal-card" style="max-width:480px" on:click=move |ev| ev.stop_propagation()>
+                        <p class="modal-title">"🧊 Cold Storage Wallet"</p>
+                        <div class="modal-body" style="text-align:left">
+                            {move || {
+                                if let Some((ref acct, ref key)) = cold_result.get() {
+                                    let acct_c = acct.clone();
+                                    let key_c = key.clone();
+                                    let acct_copy = acct.clone();
+                                    let key_copy = key.clone();
+                                    view! {
+                                        <div class="export-warning" style="margin-bottom:10px">
+                                            <p style="font-weight:700;color:#f87171;font-size:13px">
+                                                "⚠ Save this private key NOW. It will not be shown again."
+                                            </p>
+                                        </div>
+                                        <p class="label" style="margin-bottom:4px">"Account ID (send KX here):"</p>
+                                        <div style="display:flex;gap:6px;align-items:start;margin-bottom:12px">
+                                            <p style="font-family:monospace;font-size:12px;word-break:break-all;background:#0a0c1a;padding:8px;border-radius:6px;flex:1">{acct_c}</p>
+                                            <button style="font-size:11px;padding:4px 8px;white-space:nowrap" on:click=move |_| {
+                                                let t = acct_copy.clone();
+                                                spawn_local(async move { copy_to_clipboard(t).await; });
+                                            }>"Copy"</button>
+                                        </div>
+                                        <p class="label" style="margin-bottom:4px">"Private Key (keep secret!):"</p>
+                                        <div style="display:flex;gap:6px;align-items:start;margin-bottom:12px">
+                                            <p style="font-family:monospace;font-size:10px;word-break:break-all;background:#0a0c1a;padding:8px;border-radius:6px;flex:1;max-height:120px;overflow-y:auto">{key_c}</p>
+                                            <button style="font-size:11px;padding:4px 8px;white-space:nowrap" on:click=move |_| {
+                                                let t = key_copy.clone();
+                                                spawn_local(async move { copy_to_clipboard(t).await; });
+                                            }>"Copy"</button>
+                                        </div>
+                                        {move || if !cold_saved.get() {
+                                            view! {
+                                                <button class="primary" style="width:100%" on:click=move |_| {
+                                                    if let Some((ref acct, _)) = cold_result.get_untracked() {
+                                                        let acct = acct.clone();
+                                                        spawn_local(async move {
+                                                            let args = serde_wasm_bindgen::to_value(
+                                                                &serde_json::json!({ "accountId": acct })
+                                                            ).unwrap_or(no_args());
+                                                            if call::<()>("save_cold_wallet", args).await.is_ok() {
+                                                                cold_saved.set(true);
+                                                                let wallets = call::<Vec<String>>("get_cold_wallets", no_args()).await.unwrap_or_default();
+                                                                cold_wallets.set(wallets);
+                                                            }
+                                                        });
+                                                    }
+                                                }>"I\u{2019}ve saved the key \u{2014} Remember this wallet"</button>
+                                            }.into_any()
+                                        } else {
+                                            view! {
+                                                <p class="msg success">"Wallet saved to your cold storage list."</p>
+                                            }.into_any()
+                                        }}
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <p class="muted" style="font-size:13px;margin-bottom:12px">
+                                            "This generates a brand new wallet keypair entirely offline. "
+                                            "You can send KX to its address for long-term storage. "
+                                            "To spend from it later, import the private key."
+                                        </p>
+                                        <button class="primary" style="width:100%"
+                                            disabled=move || cold_generating.get()
+                                            on:click=move |_| {
+                                                cold_generating.set(true);
+                                                spawn_local(async move {
+                                                    match call::<ColdWalletResult>("generate_cold_wallet", no_args()).await {
+                                                        Ok(r) => cold_result.set(Some((r.account_id, r.private_key_b64))),
+                                                        Err(e) => { let _ = web_sys::window().map(|w| w.alert_with_message(&format!("Error: {e}"))); },
+                                                    };
+                                                    cold_generating.set(false);
+                                                });
+                                            }>
+                                            {move || if cold_generating.get() { "Generating\u{2026}" } else { "Generate Cold Wallet" }}
+                                        </button>
+                                    }.into_any()
+                                }
+                            }}
+                            <button style="margin-top:8px" on:click=move |_| show_cold.set(false)>"Close"</button>
                         </div>
                     </div>
                 </div>

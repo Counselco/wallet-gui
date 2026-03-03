@@ -59,6 +59,11 @@ pub fn run() {
             commands::claim_email_series,
             commands::cancel_timelock_series,
             commands::get_pending_deep_link,
+            commands::get_pin_length,
+            commands::set_pin_length,
+            commands::generate_cold_wallet,
+            commands::save_cold_wallet,
+            commands::get_cold_wallets,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
