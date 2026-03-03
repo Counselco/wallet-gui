@@ -1235,7 +1235,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v1.4.17"
+                    "ChronX Wallet v1.4.18"
                 </p>
             </div>
         </div>
@@ -1391,6 +1391,11 @@ fn AccountPanel(
     const INC_PAGE_SIZE: usize = 10;
     let qr_svg       = RwSignal::new(String::new());
     let inc_claim_msg = RwSignal::new(String::new());
+
+    // Claim code on home screen
+    let home_claim_code = RwSignal::new(String::new());
+    let home_claim_msg  = RwSignal::new(String::new());
+    let home_claim_busy = RwSignal::new(false);
 
     Effect::new(move |_| {
         spawn_local(async move {
@@ -1640,6 +1645,73 @@ fn AccountPanel(
                                 } else { view! { <span></span> }.into_any() }}
                             </div>
                         }.into_any()
+                    }
+                }}
+            </div>
+
+            // ── Got a claim code? ────────────────────────────────────────────
+            <div class="card" style="margin-top:12px;border:1px solid rgba(212,168,75,0.3)">
+                <p style="font-size:15px;font-weight:700;color:#d4a84b;margin:0 0 6px">"Got a claim code?"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                    "Paste the code you received to claim your KX."
+                </p>
+                <input
+                    type="text"
+                    placeholder="KX-XXXX-XXXX-XXXX-XXXX"
+                    class="input-field"
+                    style="font-family:monospace;font-size:13px;letter-spacing:1px;text-align:center;margin-bottom:8px"
+                    prop:value=move || home_claim_code.get()
+                    on:input=move |ev| home_claim_code.set(event_target_value(&ev))
+                />
+                <button
+                    class="btn-primary"
+                    style="width:100%;background:#d4a84b;color:#0a0a0a;font-weight:700;padding:10px;border:none;border-radius:6px;cursor:pointer;font-size:14px"
+                    disabled=move || home_claim_busy.get()
+                    on:click=move |_| {
+                        let code = home_claim_code.get_untracked().trim().to_string();
+                        if code.is_empty() {
+                            home_claim_msg.set("Enter your claim code".into());
+                            return;
+                        }
+                        home_claim_busy.set(true);
+                        spawn_local(async move {
+                            home_claim_msg.set("Searching for matching locks\u{2026}".into());
+                            let args = serde_wasm_bindgen::to_value(
+                                &serde_json::json!({ "claimCode": code })
+                            ).unwrap_or(no_args());
+                            match call::<ClaimByCodeResult>("claim_by_code", args).await {
+                                Ok(result) => {
+                                    let kx = format_kx(&result.total_chronos);
+                                    if result.claimed_count == 1 {
+                                        home_claim_msg.set(format!("Claimed {kx} KX!"));
+                                    } else {
+                                        home_claim_msg.set(format!("Claimed {} promises ({kx} KX total)!", result.claimed_count));
+                                    }
+                                    home_claim_code.set(String::new());
+                                    // Refresh balance + incoming promises
+                                    if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                        info.set(Some(fresh));
+                                    }
+                                    if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
+                                        incoming.set(locks);
+                                    }
+                                }
+                                Err(e) => home_claim_msg.set(format!("Error: {e}")),
+                            }
+                            home_claim_busy.set(false);
+                        });
+                    }
+                >
+                    {move || if home_claim_busy.get() { "Claiming\u{2026}" } else { "\u{2728} Claim" }}
+                </button>
+                {move || {
+                    let s = home_claim_msg.get();
+                    if s.is_empty() { view! { <span></span> }.into_any() }
+                    else {
+                        let cls = if s.starts_with("Error") || s.starts_with("Enter") { "msg error" }
+                                  else if s.starts_with("Search") || s.starts_with("Claiming") { "msg mining" }
+                                  else { "msg success" };
+                        view! { <p class=cls style="margin-top:6px;text-align:center">{s}</p> }.into_any()
                     }
                 }}
             </div>
