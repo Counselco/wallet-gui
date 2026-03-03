@@ -1530,16 +1530,16 @@ fn AccountPanel(
                                 view! {
                                     <div class="pagination-bar">
                                         <button class="pill"
-                                            disabled=move || inc_page.get() == 0
-                                            on:click=move |_| inc_page.update(|p| if *p > 0 { *p -= 1; })>
+                                            disabled={move || inc_page.get() == 0}
+                                            on:click={move |_| inc_page.update(|p| if *p > 0 { *p -= 1; })}>
                                             "\u{2190} Prev"
                                         </button>
                                         <span class="page-indicator">
                                             {format!("Page {} of {}", inc_pg + 1, inc_total_pages)}
                                         </span>
                                         <button class="pill"
-                                            disabled=move || inc_page.get() >= inc_total_pages - 1
-                                            on:click=move |_| inc_page.update(|p| *p += 1)>
+                                            disabled={move || inc_page.get() >= inc_total_pages - 1}
+                                            on:click={move |_| { inc_page.update(|p| { *p += 1; }); }}>
                                             "Next \u{2192}"
                                         </button>
                                     </div>
@@ -2488,16 +2488,16 @@ fn PromisesPanel(
                             view! {
                                 <div class="pagination-bar">
                                     <button class="pill"
-                                        disabled=move || tl_page.get() == 0
-                                        on:click=move |_| tl_page.update(|p| if *p > 0 { *p -= 1; })>
+                                        disabled={move || tl_page.get() == 0}
+                                        on:click={move |_| tl_page.update(|p| if *p > 0 { *p -= 1; })}>
                                         "\u{2190} Prev"
                                     </button>
                                     <span class="page-indicator">
                                         {format!("Page {} of {}", tl_pg + 1, tl_total_pages)}
                                     </span>
                                     <button class="pill"
-                                        disabled=move || tl_page.get() >= tl_total_pages - 1
-                                        on:click=move |_| tl_page.update(|p| *p += 1)>
+                                        disabled={move || tl_page.get() >= tl_total_pages - 1}
+                                        on:click={move |_| { tl_page.update(|p| { *p += 1; }); }}>
                                         "Next \u{2192}"
                                     </button>
                                 </div>
@@ -2675,6 +2675,7 @@ fn HistoryPanel() -> impl IntoView {
                                 };
 
                                 let cancel_lock_id = entry.tx_id.clone();
+                                let inline_cancel_id = cancel_lock_id.clone();
                                 let entry_claim_code = entry.claim_code.clone();
 
                                 view! {
@@ -2697,7 +2698,7 @@ fn HistoryPanel() -> impl IntoView {
                                             <span class="history-addr">{addr_display}</span>
                                             <span class="history-date">{date_display}</span>
                                         </div>
-                                        // Email send status badge
+                                        // Email send status badge + inline Cancel for pending email sends
                                         {if is_email_send {
                                             let badge_class = match entry_status.as_str() {
                                                 "Pending Claim" => "email-badge pending-claim",
@@ -2706,7 +2707,22 @@ fn HistoryPanel() -> impl IntoView {
                                             };
                                             let badge_text = entry_status.clone();
                                             view! {
-                                                <div><span class=badge_class>{badge_text}</span></div>
+                                                <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                                                    <span class=badge_class>{badge_text}</span>
+                                                    {if can_cancel {
+                                                        view! {
+                                                            <button class="cancel-btn" style="margin-top:0;font-size:11px;padding:2px 10px"
+                                                                on:click={move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    cancel_msg.set(String::new());
+                                                                    cancel_is_email.set(true);
+                                                                    cancel_target.set(Some(inline_cancel_id.clone()));
+                                                                }}>
+                                                                "Cancel"
+                                                            </button>
+                                                        }.into_any()
+                                                    } else { view! { <span></span> }.into_any() }}
+                                                </div>
                                             }.into_any()
                                         } else { view! { <span></span> }.into_any() }}
                                         {move || {
@@ -2763,16 +2779,16 @@ fn HistoryPanel() -> impl IntoView {
                             view! {
                                 <div class="pagination-bar">
                                     <button class="pill"
-                                        disabled=move || h_page.get() == 0
-                                        on:click=move |_| h_page.update(|p| if *p > 0 { *p -= 1; })>
+                                        disabled={move || h_page.get() == 0}
+                                        on:click={move |_| h_page.update(|p| if *p > 0 { *p -= 1; })}>
                                         "\u{2190} Prev"
                                     </button>
                                     <span class="page-indicator">
                                         {format!("Page {} of {}", page + 1, total_pages)}
                                     </span>
                                     <button class="pill"
-                                        disabled=move || h_page.get() >= total_pages - 1
-                                        on:click=move |_| h_page.update(|p| *p += 1)>
+                                        disabled={move || h_page.get() >= total_pages - 1}
+                                        on:click={move |_| { h_page.update(|p| { *p += 1; }); }}>
                                         "Next \u{2192}"
                                     </button>
                                 </div>

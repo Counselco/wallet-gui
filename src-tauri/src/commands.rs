@@ -794,6 +794,25 @@ pub struct TxHistoryEntry {
     pub claim_code: Option<String>,
 }
 
+/// Parse a KX decimal string (e.g. "1.123456") into chronos (grains) without
+/// floating-point, preserving all 6 digits of sub-KX precision.
+fn kx_str_to_chronos(s: &str) -> Option<u128> {
+    let parts: Vec<&str> = s.split('.').collect();
+    let integer: u128 = parts[0].parse().ok()?;
+    let fractional: u128 = if parts.len() > 1 {
+        let frac = parts[1];
+        let padded = if frac.len() >= 6 {
+            frac[..6].to_string()
+        } else {
+            format!("{:0<6}", frac)
+        };
+        padded.parse().ok()?
+    } else {
+        0
+    };
+    Some(integer * 1_000_000 + fractional)
+}
+
 /// Fetch Promise (timelock) history for this wallet.
 /// Regular Transfer entries are omitted — the node does not return transfer amounts,
 /// so they provide no useful information. Self-sends were also excluded by the previous
@@ -831,8 +850,8 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             let lock_id = v["lock_id"].as_str().unwrap_or("").to_string();
             let amount_chronos = v["amount_kx"]
                 .as_str()
-                .and_then(|s| s.parse::<f64>().ok())
-                .map(|kx| format!("{}", (kx * CHRONOS_PER_KX as f64) as u128));
+                .and_then(kx_str_to_chronos)
+                .map(|c| format!("{}", c));
             let created_at = v["created_at"].as_i64().unwrap_or(0);
             let cancellation_window_secs = v["cancellation_window_secs"]
                 .as_u64().map(|w| w as u32);
