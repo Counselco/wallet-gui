@@ -3,7 +3,7 @@
 
 [package]
 name = "chronx-wallet-gui"
-version = "1.4.1"
+version = "1.4.7"
 edition = "2021"
 
 [lib]
@@ -29,5 +29,6 @@ chrono      = { version = "0.4" }
 anyhow      = { version = "1" }
 sha2        = { version = "0.10" }
 base64      = { version = "0.22" }
+blake3      = { version = "1" }
 chronx-core   = { path = "../../crates/chronx-core" }
 chronx-crypto = { path = "../../crates/chronx-crypto" }

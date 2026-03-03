@@ -64,6 +64,8 @@ struct WalletConfig {
     node_url: String,
     #[serde(default)]
     pin_hash: Option<String>,
+    #[serde(default)]
+    claim_email: Option<String>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -71,7 +73,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(WalletConfig { node_url: DEFAULT_RPC_URL.to_string(), pin_hash: None })
+        .unwrap_or(WalletConfig { node_url: DEFAULT_RPC_URL.to_string(), pin_hash: None, claim_email: None })
 }
 
 fn rpc_url(app: &AppHandle) -> String {
@@ -678,6 +680,24 @@ pub async fn verify_pin(app: AppHandle, pin: String) -> Result<bool, String> {
     Ok(cfg.pin_hash.as_deref() == Some(hash_pin(&pin).as_str()))
 }
 
+// ── Claim-email commands ──────────────────────────────────────────────────────
+
+/// Return the locally-stored claim email (None if not set).
+/// This email is ONLY stored on the user's device, never sent to any server.
+#[tauri::command]
+pub async fn get_claim_email(app: AppHandle) -> Option<String> {
+    read_config(&app).claim_email
+}
+
+/// Store (or clear) the claim email in local wallet config.
+/// Pass an empty string to clear.
+#[tauri::command]
+pub async fn set_claim_email(app: AppHandle, email: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    cfg.claim_email = if email.trim().is_empty() { None } else { Some(email.trim().to_string()) };
+    write_config(&app, &cfg)
+}
+
 // ── Transaction history ───────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -713,10 +733,23 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     let locks: Vec<serde_json::Value> =
         serde_json::from_value(tl_result).map_err(|e| format!("Parsing history: {e}"))?;
 
+    // Load email send history for enrichment (lock_id → email)
+    let email_map: std::collections::HashMap<String, String> = {
+        let path = email_history_path(&app);
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<EmailSendEntry>>(&s).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| (e.lock_id, e.email))
+            .collect()
+    };
+
     let mut entries: Vec<TxHistoryEntry> = locks
         .into_iter()
         .filter(|v| v["sender"].as_str() == Some(b58.as_str()))
         .map(|v| {
+            let lock_id = v["lock_id"].as_str().unwrap_or("").to_string();
             let amount_chronos = v["amount_kx"]
                 .as_str()
                 .and_then(|s| s.parse::<f64>().ok())
@@ -724,13 +757,31 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             let created_at = v["created_at"].as_i64().unwrap_or(0);
             let cancellation_window_secs = v["cancellation_window_secs"]
                 .as_u64().map(|w| w as u32);
+            // Enrich with email if this was an email send
+            let (tx_type, counterparty) = if let Some(email) = email_map.get(&lock_id) {
+                ("Email Send".to_string(), Some(email.clone()))
+            } else {
+                ("Promise Sent".to_string(), v["memo"].as_str().map(|s| s.to_string()))
+            };
+            let raw_status = v["status"].as_str().unwrap_or("Pending").to_string();
+            // Map on-chain status to user-facing labels for email sends
+            let status = if tx_type == "Email Send" {
+                match raw_status.as_str() {
+                    "Pending" => "Pending Claim".to_string(),
+                    "Claimed" => "Claimed".to_string(),
+                    "Expired" | "Reverted" => "Expired \u{2014} Reverted".to_string(),
+                    other => other.to_string(),
+                }
+            } else {
+                raw_status
+            };
             TxHistoryEntry {
-                tx_id:          v["lock_id"].as_str().unwrap_or("").to_string(),
-                tx_type:        "Promise Sent".to_string(),
+                tx_id: lock_id,
+                tx_type,
                 amount_chronos,
-                counterparty:   v["memo"].as_str().map(|s| s.to_string()),
-                timestamp:      created_at,
-                status:         v["status"].as_str().unwrap_or("Pending").to_string(),
+                counterparty,
+                timestamp: created_at,
+                status,
                 unlock_date:    Some(v["unlock_at"].as_i64().unwrap_or(0)),
                 cancellation_window_secs,
                 created_at:     Some(created_at),
@@ -821,6 +872,51 @@ pub struct Notice {
     pub body: String,
     pub severity: String, // "info" | "warning" | "critical"
     pub date: String,
+}
+
+// ── Email send history ───────────────────────────────────────────────────────
+
+/// Lightweight record saved locally when the user sends KX to an email address.
+/// Stores only lock_id + email so get_transaction_history can enrich the on-chain entry.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct EmailSendEntry {
+    lock_id: String,
+    email:   String,
+}
+
+fn email_history_path(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("email-history.json")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        expand_tilde("~/.chronx/email-history.json")
+    }
+}
+
+/// Save an email send record locally (called after a successful create_email_timelock).
+/// Idempotent: duplicate lock_ids are silently skipped.
+#[tauri::command]
+pub async fn save_email_send(app: AppHandle, lock_id: String, email: String) -> Result<(), String> {
+    let path = email_history_path(&app);
+    let mut entries: Vec<EmailSendEntry> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    if !entries.iter().any(|e| e.lock_id == lock_id) {
+        entries.push(EmailSendEntry { lock_id, email });
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
+        std::fs::write(&path, json).map_err(|e| format!("Writing email history: {e}"))?;
+    }
+    Ok(())
 }
 
 fn transfer_history_path(app: &AppHandle) -> PathBuf {
@@ -943,6 +1039,26 @@ pub async fn notify_email_recipient(
 }
 
 #[tauri::command]
+pub async fn register_for_rewards(app: AppHandle, email: String) -> Result<(), String> {
+    let wallet_address = load_keypair(&app)
+        .map(|kp| kp.account_id.to_string())
+        .unwrap_or_default();
+    let wallet_version = app.package_info().version.to_string();
+    let client = reqwest::Client::new();
+    let _ = client
+        .post("https://api.chronx.io/register")
+        .json(&serde_json::json!({
+            "email": email,
+            "wallet_address": wallet_address,
+            "wallet_version": wallet_version,
+        }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
@@ -958,6 +1074,47 @@ pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, S
     let locks = raw
         .into_iter()
         .take(20)
+        .map(|v| TimeLockInfo {
+            lock_id: v["lock_id"].as_str().unwrap_or("").to_string(),
+            sender: v["sender"].as_str().unwrap_or("").to_string(),
+            recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
+            amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
+            unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
+            created_at: v["created_at"].as_i64().unwrap_or(0),
+            status: v["status"].as_str().unwrap_or("Pending").to_string(),
+            memo: v["memo"].as_str().map(|s| s.to_string()),
+        })
+        .collect();
+
+    Ok(locks)
+}
+
+/// Check the node for any email-addressed timelocks destined for the wallet's registered
+/// claim email. Returns all Pending locks matching BLAKE3(lowercase(claim_email)).
+/// Returns empty Vec if no claim_email is set in local config.
+#[tauri::command]
+pub async fn check_email_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> {
+    let cfg = read_config(&app);
+    let email = match cfg.claim_email {
+        Some(e) if !e.trim().is_empty() => e,
+        _ => return Ok(Vec::new()),
+    };
+
+    // BLAKE3(lowercase(email)) → 64-char hex
+    let email_lower = email.to_lowercase();
+    let hash = blake3::hash(email_lower.as_bytes());
+    let hash_hex = hex::encode(hash.as_bytes());
+
+    let url = rpc_url(&app);
+    let result = rpc_call(&url, "chronx_getEmailLocks", serde_json::json!([hash_hex]))
+        .await
+        .map_err(|e| format!("RPC failed: {e}"))?;
+
+    let raw: Vec<serde_json::Value> =
+        serde_json::from_value(result).map_err(|e| format!("Parsing email locks: {e}"))?;
+
+    let locks = raw
+        .into_iter()
         .map(|v| TimeLockInfo {
             lock_id: v["lock_id"].as_str().unwrap_or("").to_string(),
             sender: v["sender"].as_str().unwrap_or("").to_string(),

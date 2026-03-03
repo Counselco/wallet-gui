@@ -93,8 +93,14 @@ struct Notice {
     id: String,
     title: String,
     body: String,
-    severity: String, // "info" | "warning" | "critical"
+    severity: String, // "info" | "warning" | "critical" | "reward"
     date: String,
+    #[serde(default)]
+    expires: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    url_label: Option<String>,
 }
 
 #[derive(Clone, serde::Deserialize)]
@@ -436,6 +442,21 @@ fn App() -> impl IntoView {
     let seen_ids       = RwSignal::new(Vec::<String>::new());
     let crit_dismissed = RwSignal::new(Vec::<String>::new());
 
+    // Pending email send (chronos in-flight, not yet on-chain balance)
+    let pending_email_chronos = RwSignal::new(0u64);
+
+    // Incoming email locks detected for registered claim_email
+    let email_locks = RwSignal::new(Vec::<TimeLockInfo>::new());
+
+    // Best-effort check: if claim_email is set, query node for pending email locks
+    let check_email = move || {
+        spawn_local(async move {
+            if let Ok(locks) = call::<Vec<TimeLockInfo>>("check_email_timelocks", no_args()).await {
+                email_locks.set(locks);
+            }
+        });
+    };
+
     // Bug report modal
     let bug_modal_open = RwSignal::new(false);
     let bug_body       = RwSignal::new(String::new());
@@ -577,6 +598,7 @@ fn App() -> impl IntoView {
                                 pin_digits.set(String::new());
                                 app_phase.set(AppPhase::Wallet);
                                 load_wallet(online, loading, info, err_msg).await;
+                                check_email();
                             }
                             Err(e) => {
                                 pin_msg.set(format!("Error saving PIN: {e}"));
@@ -614,6 +636,7 @@ fn App() -> impl IntoView {
                             pin_msg.set(String::new());
                             app_phase.set(AppPhase::Wallet);
                             load_wallet(online, loading, info, err_msg).await;
+                            check_email();
                         }
                         Ok(false) | Err(_) => {
                             let attempts = pin_attempts.get_untracked() + 1;
@@ -774,7 +797,9 @@ fn App() -> impl IntoView {
                         <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
                             on:click=move |_| active_tab.set(3)>"📜 History"</button>
                         <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(4)>
+                            on:click=move |_| active_tab.set(4)>"🎁 Rewards"</button>
+                        <button class=move || if active_tab.get()==5 {"tab active"} else {"tab"}
+                            on:click=move |_| active_tab.set(5)>
                             "⚙ Settings"
                             {move || {
                                 let unread = notices.get().iter()
@@ -789,16 +814,38 @@ fn App() -> impl IntoView {
                         </button>
                     </nav>
 
+                    // Incoming email locks banner
+                    {move || {
+                        let locks = email_locks.get();
+                        if locks.is_empty() {
+                            view! { <span></span> }.into_any()
+                        } else {
+                            let total: f64 = locks.iter()
+                                .map(|l| l.amount_kx.parse::<f64>().unwrap_or(0.0))
+                                .sum();
+                            let label = format!(
+                                "\u{1f4ec} You have incoming KX \u{2014} {:.6} KX waiting. Tap to view \u{2192}",
+                                total
+                            );
+                            view! {
+                                <div class="email-locks-banner" on:click=move |_| active_tab.set(2)>
+                                    {label}
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+
                     // Main content
                     <div>
                         {move || match active_tab.get() {
                             0 => view! {
-                                <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh />
+                                <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos />
                             }.into_any(),
-                            1 => view! { <SendPanel info=info /> }.into_any(),
-                            2 => view! { <PromisesPanel /> }.into_any(),
+                            1 => view! { <SendPanel info=info pending_email_chronos=pending_email_chronos /> }.into_any(),
+                            2 => view! { <PromisesPanel email_locks=email_locks on_email_check=check_email /> }.into_any(),
                             3 => view! { <HistoryPanel /> }.into_any(),
-                            4 => view! {
+                            4 => view! { <RewardsPanel /> }.into_any(),
+                            5 => view! {
                                 <SettingsPanel
                                     online=online
                                     app_phase=app_phase
@@ -1272,6 +1319,7 @@ fn AccountPanel(
     loading: RwSignal<bool>,
     err_msg: RwSignal<String>,
     on_refresh: impl Fn(web_sys::MouseEvent) + 'static,
+    pending_email_chronos: RwSignal<u64>,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
@@ -1371,9 +1419,20 @@ fn AccountPanel(
                         {move || {
                             if loading.get() { "\u{2026}".into() }
                             else {
-                                info.get()
-                                    .map(|a| format!("{} KX", format_kx(&a.spendable_chronos)))
-                                    .unwrap_or_else(|| "\u{2014}".into())
+                                let pending = pending_email_chronos.get();
+                                let base_str = info.get()
+                                    .map(|a| a.spendable_chronos)
+                                    .unwrap_or_default();
+                                if base_str.is_empty() { return "\u{2014}".into(); }
+                                if pending > 0 {
+                                    let base: u128 = base_str.parse().unwrap_or(0);
+                                    let spendable = base.saturating_sub(pending as u128);
+                                    format!("{} KX  ({} KX pending email)",
+                                        format_kx(&spendable.to_string()),
+                                        format_kx(&pending.to_string()))
+                                } else {
+                                    format!("{} KX", format_kx(&base_str))
+                                }
                             }
                         }}
                     </p>
@@ -1453,10 +1512,30 @@ fn is_valid_email(s: &str) -> bool {
     false
 }
 
+fn linkify_body(text: String) -> Vec<(bool, String)> {
+    let mut result = Vec::new();
+    let mut remaining = text.as_str();
+    while let Some(start) = remaining.find("https://") {
+        if start > 0 {
+            result.push((false, remaining[..start].to_string()));
+        }
+        let end = remaining[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == ')')
+            .map(|i| start + i)
+            .unwrap_or(remaining.len());
+        result.push((true, remaining[start..end].to_string()));
+        remaining = &remaining[end..];
+    }
+    if !remaining.is_empty() {
+        result.push((false, remaining.to_string()));
+    }
+    result
+}
+
 // ── SendPanel (unified: KX Address + Email Address × Send Now + Send Later) ───
 
 #[component]
-fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
+fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSignal<u64>) -> impl IntoView {
     let send_sub  = RwSignal::new(0u8); // 0=KX Address, 1=Email Address
     let send_mode = RwSignal::new(0u8); // 0=Send Now,   1=Send Later
 
@@ -1471,17 +1550,28 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
     let amount   = RwSignal::new(String::new());
     let lock_date = RwSignal::new(String::new());
     let memo     = RwSignal::new(String::new());
-    let sending  = RwSignal::new(false);
-    let msg      = RwSignal::new(String::new());
-    let scan_msg = RwSignal::new(String::new());
+    let sending   = RwSignal::new(false);
+    let msg       = RwSignal::new(String::new());
+    let scan_msg  = RwSignal::new(String::new());
+    let spam_warn = RwSignal::new(false);
 
     let utc_clock = RwSignal::new(String::new());
     Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
 
+    // Load registered claim email for self-send warning (FIX 8)
+    let claim_email = RwSignal::new(String::new());
+    Effect::new(move |_| {
+        spawn_local(async move {
+            if let Ok(Some(e)) = call::<Option<String>>("get_claim_email", no_args()).await {
+                claim_email.set(e);
+            }
+        });
+    });
+
     // Clear messages on tab/mode switch
     Effect::new(move |_| {
         send_sub.get(); send_mode.get();
-        msg.set(String::new()); scan_msg.set(String::new());
+        msg.set(String::new()); scan_msg.set(String::new()); spam_warn.set(false);
     });
 
     let set_date = move |date: String| lock_date.set(date);
@@ -1518,6 +1608,17 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             Err(_) => { msg.set("Error: invalid amount.".into()); return; }
         };
         let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
+
+        // Balance check — reject before PoW mining starts
+        if let Some(ref ai) = info.get_untracked() {
+            let spendable = ai.spendable_kx.parse::<f64>().unwrap_or(0.0);
+            if spendable == 0.0 {
+                msg.set("Your balance is zero. You cannot send KX.".into()); return;
+            }
+            if amt > spendable {
+                msg.set(format!("Insufficient balance. You have {:.6} KX available.", spendable)); return;
+            }
+        }
 
         if sub == 0 && mode == 0 {
             // KX + Send Now
@@ -1575,6 +1676,10 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                                 if a.nonce > prev_nonce { info.set(Some(a)); break; }
                             }
                         }
+                        // Always force a final refresh so balance is correct even if nonce poll timed out
+                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            info.set(Some(a));
+                        }
                     }
                     Err(e) => msg.set(format!("Error: {e}")),
                 }
@@ -1584,11 +1689,12 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             // Email + Send Now (unlock = now + 1 hour)
             let email_str = email.get_untracked();
             if !is_valid_email(&email_str) {
-                msg.set("Please enter a valid email address.".into()); return;
+                msg.set("Error: Please enter a valid email address.".into()); return;
             }
             let unlock_unix = (js_sys::Date::now() / 1000.0) as i64 + 3600;
             spawn_local(async move {
                 sending.set(true);
+                pending_email_chronos.set((amt * 1_000_000.0) as u64);
                 msg.set("Mining PoW\u{2026} (~10s)".into());
                 let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                     "email": email_str.clone(),
@@ -1598,6 +1704,12 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                 })).unwrap_or(no_args());
                 match call::<String>("create_email_timelock", args).await {
                     Ok(txid) => {
+                        // Save email→lock mapping for History tab
+                        let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                            "lockId": txid.clone(),
+                            "email": email_str.clone(),
+                        })).unwrap_or(no_args());
+                        let _ = call::<()>("save_email_send", save_args).await;
                         email.set(String::new());
                         amount.set(String::new());
                         memo.set(String::new());
@@ -1607,10 +1719,9 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                             "unlockAtUnix": unlock_unix,
                             "memo": memo_opt,
                         })).unwrap_or(no_args());
-                        if call::<()>("notify_email_recipient", notify_args).await.is_ok() {
-                            msg.set(format!("Sent! Email notification delivered. ID: {txid}"));
-                        } else {
-                            msg.set(format!("Sent! (Email notification unavailable) ID: {txid}"));
+                        match call::<()>("notify_email_recipient", notify_args).await {
+                            Ok(_) => { msg.set(format!("Sent! Email notification delivered. ID: {txid}")); spam_warn.set(true); }
+                            Err(e) => msg.set(format!("Error: Promise sent on-chain (ID: {}…) but email notification failed: {e}", &txid[..8.min(txid.len())])),
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                         for _ in 0..15u8 {
@@ -1619,8 +1730,16 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                                 if a.nonce > prev_nonce { info.set(Some(a)); break; }
                             }
                         }
+                        // Always force a final refresh so balance is correct even if nonce poll timed out
+                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            info.set(Some(a));
+                        }
+                        pending_email_chronos.set(0);
                     }
-                    Err(e) => msg.set(format!("Error: {e}")),
+                    Err(e) => {
+                        pending_email_chronos.set(0);
+                        msg.set(format!("Error: {e}"));
+                    }
                 }
                 sending.set(false);
             });
@@ -1628,7 +1747,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             // Email + Send Later
             let email_str = email.get_untracked();
             if !is_valid_email(&email_str) {
-                msg.set("Please enter a valid email address.".into()); return;
+                msg.set("Error: Please enter a valid email address.".into()); return;
             }
             let date_str = lock_date.get_untracked();
             if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
@@ -1638,6 +1757,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
             };
             spawn_local(async move {
                 sending.set(true);
+                pending_email_chronos.set((amt * 1_000_000.0) as u64);
                 msg.set("Mining PoW\u{2026} (~10s)".into());
                 let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                     "email": email_str.clone(),
@@ -1647,6 +1767,12 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                 })).unwrap_or(no_args());
                 match call::<String>("create_email_timelock", args).await {
                     Ok(txid) => {
+                        // Save email→lock mapping for History tab
+                        let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                            "lockId": txid.clone(),
+                            "email": email_str.clone(),
+                        })).unwrap_or(no_args());
+                        let _ = call::<()>("save_email_send", save_args).await;
                         email.set(String::new());
                         amount.set(String::new());
                         lock_date.set(String::new());
@@ -1657,10 +1783,9 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                             "unlockAtUnix": unlock_unix,
                             "memo": memo_opt,
                         })).unwrap_or(no_args());
-                        if call::<()>("notify_email_recipient", notify_args).await.is_ok() {
-                            msg.set(format!("Sent! Email notification delivered. ID: {txid}"));
-                        } else {
-                            msg.set(format!("Sent! (Email notification unavailable) ID: {txid}"));
+                        match call::<()>("notify_email_recipient", notify_args).await {
+                            Ok(_) => { msg.set(format!("Sent! Email notification delivered. ID: {txid}")); spam_warn.set(true); }
+                            Err(e) => msg.set(format!("Error: Promise sent on-chain (ID: {}…) but email notification failed: {e}", &txid[..8.min(txid.len())])),
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                         for _ in 0..15u8 {
@@ -1669,8 +1794,16 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                                 if a.nonce > prev_nonce { info.set(Some(a)); break; }
                             }
                         }
+                        // Always force a final refresh so balance is correct even if nonce poll timed out
+                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            info.set(Some(a));
+                        }
+                        pending_email_chronos.set(0);
                     }
-                    Err(e) => msg.set(format!("Error: {e}")),
+                    Err(e) => {
+                        pending_email_chronos.set(0);
+                        msg.set(format!("Error: {e}"));
+                    }
                 }
                 sending.set(false);
             });
@@ -1762,6 +1895,21 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                             prop:value=move || email.get()
                             on:input=move |ev| email.set(event_target_value(&ev))
                             disabled=move || sending.get() />
+                        // Self-email warning (FIX 8)
+                        {move || {
+                            let user_email = claim_email.get();
+                            let entered = email.get();
+                            if !user_email.is_empty() && !entered.is_empty()
+                                && user_email.to_lowercase() == entered.to_lowercase()
+                            {
+                                view! {
+                                    <p class="msg mining" style="margin-top:6px;font-size:13px">
+                                        "\u{26a0} This is your registered claim email. "
+                                        "The KX will be sent to your own wallet automatically when you click Claim in your email."
+                                    </p>
+                                }.into_any()
+                            } else { view! { <span></span> }.into_any() }
+                        }}
                     </div>
                 }.into_any()
             }}
@@ -1901,6 +2049,15 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
                     view! { <p class=cls>{s}</p> }.into_any()
                 }
             }}
+            {move || {
+                if spam_warn.get() {
+                    view! {
+                        <p class="msg success" style="font-weight:800;margin-top:6px;font-size:13px;">
+                            "PLEASE ASK YOUR RECIPIENT TO CHECK THEIR SPAM FOLDER — THE FIRST EMAIL FROM CHRONX MAY BE FILTERED."
+                        </p>
+                    }.into_any()
+                } else { view! { <span></span> }.into_any() }
+            }}
         </div>
     }
 }
@@ -1908,11 +2065,15 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>) -> impl IntoView {
 // ── PromisesPanel ─────────────────────────────────────────────────────────────
 
 #[component]
-fn PromisesPanel() -> impl IntoView {
+fn PromisesPanel(
+    email_locks: RwSignal<Vec<TimeLockInfo>>,
+    on_email_check: impl Fn() + Clone + 'static,
+) -> impl IntoView {
     let timelocks  = RwSignal::new(Vec::<TimeLockInfo>::new());
     let tl_loading = RwSignal::new(false);
     let tl_err     = RwSignal::new(String::new());
     let claim_msg  = RwSignal::new(String::new());
+    let email_checking = RwSignal::new(false);
 
     let reload = move || {
         spawn_local(async move {
@@ -1929,10 +2090,119 @@ fn PromisesPanel() -> impl IntoView {
     Effect::new(move |_| { reload(); });
     let on_refresh = move |_: web_sys::MouseEvent| { reload(); };
 
+    let on_email_check_btn = {
+        let check = on_email_check.clone();
+        move |_: web_sys::MouseEvent| {
+            email_checking.set(true);
+            check();
+            // Clear spinner after a short delay (check is best-effort async)
+            spawn_local(async move {
+                delay_ms(3000).await;
+                email_checking.set(false);
+            });
+        }
+    };
+
     view! {
         <div class="card">
+            // ── Incoming Email Locks ─────────────────────────────────────────────
             <div class="row">
-                <p class="section-title">"My Promises"</p>
+                <p class="section-title">"📬 Incoming Email Locks"</p>
+                <button on:click=on_email_check_btn disabled=move || email_checking.get()>
+                    {move || if email_checking.get() { "\u{2026}" } else { "\u{1f50d} Check for incoming KX" }}
+                </button>
+            </div>
+            {move || {
+                let locks = email_locks.get();
+                if locks.is_empty() {
+                    view! {
+                        <p class="muted" style="margin-bottom:16px">
+                            "No unclaimed email locks found for your registered claim email."
+                        </p>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="timelock-list" style="margin-bottom:16px">
+                            {locks.into_iter().map(|lock| {
+                                let now = (js_sys::Date::now() / 1000.0) as i64;
+                                let claimable = lock.unlock_at <= now && lock.status == "Pending";
+                                let unlock_label = {
+                                    let diff = lock.unlock_at - now;
+                                    if diff <= 0 {
+                                        "Ready to claim!".to_string()
+                                    } else if diff < 3600 {
+                                        let mins = diff / 60;
+                                        format!("Unlocks in {}m", mins.max(1))
+                                    } else if diff < 86400 {
+                                        let hours = diff / 3600;
+                                        let mins = (diff % 3600) / 60;
+                                        format!("Unlocks in {}h {}m", hours, mins)
+                                    } else {
+                                        let d = js_sys::Date::new(
+                                            &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
+                                        );
+                                        format!("Unlocks {:04}-{:02}-{:02}",
+                                            d.get_utc_full_year(), d.get_utc_month() + 1, d.get_utc_date())
+                                    }
+                                };
+                                let lock_id = lock.lock_id.clone();
+                                let on_claim_email = move |_: web_sys::MouseEvent| {
+                                    let lid = lock_id.clone();
+                                    spawn_local(async move {
+                                        claim_msg.set("Mining PoW\u{2026}".into());
+                                        let lid2 = lid.clone();
+                                        let args = serde_wasm_bindgen::to_value(
+                                            &serde_json::json!({ "lockIdHex": lid2 })
+                                        ).unwrap_or(no_args());
+                                        match call::<String>("claim_timelock", args).await {
+                                            Ok(txid) => {
+                                                claim_msg.set(format!("Claimed! TxId: {txid}"));
+                                                // Remove claimed lock from the list
+                                                let remaining: Vec<TimeLockInfo> = email_locks
+                                                    .get_untracked().into_iter()
+                                                    .filter(|l| l.lock_id != lid)
+                                                    .collect();
+                                                email_locks.set(remaining);
+                                            }
+                                            Err(e) => claim_msg.set(format!("Error: {e}")),
+                                        }
+                                    });
+                                };
+                                view! {
+                                    <div class="timelock-row" style="border-left:3px solid #d4a84b">
+                                        <div class="tl-main">
+                                            <span class="tl-amount"
+                                                style="color:#d4a84b">
+                                                {format_kx_str(&lock.amount_kx)} " KX"
+                                            </span>
+                                            <span class="tl-unlock">
+                                                {unlock_label}
+                                            </span>
+                                            {lock.memo.clone().map(|m| view! { <span class="tl-memo">{m}</span> })}
+                                        </div>
+                                        <div class="tl-right">
+                                            {if claimable {
+                                                view! {
+                                                    <button class="claim-btn"
+                                                        style="background:#d4a84b;color:#0a0a0a"
+                                                        on:click=on_claim_email>
+                                                        "Claim Now"
+                                                    </button>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span class="badge pending">"Pending"</span> }.into_any()
+                                            }}
+                                        </div>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    }.into_any()
+                }
+            }}
+
+            <div class="row" style="margin-top:8px">
+                <p class="section-title">"Promises I Have Sent"</p>
                 <button on:click=on_refresh disabled=move || tl_loading.get()>
                     {move || if tl_loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
                 </button>
@@ -2043,9 +2313,10 @@ fn HistoryPanel() -> impl IntoView {
     let h_err      = RwSignal::new(String::new());
     let expanded   = RwSignal::new(Option::<String>::None);
     // Cancel confirmation modal state
-    let cancel_target  = RwSignal::new(Option::<String>::None); // lock_id to cancel
-    let cancel_busy    = RwSignal::new(false);
-    let cancel_msg     = RwSignal::new(String::new());
+    let cancel_target    = RwSignal::new(Option::<String>::None); // lock_id to cancel
+    let cancel_is_email  = RwSignal::new(false);
+    let cancel_busy      = RwSignal::new(false);
+    let cancel_msg       = RwSignal::new(String::new());
 
     let reload = move || {
         spawn_local(async move {
@@ -2094,15 +2365,22 @@ fn HistoryPanel() -> impl IntoView {
                             {list.into_iter().map(|entry| {
                                 let tx_id = entry.tx_id.clone();
                                 let tx_id_for_toggle = tx_id.clone();
+                                let is_email_send = entry.tx_type == "Email Send";
                                 let type_icon = match entry.tx_type.as_str() {
                                     "Promise Sent" | "TimeLockCreate" => "\u{23f3}",
                                     "TimeLockClaim" => "\u{2705}",
+                                    "Email Send" => "\u{1f4e7}",
                                     _ => "\u{2197}",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
                                     .map(|c| format!("{} KX", format_kx(c)))
                                     .unwrap_or_else(|| "\u{2014}".to_string());
-                                let addr_display = if let Some(unlock_ts) = entry.unlock_date {
+                                // Email sends: show email address (truncated) regardless of unlock_date
+                                let addr_display = if is_email_send {
+                                    entry.counterparty.as_deref()
+                                        .map(|e| if e.len() > 26 { format!("{}…", &e[..24]) } else { e.to_string() })
+                                        .unwrap_or_default()
+                                } else if let Some(unlock_ts) = entry.unlock_date {
                                     format!("Unlocks {}", unix_to_date_str(unlock_ts))
                                 } else {
                                     entry.counterparty.as_deref()
@@ -2111,9 +2389,10 @@ fn HistoryPanel() -> impl IntoView {
                                 };
                                 let date_display = format_utc_ts(entry.timestamp);
                                 let tx_id_short = shorten_addr(&entry.tx_id);
+                                let entry_status = entry.status.clone();
 
                                 // Determine if this entry can be cancelled
-                                let can_cancel = entry.status == "Pending"
+                                let can_cancel = (entry.status == "Pending" || entry.status == "Pending Claim")
                                     && entry.cancellation_window_secs.map_or(false, |w| w > 0)
                                     && entry.created_at.map_or(false, |ca| {
                                         let window = entry.cancellation_window_secs.unwrap_or(0) as f64;
@@ -2121,7 +2400,7 @@ fn HistoryPanel() -> impl IntoView {
                                         js_sys::Date::now() < deadline
                                     });
 
-                                let status_display = if can_cancel {
+                                let status_display = if can_cancel && !is_email_send {
                                     "Pending \u{2014} subject to reversion".to_string()
                                 } else {
                                     entry.status.clone()
@@ -2149,10 +2428,23 @@ fn HistoryPanel() -> impl IntoView {
                                             <span class="history-addr">{addr_display}</span>
                                             <span class="history-date">{date_display}</span>
                                         </div>
+                                        // Email send status badge
+                                        {if is_email_send {
+                                            let badge_class = match entry_status.as_str() {
+                                                "Pending Claim" => "email-badge pending-claim",
+                                                "Claimed"       => "email-badge claimed",
+                                                _               => "email-badge expired",
+                                            };
+                                            let badge_text = entry_status.clone();
+                                            view! {
+                                                <div><span class=badge_class>{badge_text}</span></div>
+                                            }.into_any()
+                                        } else { view! { <span></span> }.into_any() }}
                                         {move || {
                                             let is_expanded = expanded.get().as_deref() == Some(tx_id.as_str());
                                             if is_expanded {
                                                 let cancel_id = cancel_lock_id.clone();
+                                                let btn_label = if is_email_send { "Cancel Send" } else { "Cancel Promise" };
                                                 view! {
                                                     <div class="history-detail">
                                                         <p>"TxID: " {tx_id_short.clone()}</p>
@@ -2164,9 +2456,10 @@ fn HistoryPanel() -> impl IntoView {
                                                                     on:click=move |ev: web_sys::MouseEvent| {
                                                                         ev.stop_propagation();
                                                                         cancel_msg.set(String::new());
+                                                                        cancel_is_email.set(is_email_send);
                                                                         cancel_target.set(Some(cancel_id.clone()));
                                                                     }
-                                                                >"Cancel Promise"</button>
+                                                                >{btn_label}</button>
                                                             }.into_any()
                                                         } else {
                                                             view! { <span></span> }.into_any()
@@ -2187,16 +2480,21 @@ fn HistoryPanel() -> impl IntoView {
             {move || if cancel_target.get().is_some() {
                 let lock_id = cancel_target.get_untracked().unwrap_or_default();
                 let lock_id_confirm = lock_id.clone();
+                let is_email = cancel_is_email.get_untracked();
+                let modal_title = if is_email { "Cancel Email Send?" } else { "Cancel Promise?" };
+                let modal_body = if is_email {
+                    "Cancel this send? The KX will return to your balance immediately."
+                } else {
+                    "Are you sure you wish to cancel this Promise? The KX will be returned to your balance immediately. This cannot be undone."
+                };
+                let confirm_label = if is_email { "Yes, Cancel Send" } else { "Yes, Cancel Promise" };
                 view! {
                     <div class="modal-overlay" on:click=move |_| {
                         if !cancel_busy.get_untracked() { cancel_target.set(None); }
                     }>
                         <div class="modal" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
-                            <p class="modal-title">"Cancel Promise?"</p>
-                            <p class="modal-body">
-                                "Are you sure you wish to cancel this Promise? "
-                                "The KX will be returned to your balance immediately. "
-                                "This cannot be undone."
+                            <p class="modal-title">{modal_title}</p>
+                            <p class="modal-body">{modal_body}
                             </p>
                             {move || {
                                 let msg = cancel_msg.get();
@@ -2237,7 +2535,7 @@ fn HistoryPanel() -> impl IntoView {
                                             }
                                         });
                                     }
-                                >{move || if cancel_busy.get() { "Cancelling\u{2026}" } else { "Yes, Cancel Promise" }}</button>
+                                >{move || if cancel_busy.get() { "Cancelling\u{2026}" } else { confirm_label }}</button>
                             </div>
                         </div>
                     </div>
@@ -2245,6 +2543,94 @@ fn HistoryPanel() -> impl IntoView {
             } else {
                 view! { <span></span> }.into_any()
             }}
+        </div>
+    }
+}
+
+// ── RewardsPanel ──────────────────────────────────────────────────────────────
+
+#[component]
+fn RewardsPanel() -> impl IntoView {
+    let email      = RwSignal::new(String::new());
+    let registered = RwSignal::new(false);
+    let reg_msg    = RwSignal::new(String::new());
+    let submitting = RwSignal::new(false);
+
+    let on_register = move |_: web_sys::MouseEvent| {
+        let email_str = email.get_untracked();
+        if !is_valid_email(&email_str) {
+            reg_msg.set("Error: enter a valid email address.".into()); return;
+        }
+        submitting.set(true);
+        spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(
+                &serde_json::json!({ "email": email_str })
+            ).unwrap_or(no_args());
+            match call::<()>("register_for_rewards", args).await {
+                Ok(_) | Err(_) => registered.set(true), // best-effort
+            }
+            submitting.set(false);
+        });
+    };
+
+    view! {
+        <div class="card">
+            <p class="section-title">"🎁 ChronX Rewards"</p>
+            <p class="label" style="color:var(--muted);margin-bottom:16px;">
+                "Earn free KX for being part of the ChronX community. Register your wallet to receive rewards, announcements, and exclusive airdrops."
+            </p>
+
+            {move || if registered.get() {
+                view! {
+                    <div style="text-align:center;padding:20px 0;">
+                        <div style="font-size:32px;margin-bottom:10px;">"🎉"</div>
+                        <p style="font-weight:700;color:var(--gold);margin-bottom:8px;font-size:15px;">
+                            "You are registered for ChronX Rewards!"
+                        </p>
+                        <p style="font-size:13px;color:var(--muted);">
+                            "Watch your inbox for free KX opportunities!"
+                        </p>
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div>
+                        <p class="label">"Your Email Address"</p>
+                        <input
+                            type="email"
+                            class="input"
+                            placeholder="you@example.com"
+                            prop:value=move || email.get()
+                            on:input=move |ev| email.set(event_target_value(&ev))
+                        />
+                        {move || {
+                            let m = reg_msg.get();
+                            if m.is_empty() { view! { <span></span> }.into_any() }
+                            else {
+                                let cls = if m.starts_with("Error") { "msg error" } else { "msg success" };
+                                view! { <p class=cls>{m}</p> }.into_any()
+                            }
+                        }}
+                        <button
+                            class="btn-primary"
+                            style="margin-top:12px;width:100%;padding:10px;"
+                            disabled=move || submitting.get()
+                            on:click=on_register>
+                            {move || if submitting.get() { "Registering…" } else { "Register for Rewards" }}
+                        </button>
+                    </div>
+                }.into_any()
+            }}
+
+            <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
+                <p class="label" style="margin-bottom:8px;">"How Rewards Work"</p>
+                <ul style="color:var(--muted);font-size:13px;line-height:2;padding-left:18px;">
+                    <li>"Register your wallet once"</li>
+                    <li>"Receive KX airdrops from the ChronX team"</li>
+                    <li>"Get notified of exclusive opportunities"</li>
+                    <li>"KX delivered directly to your wallet — no action needed"</li>
+                </ul>
+            </div>
         </div>
     }
 }
@@ -2279,6 +2665,10 @@ fn SettingsPanel(
     let show_updates = RwSignal::new(false);
     let show_change_pin = RwSignal::new(false);
 
+    // Claim email (local only, never sent to server)
+    let claim_email_val = RwSignal::new(String::new());
+    let claim_email_msg = RwSignal::new(String::new());
+
     // Change PIN state
     let cp_phase    = RwSignal::new(0u8); // 0=verify current, 1=enter new, 2=confirm new
     let cp_digits   = RwSignal::new(String::new());
@@ -2290,6 +2680,9 @@ fn SettingsPanel(
         spawn_local(async move {
             let url = call::<String>("get_node_url", no_args()).await.unwrap_or_default();
             node_url.set(url);
+            let email = call::<Option<String>>("get_claim_email", no_args()).await
+                .ok().flatten().unwrap_or_default();
+            claim_email_val.set(email);
         });
     });
 
@@ -2323,6 +2716,22 @@ fn SettingsPanel(
                 Err(e) => pubkey_hex.set(format!("Error: {e}")),
             }
             pk_loading.set(false);
+        });
+    };
+
+    let on_save_email = move |_: web_sys::MouseEvent| {
+        let email = claim_email_val.get_untracked();
+        spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(
+                &serde_json::json!({ "email": email })
+            ).unwrap_or(no_args());
+            match call::<()>("set_claim_email", args).await {
+                Ok(_) => {
+                    let msg = if email.trim().is_empty() { "Email cleared." } else { "Email saved on this device only." };
+                    claim_email_msg.set(msg.into());
+                }
+                Err(e) => claim_email_msg.set(format!("Error: {e}")),
+            }
         });
     };
 
@@ -2444,22 +2853,40 @@ fn SettingsPanel(
                                         </p>
                                     }.into_any()
                                 } else { view! { <span></span> }.into_any() }}
-                                {all.into_iter().map(|n| {
+                                {all.into_iter().filter(|n| {
+                                    // Filter out expired notices
+                                    if let Some(ref exp) = n.expires {
+                                        let now_str = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
+                                        if now_str.as_str() > exp.as_str() { return false; }
+                                    }
+                                    true
+                                }).map(|n| {
                                     let is_read = seen.contains(&n.id);
                                     let nid = n.id.clone();
                                     let on_mark_n = on_mark_c.clone();
+                                    let url = n.url.clone();
+                                    let url_label = n.url_label.clone();
+                                    let icon = if n.severity == "reward" { "🎁 " } else { "" };
                                     view! {
                                         <div class=format!("notice-card {}", n.severity)
-                                             style=format!("opacity:{}", if is_read { "0.55" } else { "1" })>
-                                            <p class="notice-card-title">{n.title.clone()}</p>
+                                             style=format!("opacity:{};cursor:pointer", if is_read { "0.55" } else { "1" })
+                                             on:click=move |_| on_mark_n(nid.clone())>
+                                            <p class="notice-card-title">{icon.to_string() + &n.title}</p>
                                             <p class="notice-card-date">{n.date.clone()}</p>
-                                            <p class="notice-card-body">{n.body.clone()}</p>
-                                            {if !is_read {
+                                            <p class="notice-card-body">
+                                                {linkify_body(n.body.clone()).into_iter().map(|(is_url, part)| {
+                                                    if is_url {
+                                                        view! { <a href=part.clone() class="notice-link" target="_blank" rel="noopener">{part.clone()}</a> }.into_any()
+                                                    } else {
+                                                        view! { <span>{part}</span> }.into_any()
+                                                    }
+                                                }).collect::<Vec<_>>()}
+                                            </p>
+                                            {if let Some(link) = url {
+                                                let label = url_label.unwrap_or_else(|| link.clone());
                                                 view! {
-                                                    <button class="notice-mark-read"
-                                                        on:click=move |_| on_mark_n(nid.clone())>
-                                                        "Mark as read"
-                                                    </button>
+                                                    <a href=link class="notice-link" target="_blank" rel="noopener"
+                                                       style="display:inline-block;margin-top:8px;font-weight:700;">{label}</a>
                                                 }.into_any()
                                             } else { view! { <span></span> }.into_any() }}
                                         </div>
@@ -2478,6 +2905,45 @@ fn SettingsPanel(
                     cp_phase.set(0); cp_digits.set(String::new());
                     cp_msg.set(String::new()); show_change_pin.set(true);
                 }>"🔐 Change PIN"</button>
+            </div>
+
+            // My Email for KX Claims
+            <div class="settings-section">
+                <p class="label">"My Email for KX Claims"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                    "If someone sends KX to your email address, your wallet uses this to detect it automatically. "
+                    "Stored on this device only — never sent to any server."
+                </p>
+                <div class="field">
+                    <input type="email" placeholder="you@example.com"
+                        prop:value=move || claim_email_val.get()
+                        on:input=move |ev| {
+                            claim_email_val.set(event_target_value(&ev));
+                            claim_email_msg.set(String::new());
+                        } />
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <button class="primary" on:click=on_save_email>"Save Email"</button>
+                    <button on:click=move |_| {
+                        claim_email_val.set(String::new());
+                        claim_email_msg.set(String::new());
+                        let args = serde_wasm_bindgen::to_value(
+                            &serde_json::json!({ "email": "" })
+                        ).unwrap_or(no_args());
+                        spawn_local(async move {
+                            let _ = call::<()>("set_claim_email", args).await;
+                            claim_email_msg.set("Email cleared.".into());
+                        });
+                    }>"Clear"</button>
+                </div>
+                {move || {
+                    let s = claim_email_msg.get();
+                    if s.is_empty() { view! { <span></span> }.into_any() }
+                    else {
+                        let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
+                        view! { <p class=cls>{s}</p> }.into_any()
+                    }
+                }}
             </div>
 
             // About & Updates

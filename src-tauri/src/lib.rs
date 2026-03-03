@@ -30,6 +30,11 @@ pub fn run() {
             commands::get_seen_notices,
             commands::mark_notice_seen,
             commands::notify_email_recipient,
+            commands::register_for_rewards,
+            commands::get_claim_email,
+            commands::set_claim_email,
+            commands::save_email_send,
+            commands::check_email_timelocks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ChronX Wallet");
