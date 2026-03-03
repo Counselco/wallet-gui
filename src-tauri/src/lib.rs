@@ -31,6 +31,7 @@ pub fn run() {
             commands::mark_notice_seen,
             commands::notify_email_recipient,
             commands::register_for_rewards,
+            commands::check_rewards_status,
             commands::get_claim_email,
             commands::set_claim_email,
             commands::save_email_send,

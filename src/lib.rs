@@ -62,7 +62,10 @@ struct TimeLockInfo {
     sender: String,
     #[allow(dead_code)]
     recipient_account_id: String,
+    #[allow(dead_code)]
     amount_kx: String,
+    #[serde(default)]
+    amount_chronos: String,
     unlock_at: i64,
     #[allow(dead_code)]
     created_at: i64,
@@ -153,12 +156,6 @@ fn format_int_with_commas(n: u128) -> String {
 fn format_kx(chronos_str: &str) -> String {
     let c: u128 = chronos_str.parse().unwrap_or(0);
     format!("{}.{:06}", format_int_with_commas(c / 1_000_000), (c % 1_000_000) as u32)
-}
-
-fn format_kx_str(kx_str: &str) -> String {
-    let kx: f64 = kx_str.trim().parse().unwrap_or(0.0);
-    let chronos = (kx * 1_000_000.0).round() as u128;
-    format_kx(&chronos.to_string())
 }
 
 // ── Display helpers ───────────────────────────────────────────────────────────
@@ -836,8 +833,8 @@ fn App() -> impl IntoView {
                         if incoming.is_empty() || active_tab.get() == 2 {
                             view! { <span></span> }.into_any()
                         } else {
-                            let total: f64 = incoming.iter()
-                                .map(|l| l.amount_kx.parse::<f64>().unwrap_or(0.0))
+                            let total_chronos: u128 = incoming.iter()
+                                .map(|l| l.amount_chronos.parse::<u128>().unwrap_or(0))
                                 .sum();
                             // Find the earliest expiry (created_at + 72h claim window)
                             let now = (js_sys::Date::now() / 1000.0) as i64;
@@ -855,7 +852,7 @@ fn App() -> impl IntoView {
                             };
                             view! {
                                 <div class="email-locks-banner" on:click=move |_| active_tab.set(2)>
-                                    {format!("\u{1f4ec} {} KX waiting for you!", format_kx_str(&format!("{:.6}", total)))}
+                                    {format!("\u{1f4ec} {} KX waiting for you!", format_kx(&total_chronos.to_string()))}
                                     <span style="color:#e74c3c;font-weight:800;margin-left:8px">
                                         {countdown}
                                     </span>
@@ -1354,6 +1351,8 @@ fn AccountPanel(
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
     let inc_loading  = RwSignal::new(false);
+    let inc_page     = RwSignal::new(0usize);
+    const INC_PAGE_SIZE: usize = 10;
     let qr_svg       = RwSignal::new(String::new());
 
     Effect::new(move |_| {
@@ -1497,7 +1496,13 @@ fn AccountPanel(
                 } else if locks.is_empty() {
                     view! { <span></span> }.into_any()
                 } else {
-                    let rows: Vec<_> = locks.into_iter().map(|lock| {
+                    let inc_total = locks.len();
+                    let inc_total_pages = if inc_total == 0 { 1 } else { (inc_total + INC_PAGE_SIZE - 1) / INC_PAGE_SIZE };
+                    let inc_pg = inc_page.get().min(inc_total_pages.saturating_sub(1));
+                    let rows: Vec<_> = locks.into_iter()
+                        .skip(inc_pg * INC_PAGE_SIZE)
+                        .take(INC_PAGE_SIZE)
+                        .map(|lock| {
                         let unlock_date = {
                             let d = js_sys::Date::new(
                                 &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
@@ -1510,7 +1515,7 @@ fn AccountPanel(
                         view! {
                             <div class="incoming-lock-row">
                                 <span class="tl-amount" style="color:#d4a84b">
-                                    {format_kx_str(&lock.amount_kx)} " KX"
+                                    {format_kx(&lock.amount_chronos)} " KX"
                                 </span>
                                 <span class="tl-unlock">"Unlocks " {unlock_date}</span>
                                 {lock.memo.map(|m| view! { <span class="tl-memo">{m}</span> })}
@@ -1521,6 +1526,25 @@ fn AccountPanel(
                         <div style="margin-top:12px;border-top:1px solid #1e2130;padding-top:12px">
                             <p class="label">"Incoming Promises"</p>
                             <div class="timelock-list">{rows}</div>
+                            {if inc_total_pages > 1 {
+                                view! {
+                                    <div class="pagination-bar">
+                                        <button class="pill"
+                                            disabled=move || inc_page.get() == 0
+                                            on:click=move |_| inc_page.update(|p| if *p > 0 { *p -= 1; })>
+                                            "\u{2190} Prev"
+                                        </button>
+                                        <span class="page-indicator">
+                                            {format!("Page {} of {}", inc_pg + 1, inc_total_pages)}
+                                        </span>
+                                        <button class="pill"
+                                            disabled=move || inc_page.get() >= inc_total_pages - 1
+                                            on:click=move |_| inc_page.update(|p| *p += 1)>
+                                            "Next \u{2192}"
+                                        </button>
+                                    </div>
+                                }.into_any()
+                            } else { view! { <span></span> }.into_any() }}
                         </div>
                     }.into_any()
                 }
@@ -1960,9 +1984,24 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
             // Amount
             <div class="field">
                 <label>"Amount (KX)"</label>
-                <input type="number" placeholder="0.000000" step="0.000001" min="0"
+                <input type="text" inputmode="decimal" placeholder="0.000000"
                     prop:value=move || amount.get()
-                    on:input=move |ev| amount.set(event_target_value(&ev))
+                    on:input=move |ev| {
+                        let raw = event_target_value(&ev);
+                        // Allow digits, at most one decimal point, max 6 decimal places
+                        let filtered: String = {
+                            let mut has_dot = false;
+                            let mut decimals = 0u8;
+                            raw.chars().filter(|&c| {
+                                if c.is_ascii_digit() {
+                                    if has_dot { decimals += 1; decimals <= 6 } else { true }
+                                } else if c == '.' && !has_dot {
+                                    has_dot = true; true
+                                } else { false }
+                            }).collect()
+                        };
+                        amount.set(filtered);
+                    }
                     disabled=move || sending.get() />
                 <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
             </div>
@@ -2123,6 +2162,8 @@ fn PromisesPanel(
         RwSignal::new(Default::default());
     // Sort: 0=unlock date asc (default), 1=unlock date desc, 2=amount desc, 3=amount asc, 4=status
     let tl_sort = RwSignal::new(0u8);
+    let tl_page = RwSignal::new(0usize);
+    const TL_PAGE_SIZE: usize = 10;
 
     let reload = move || {
         spawn_local(async move {
@@ -2137,7 +2178,8 @@ fn PromisesPanel(
     };
 
     Effect::new(move |_| { reload(); });
-    let on_refresh = move |_: web_sys::MouseEvent| { reload(); };
+    Effect::new(move |_| { tl_sort.get(); tl_page.set(0); });
+    let on_refresh = move |_: web_sys::MouseEvent| { tl_page.set(0); reload(); };
 
     let on_email_check_btn = {
         let check = on_email_check.clone();
@@ -2235,7 +2277,7 @@ fn PromisesPanel(
                                         <div class="tl-main">
                                             <span class="tl-amount"
                                                 style="color:#d4a84b">
-                                                {format_kx_str(&lock.amount_kx)} " KX"
+                                                {format_kx(&lock.amount_chronos)} " KX"
                                             </span>
                                             <span class="tl-unlock">
                                                 {unlock_label}
@@ -2318,16 +2360,20 @@ fn PromisesPanel(
             </div>
             <div class="sort-bar">
                 <span class="sort-label">"Sort:"</span>
-                <button class=move || if tl_sort.get()==0 { "pill active" } else { "pill" }
-                    on:click=move |_| tl_sort.set(0)>"Soonest"</button>
-                <button class=move || if tl_sort.get()==1 { "pill active" } else { "pill" }
-                    on:click=move |_| tl_sort.set(1)>"Latest"</button>
-                <button class=move || if tl_sort.get()==2 { "pill active" } else { "pill" }
-                    on:click=move |_| tl_sort.set(2)>"Amount \u{2193}"</button>
-                <button class=move || if tl_sort.get()==3 { "pill active" } else { "pill" }
-                    on:click=move |_| tl_sort.set(3)>"Amount \u{2191}"</button>
-                <button class=move || if tl_sort.get()==4 { "pill active" } else { "pill" }
-                    on:click=move |_| tl_sort.set(4)>"Status"</button>
+                <button class=move || if tl_sort.get() <= 1 { "pill active" } else { "pill" }
+                    on:click=move |_| {
+                        let cur = tl_sort.get_untracked();
+                        if cur == 0 { tl_sort.set(1); } else { tl_sort.set(0); }
+                    }>
+                    {move || if tl_sort.get() == 1 { "Date \u{2193}" } else { "Date \u{2191}" }}
+                </button>
+                <button class=move || if tl_sort.get() == 2 || tl_sort.get() == 3 { "pill active" } else { "pill" }
+                    on:click=move |_| {
+                        let cur = tl_sort.get_untracked();
+                        if cur == 2 { tl_sort.set(3); } else { tl_sort.set(2); }
+                    }>
+                    {move || if tl_sort.get() == 3 { "Amount \u{2191}" } else { "Amount \u{2193}" }}
+                </button>
             </div>
 
             {move || {
@@ -2344,24 +2390,33 @@ fn PromisesPanel(
                     1 => locks.sort_by(|a, b| b.unlock_at.cmp(&a.unlock_at)),
                     2 => {
                         locks.sort_by(|a, b| {
-                            let ak: f64 = a.amount_kx.parse().unwrap_or(0.0);
-                            let bk: f64 = b.amount_kx.parse().unwrap_or(0.0);
-                            bk.partial_cmp(&ak).unwrap_or(std::cmp::Ordering::Equal)
+                            let ac: u128 = a.amount_chronos.parse().unwrap_or(0);
+                            let bc: u128 = b.amount_chronos.parse().unwrap_or(0);
+                            bc.cmp(&ac)
                         });
                     }
                     3 => {
                         locks.sort_by(|a, b| {
-                            let ak: f64 = a.amount_kx.parse().unwrap_or(0.0);
-                            let bk: f64 = b.amount_kx.parse().unwrap_or(0.0);
-                            ak.partial_cmp(&bk).unwrap_or(std::cmp::Ordering::Equal)
+                            let ac: u128 = a.amount_chronos.parse().unwrap_or(0);
+                            let bc: u128 = b.amount_chronos.parse().unwrap_or(0);
+                            ac.cmp(&bc)
                         });
                     }
                     4 => locks.sort_by(|a, b| a.status.cmp(&b.status)),
                     _ => {}
                 }
+                // Pagination
+                let tl_total = locks.len();
+                let tl_total_pages = if tl_total == 0 { 1 } else { (tl_total + TL_PAGE_SIZE - 1) / TL_PAGE_SIZE };
+                let tl_pg = tl_page.get().min(tl_total_pages.saturating_sub(1));
+                let page_locks: Vec<TimeLockInfo> = locks.into_iter()
+                    .skip(tl_pg * TL_PAGE_SIZE)
+                    .take(TL_PAGE_SIZE)
+                    .collect();
+
                 if tl_loading.get() {
                     view! { <p class="muted">"Loading\u{2026}"</p> }.into_any()
-                } else if locks.is_empty() {
+                } else if tl_total == 0 {
                     view! {
                         <div class="empty-state">
                             <p>"No promises found."</p>
@@ -2373,7 +2428,7 @@ fn PromisesPanel(
                 } else {
                     view! {
                         <div class="timelock-list">
-                            {locks.into_iter().map(|lock| {
+                            {page_locks.into_iter().map(|lock| {
                                 let now = (js_sys::Date::now() / 1000.0) as i64;
                                 let matured = lock.unlock_at <= now;
                                 let status_cls = match lock.status.as_str() {
@@ -2413,7 +2468,7 @@ fn PromisesPanel(
                                 view! {
                                     <div class="timelock-row">
                                         <div class="tl-main">
-                                            <span class="tl-amount">{format_kx_str(&lock.amount_kx)} " KX"</span>
+                                            <span class="tl-amount">{format_kx(&lock.amount_chronos)} " KX"</span>
                                             <span class="tl-unlock">"Unlocks " {unlock_date}</span>
                                             {lock.memo.clone().map(|m| view! { <span class="tl-memo">{m}</span> })}
                                         </div>
@@ -2429,6 +2484,25 @@ fn PromisesPanel(
                                 }
                             }).collect::<Vec<_>>()}
                         </div>
+                        {if tl_total_pages > 1 {
+                            view! {
+                                <div class="pagination-bar">
+                                    <button class="pill"
+                                        disabled=move || tl_page.get() == 0
+                                        on:click=move |_| tl_page.update(|p| if *p > 0 { *p -= 1; })>
+                                        "\u{2190} Prev"
+                                    </button>
+                                    <span class="page-indicator">
+                                        {format!("Page {} of {}", tl_pg + 1, tl_total_pages)}
+                                    </span>
+                                    <button class="pill"
+                                        disabled=move || tl_page.get() >= tl_total_pages - 1
+                                        on:click=move |_| tl_page.update(|p| *p += 1)>
+                                        "Next \u{2192}"
+                                    </button>
+                                </div>
+                            }.into_any()
+                        } else { view! { <span></span> }.into_any() }}
                     }.into_any()
                 }
             }}
@@ -2462,6 +2536,8 @@ fn HistoryPanel() -> impl IntoView {
     let cancel_msg       = RwSignal::new(String::new());
     // Sort: 0=date desc (default), 1=date asc, 2=amount desc, 3=amount asc, 4=type
     let h_sort = RwSignal::new(0u8);
+    let h_page = RwSignal::new(0usize); // 0-indexed page number
+    const PAGE_SIZE: usize = 10;
 
     let reload = move || {
         spawn_local(async move {
@@ -2476,7 +2552,9 @@ fn HistoryPanel() -> impl IntoView {
     };
 
     Effect::new(move |_| { reload(); });
-    let on_refresh = move |_: web_sys::MouseEvent| { reload(); };
+    // Reset to first page when sort changes
+    Effect::new(move |_| { h_sort.get(); h_page.set(0); });
+    let on_refresh = move |_: web_sys::MouseEvent| { h_page.set(0); reload(); };
 
     view! {
         <div class="card">
@@ -2488,14 +2566,20 @@ fn HistoryPanel() -> impl IntoView {
             </div>
             <div class="sort-bar">
                 <span class="sort-label">"Sort:"</span>
-                <button class=move || if h_sort.get()==0 { "pill active" } else { "pill" }
-                    on:click=move |_| h_sort.set(0)>"Newest"</button>
-                <button class=move || if h_sort.get()==1 { "pill active" } else { "pill" }
-                    on:click=move |_| h_sort.set(1)>"Oldest"</button>
-                <button class=move || if h_sort.get()==2 { "pill active" } else { "pill" }
-                    on:click=move |_| h_sort.set(2)>"Amount \u{2193}"</button>
-                <button class=move || if h_sort.get()==3 { "pill active" } else { "pill" }
-                    on:click=move |_| h_sort.set(3)>"Amount \u{2191}"</button>
+                <button class=move || if h_sort.get() <= 1 { "pill active" } else { "pill" }
+                    on:click=move |_| {
+                        let cur = h_sort.get_untracked();
+                        if cur == 0 { h_sort.set(1); } else { h_sort.set(0); }
+                    }>
+                    {move || if h_sort.get() == 1 { "Date \u{2191}" } else { "Date \u{2193}" }}
+                </button>
+                <button class=move || if h_sort.get() == 2 || h_sort.get() == 3 { "pill active" } else { "pill" }
+                    on:click=move |_| {
+                        let cur = h_sort.get_untracked();
+                        if cur == 2 { h_sort.set(3); } else { h_sort.set(2); }
+                    }>
+                    {move || if h_sort.get() == 3 { "Amount \u{2191}" } else { "Amount \u{2193}" }}
+                </button>
                 <button class=move || if h_sort.get()==4 { "pill active" } else { "pill" }
                     on:click=move |_| h_sort.set(4)>"Type"</button>
             </div>
@@ -2525,9 +2609,18 @@ fn HistoryPanel() -> impl IntoView {
                     4 => list.sort_by(|a, b| a.tx_type.cmp(&b.tx_type)),
                     _ => {}
                 }
+                // Pagination
+                let total = list.len();
+                let total_pages = if total == 0 { 1 } else { (total + PAGE_SIZE - 1) / PAGE_SIZE };
+                let page = h_page.get().min(total_pages.saturating_sub(1));
+                let page_list: Vec<TxHistoryEntry> = list.into_iter()
+                    .skip(page * PAGE_SIZE)
+                    .take(PAGE_SIZE)
+                    .collect();
+
                 if h_loading.get() {
                     view! { <p class="muted">"Loading\u{2026}"</p> }.into_any()
-                } else if list.is_empty() && h_err.get().is_empty() {
+                } else if total == 0 && h_err.get().is_empty() {
                     view! {
                         <div class="empty-state">
                             <p>"\u{1f552} No transactions yet"</p>
@@ -2537,7 +2630,7 @@ fn HistoryPanel() -> impl IntoView {
                 } else {
                     view! {
                         <div class="history-list">
-                            {list.into_iter().map(|entry| {
+                            {page_list.into_iter().map(|entry| {
                                 let tx_id = entry.tx_id.clone();
                                 let tx_id_for_toggle = tx_id.clone();
                                 let is_email_send = entry.tx_type == "Email Send";
@@ -2666,6 +2759,25 @@ fn HistoryPanel() -> impl IntoView {
                                 }
                             }).collect::<Vec<_>>()}
                         </div>
+                        {if total_pages > 1 {
+                            view! {
+                                <div class="pagination-bar">
+                                    <button class="pill"
+                                        disabled=move || h_page.get() == 0
+                                        on:click=move |_| h_page.update(|p| if *p > 0 { *p -= 1; })>
+                                        "\u{2190} Prev"
+                                    </button>
+                                    <span class="page-indicator">
+                                        {format!("Page {} of {}", page + 1, total_pages)}
+                                    </span>
+                                    <button class="pill"
+                                        disabled=move || h_page.get() >= total_pages - 1
+                                        on:click=move |_| h_page.update(|p| *p += 1)>
+                                        "Next \u{2192}"
+                                    </button>
+                                </div>
+                            }.into_any()
+                        } else { view! { <span></span> }.into_any() }}
                     }.into_any()
                 }
             }}
@@ -2743,12 +2855,38 @@ fn HistoryPanel() -> impl IntoView {
 
 // ── RewardsPanel ──────────────────────────────────────────────────────────────
 
+#[derive(Clone, Deserialize, Default)]
+struct RewardsStatus {
+    registered: bool,
+    confirmed: bool,
+    email: Option<String>,
+}
+
 #[component]
 fn RewardsPanel() -> impl IntoView {
     let email      = RwSignal::new(String::new());
-    let registered = RwSignal::new(false);
+    // 0 = loading, 1 = not registered, 2 = pending confirmation, 3 = confirmed
+    let phase      = RwSignal::new(0u8);
+    let masked_email = RwSignal::new(String::new());
     let reg_msg    = RwSignal::new(String::new());
     let submitting = RwSignal::new(false);
+
+    // Check rewards status on mount
+    spawn_local(async move {
+        if let Ok(status) = call::<RewardsStatus>("check_rewards_status", no_args()).await {
+            if status.confirmed {
+                if let Some(e) = status.email { masked_email.set(e); }
+                phase.set(3);
+            } else if status.registered {
+                if let Some(e) = status.email { masked_email.set(e); }
+                phase.set(2);
+            } else {
+                phase.set(1);
+            }
+        } else {
+            phase.set(1); // on error, show registration form
+        }
+    });
 
     let on_register = move |_: web_sys::MouseEvent| {
         let email_str = email.get_untracked();
@@ -2756,14 +2894,54 @@ fn RewardsPanel() -> impl IntoView {
             reg_msg.set("Error: enter a valid email address.".into()); return;
         }
         submitting.set(true);
+        reg_msg.set(String::new());
         spawn_local(async move {
             let args = serde_wasm_bindgen::to_value(
                 &serde_json::json!({ "email": email_str })
             ).unwrap_or(no_args());
-            match call::<()>("register_for_rewards", args).await {
-                Ok(_) | Err(_) => registered.set(true), // best-effort
+            match call::<String>("register_for_rewards", args).await {
+                Ok(_) => {
+                    phase.set(2); // show "check your email"
+                }
+                Err(e) => {
+                    reg_msg.set(format!("Error: {e}"));
+                }
             }
             submitting.set(false);
+        });
+    };
+
+    let on_resend = move |_: web_sys::MouseEvent| {
+        let email_str = email.get_untracked();
+        if email_str.is_empty() || !is_valid_email(&email_str) {
+            reg_msg.set("Enter your email above to resend.".into()); return;
+        }
+        submitting.set(true);
+        reg_msg.set(String::new());
+        spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(
+                &serde_json::json!({ "email": email_str })
+            ).unwrap_or(no_args());
+            match call::<String>("register_for_rewards", args).await {
+                Ok(_) => {
+                    reg_msg.set("Confirmation email resent!".into());
+                }
+                Err(e) => {
+                    reg_msg.set(format!("Error: {e}"));
+                }
+            }
+            submitting.set(false);
+        });
+    };
+
+    let on_check_status = move |_: web_sys::MouseEvent| {
+        spawn_local(async move {
+            if let Ok(status) = call::<RewardsStatus>("check_rewards_status", no_args()).await {
+                if status.confirmed {
+                    if let Some(e) = status.email { masked_email.set(e); }
+                    phase.set(3);
+                }
+            }
         });
     };
 
@@ -2774,52 +2952,120 @@ fn RewardsPanel() -> impl IntoView {
                 "Earn free KX for being part of the ChronX community. Register your wallet to receive rewards, announcements, and exclusive airdrops."
             </p>
 
-            {move || if registered.get() {
-                view! {
-                    <div style="text-align:center;padding:20px 0;">
-                        <div style="font-size:32px;margin-bottom:10px;">"🎉"</div>
-                        <p style="font-weight:700;color:var(--gold);margin-bottom:8px;font-size:15px;">
-                            "You are registered for ChronX Rewards!"
-                        </p>
-                        <p style="font-size:13px;color:var(--muted);">
-                            "Watch your inbox for free KX opportunities!"
-                        </p>
-                    </div>
-                }.into_any()
-            } else {
-                view! {
-                    <div>
-                        <p class="label">"Your Email Address"</p>
-                        <input
-                            type="email"
-                            class="input"
-                            placeholder="you@example.com"
-                            prop:value=move || email.get()
-                            on:input=move |ev| email.set(event_target_value(&ev))
-                        />
-                        {move || {
-                            let m = reg_msg.get();
-                            if m.is_empty() { view! { <span></span> }.into_any() }
-                            else {
-                                let cls = if m.starts_with("Error") { "msg error" } else { "msg success" };
-                                view! { <p class=cls>{m}</p> }.into_any()
-                            }
-                        }}
-                        <button
-                            class="btn-primary"
-                            style="margin-top:12px;width:100%;padding:10px;"
-                            disabled=move || submitting.get()
-                            on:click=on_register>
-                            {move || if submitting.get() { "Registering…" } else { "Register for Rewards" }}
-                        </button>
-                    </div>
-                }.into_any()
+            {move || match phase.get() {
+                0 => {
+                    // Loading state
+                    view! {
+                        <div style="text-align:center;padding:20px 0;">
+                            <p style="color:var(--muted);font-size:14px;">"Checking rewards status\u{2026}"</p>
+                        </div>
+                    }.into_any()
+                }
+                2 => {
+                    // Pending confirmation — user registered but hasn't clicked the email link
+                    view! {
+                        <div style="text-align:center;padding:20px 0;">
+                            <div style="font-size:32px;margin-bottom:10px;">"📧"</div>
+                            <p style="font-weight:700;color:var(--gold);margin-bottom:8px;font-size:15px;">
+                                "Check your email!"
+                            </p>
+                            <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+                                "We sent a confirmation link to your email. Click it to activate your Rewards registration."
+                            </p>
+                            {move || {
+                                let m = reg_msg.get();
+                                if m.is_empty() { view! { <span></span> }.into_any() }
+                                else {
+                                    let cls = if m.starts_with("Error") { "msg error" } else { "msg success" };
+                                    view! { <p class=cls>{m}</p> }.into_any()
+                                }
+                            }}
+                            <p class="label" style="margin-top:12px;">"Email (to resend confirmation)"</p>
+                            <input
+                                type="email"
+                                class="input"
+                                placeholder="you@example.com"
+                                prop:value=move || email.get()
+                                on:input=move |ev| email.set(event_target_value(&ev))
+                            />
+                            <div style="display:flex;gap:8px;margin-top:12px;">
+                                <button
+                                    class="btn-primary"
+                                    style="flex:1;padding:10px;"
+                                    disabled=move || submitting.get()
+                                    on:click=on_resend>
+                                    {move || if submitting.get() { "Sending\u{2026}" } else { "Resend Email" }}
+                                </button>
+                                <button
+                                    class="pill"
+                                    style="padding:10px 16px;"
+                                    on:click=on_check_status>
+                                    "I Confirmed"
+                                </button>
+                            </div>
+                        </div>
+                    }.into_any()
+                }
+                3 => {
+                    // Confirmed — fully registered
+                    let email_display = masked_email.get_untracked();
+                    view! {
+                        <div style="text-align:center;padding:20px 0;">
+                            <div style="font-size:32px;margin-bottom:10px;">"🎉"</div>
+                            <p style="font-weight:700;color:var(--gold);margin-bottom:8px;font-size:15px;">
+                                "You are registered for ChronX Rewards!"
+                            </p>
+                            {if !email_display.is_empty() {
+                                view! {
+                                    <p style="font-size:13px;color:var(--muted);margin-bottom:8px;">
+                                        {format!("Email: {}", email_display)}
+                                    </p>
+                                }.into_any()
+                            } else {
+                                view! { <span></span> }.into_any()
+                            }}
+                            <p style="font-size:13px;color:var(--muted);">
+                                "Watch your inbox for free KX opportunities!"
+                            </p>
+                        </div>
+                    }.into_any()
+                }
+                _ => {
+                    // Phase 1 — not registered, show registration form
+                    view! {
+                        <div>
+                            <p class="label">"Your Email Address"</p>
+                            <input
+                                type="email"
+                                class="input"
+                                placeholder="you@example.com"
+                                prop:value=move || email.get()
+                                on:input=move |ev| email.set(event_target_value(&ev))
+                            />
+                            {move || {
+                                let m = reg_msg.get();
+                                if m.is_empty() { view! { <span></span> }.into_any() }
+                                else {
+                                    let cls = if m.starts_with("Error") { "msg error" } else { "msg success" };
+                                    view! { <p class=cls>{m}</p> }.into_any()
+                                }
+                            }}
+                            <button
+                                class="btn-primary"
+                                style="margin-top:12px;width:100%;padding:10px;"
+                                disabled=move || submitting.get()
+                                on:click=on_register>
+                                {move || if submitting.get() { "Registering\u{2026}" } else { "Register for Rewards" }}
+                            </button>
+                        </div>
+                    }.into_any()
+                }
             }}
 
             <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border);">
                 <p class="label" style="margin-bottom:8px;">"How Rewards Work"</p>
                 <ul style="color:var(--muted);font-size:13px;line-height:2;padding-left:18px;">
-                    <li>"Register your wallet once"</li>
+                    <li>"Register your wallet and confirm your email"</li>
                     <li>"Receive KX airdrops from the ChronX team"</li>
                     <li>"Get notified of exclusive opportunities"</li>
                     <li>"KX delivered directly to your wallet — no action needed"</li>

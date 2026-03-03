@@ -113,6 +113,7 @@ pub struct TimeLockInfo {
     pub sender: String,
     pub recipient_account_id: String,
     pub amount_kx: String,
+    pub amount_chronos: String,
     pub unlock_at: i64,
     pub created_at: i64,
     pub status: String,
@@ -552,6 +553,7 @@ pub async fn get_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> 
             sender: v["sender"].as_str().unwrap_or("").to_string(),
             recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
             amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
+            amount_chronos: v["amount_chronos"].as_str().unwrap_or("0").to_string(),
             unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
             created_at: v["created_at"].as_i64().unwrap_or(0),
             status: v["status"].as_str().unwrap_or("Pending").to_string(),
@@ -1134,14 +1136,21 @@ pub async fn notify_email_recipient(
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RewardsStatus {
+    pub registered: bool,
+    pub confirmed: bool,
+    pub email: Option<String>,
+}
+
 #[tauri::command]
-pub async fn register_for_rewards(app: AppHandle, email: String) -> Result<(), String> {
+pub async fn register_for_rewards(app: AppHandle, email: String) -> Result<String, String> {
     let wallet_address = load_keypair(&app)
         .map(|kp| kp.account_id.to_string())
         .unwrap_or_default();
     let wallet_version = app.package_info().version.to_string();
     let client = reqwest::Client::new();
-    let _ = client
+    let res = client
         .post("https://api.chronx.io/register")
         .json(&serde_json::json!({
             "email": email,
@@ -1150,8 +1159,29 @@ pub async fn register_for_rewards(app: AppHandle, email: String) -> Result<(), S
         }))
         .timeout(std::time::Duration::from_secs(10))
         .send()
-        .await;
-    Ok(())
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
+    let body: serde_json::Value = res.json().await.unwrap_or_default();
+    Ok(body["status"].as_str().unwrap_or("ok").to_string())
+}
+
+#[tauri::command]
+pub async fn check_rewards_status(app: AppHandle) -> Result<RewardsStatus, String> {
+    let wallet_address = load_keypair(&app)
+        .map(|kp| kp.account_id.to_string())
+        .unwrap_or_default();
+    if wallet_address.is_empty() {
+        return Ok(RewardsStatus { registered: false, confirmed: false, email: None });
+    }
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("https://api.chronx.io/rewards/status?wallet={}", wallet_address))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
+    let status: RewardsStatus = res.json().await.map_err(|e| format!("Parse failed: {e}"))?;
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1175,6 +1205,7 @@ pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, S
             sender: v["sender"].as_str().unwrap_or("").to_string(),
             recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
             amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
+            amount_chronos: v["amount_chronos"].as_str().unwrap_or("0").to_string(),
             unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
             created_at: v["created_at"].as_i64().unwrap_or(0),
             status: v["status"].as_str().unwrap_or("Pending").to_string(),
@@ -1216,6 +1247,7 @@ pub async fn check_email_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, 
             sender: v["sender"].as_str().unwrap_or("").to_string(),
             recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
             amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
+            amount_chronos: v["amount_chronos"].as_str().unwrap_or("0").to_string(),
             unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
             created_at: v["created_at"].as_i64().unwrap_or(0),
             status: v["status"].as_str().unwrap_or("Pending").to_string(),
