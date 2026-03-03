@@ -58,7 +58,6 @@ struct AccountInfo {
 #[derive(Clone, Deserialize, Default)]
 struct TimeLockInfo {
     lock_id: String,
-    #[allow(dead_code)]
     sender: String,
     #[allow(dead_code)]
     recipient_account_id: String,
@@ -67,10 +66,21 @@ struct TimeLockInfo {
     #[serde(default)]
     amount_chronos: String,
     unlock_at: i64,
-    #[allow(dead_code)]
     created_at: i64,
     status: String,
     memo: Option<String>,
+    /// Hex of BLAKE3(claim_code) — locks with the same hash belong to a Promise Series.
+    #[serde(default)]
+    claim_secret_hash: Option<String>,
+    #[serde(default)]
+    cancellation_window_secs: Option<u32>,
+}
+
+/// Returned by `create_email_timelock_series`.
+#[derive(Clone, Deserialize, Default)]
+struct EmailSeriesResult {
+    tx_ids: Vec<String>,
+    claim_code: String,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -457,6 +467,9 @@ fn App() -> impl IntoView {
     // Incoming email locks detected for registered claim_email
     let email_locks = RwSignal::new(Vec::<TimeLockInfo>::new());
 
+    // Deep link claim code (from chronx://claim?code=KX-...)
+    let deep_link_code = RwSignal::new(String::new());
+
     // Best-effort check: if claim_email is set, query node for pending email locks
     let check_email = move || {
         spawn_local(async move {
@@ -552,6 +565,7 @@ fn App() -> impl IntoView {
     let on_refresh = move |_: web_sys::MouseEvent| {
         spawn_local(async move {
             load_wallet(online, loading, info, err_msg).await;
+            check_email();
         });
     };
 
@@ -608,6 +622,11 @@ fn App() -> impl IntoView {
                                 app_phase.set(AppPhase::Wallet);
                                 load_wallet(online, loading, info, err_msg).await;
                                 check_email();
+                                // Check for pending deep link (chronx://claim?code=...)
+                                if let Ok(Some(code)) = call::<Option<String>>("get_pending_deep_link", no_args()).await {
+                                    deep_link_code.set(code);
+                                    active_tab.set(1); // Navigate to Promises Made tab
+                                }
                             }
                             Err(e) => {
                                 pin_msg.set(format!("Error saving PIN: {e}"));
@@ -646,6 +665,11 @@ fn App() -> impl IntoView {
                             app_phase.set(AppPhase::Wallet);
                             load_wallet(online, loading, info, err_msg).await;
                             check_email();
+                            // Check for pending deep link (chronx://claim?code=...)
+                            if let Ok(Some(code)) = call::<Option<String>>("get_pending_deep_link", no_args()).await {
+                                deep_link_code.set(code);
+                                active_tab.set(1); // Navigate to Promises Made tab
+                            }
                         }
                         Ok(false) | Err(_) => {
                             let attempts = pin_attempts.get_untracked() + 1;
@@ -800,15 +824,13 @@ fn App() -> impl IntoView {
                         <button class=move || if active_tab.get()==0 {"tab active"} else {"tab"}
                             on:click=move |_| active_tab.set(0)>"💰 Account"</button>
                         <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(1)>"↗ Send"</button>
+                            on:click=move |_| active_tab.set(1)>"📋 Promises Made"</button>
                         <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(2)>"📋 Promises"</button>
+                            on:click=move |_| active_tab.set(2)>"📜 History"</button>
                         <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(3)>"📜 History"</button>
+                            on:click=move |_| active_tab.set(3)>"🎁 Rewards"</button>
                         <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(4)>"🎁 Rewards"</button>
-                        <button class=move || if active_tab.get()==5 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(5)>
+                            on:click=move |_| active_tab.set(4)>
                             "⚙ Settings"
                             {move || {
                                 let unread = notices.get().iter()
@@ -823,14 +845,14 @@ fn App() -> impl IntoView {
                         </button>
                     </nav>
 
-                    // Incoming email locks banner — only for non-self email sends, hide on Promises tab
+                    // Incoming email locks banner — red urgency, hide on Promises tab
                     {move || {
                         let locks = email_locks.get();
                         let my_id = info.get().map(|a| a.account_id).unwrap_or_default();
                         let incoming: Vec<&TimeLockInfo> = locks.iter()
                             .filter(|l| l.sender != my_id && l.status == "Pending")
                             .collect();
-                        if incoming.is_empty() || active_tab.get() == 2 {
+                        if incoming.is_empty() || active_tab.get() == 1 {
                             view! { <span></span> }.into_any()
                         } else {
                             let total_chronos: u128 = incoming.iter()
@@ -851,9 +873,9 @@ fn App() -> impl IntoView {
                                 format!("{}m left to claim", mins.max(1))
                             };
                             view! {
-                                <div class="email-locks-banner" on:click=move |_| active_tab.set(2)>
+                                <div class="email-locks-banner email-locks-urgent" on:click=move |_| active_tab.set(1)>
                                     {format!("\u{1f4ec} {} KX waiting for you!", format_kx(&total_chronos.to_string()))}
-                                    <span style="color:#e74c3c;font-weight:800;margin-left:8px">
+                                    <span style="font-weight:800;margin-left:8px">
                                         {countdown}
                                     </span>
                                     <span style="margin-left:4px">" Tap to claim \u{2192}"</span>
@@ -862,17 +884,16 @@ fn App() -> impl IntoView {
                         }
                     }}
 
-                    // Main content
+                    // Main content — 5 tabs: Account(0), Promises(1), History(2), Rewards(3), Settings(4)
                     <div>
                         {move || match active_tab.get() {
                             0 => view! {
                                 <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos />
                             }.into_any(),
-                            1 => view! { <SendPanel info=info pending_email_chronos=pending_email_chronos /> }.into_any(),
-                            2 => view! { <PromisesPanel info=info email_locks=email_locks on_email_check=check_email /> }.into_any(),
-                            3 => view! { <HistoryPanel /> }.into_any(),
-                            4 => view! { <RewardsPanel /> }.into_any(),
-                            5 => view! {
+                            1 => view! { <PromisesPanel info=info email_locks=email_locks on_email_check=check_email deep_link_code=deep_link_code /> }.into_any(),
+                            2 => view! { <HistoryPanel /> }.into_any(),
+                            3 => view! { <RewardsPanel active_tab=active_tab /> }.into_any(),
+                            4 => view! {
                                 <SettingsPanel
                                     online=online
                                     app_phase=app_phase
@@ -1203,6 +1224,10 @@ fn PinScreen(
                         view! { <span></span> }.into_any()
                     }
                 }}
+
+                <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
+                    "ChronX Wallet v1.4.16"
+                </p>
             </div>
         </div>
     }
@@ -1348,12 +1373,15 @@ fn AccountPanel(
     on_refresh: impl Fn(web_sys::MouseEvent) + 'static,
     pending_email_chronos: RwSignal<u64>,
 ) -> impl IntoView {
+    // Sub-tab: 0 = Receive (default), 1 = Send
+    let account_sub = RwSignal::new(0u8);
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
     let inc_loading  = RwSignal::new(false);
     let inc_page     = RwSignal::new(0usize);
     const INC_PAGE_SIZE: usize = 10;
     let qr_svg       = RwSignal::new(String::new());
+    let inc_claim_msg = RwSignal::new(String::new());
 
     Effect::new(move |_| {
         spawn_local(async move {
@@ -1395,160 +1423,222 @@ fn AccountPanel(
     };
 
     view! {
-        <div class="card">
-            <p class="label">"Account ID"</p>
-            <div class="copy-row">
-                <p class="mono"
-                   title="Click to copy address"
-                   style="cursor:pointer;flex:1"
-                   on:click=on_copy>
-                    {move || info.get()
-                        .map(|a| a.account_id)
-                        .unwrap_or_else(|| "\u{2014}".into())}
-                </p>
-                <button style="font-size:12px;padding:4px 10px" on:click=on_copy title="Copy address">
-                    {move || if copy_success.get() { "Copied!" } else { "\u{1f4cb} Copy" }}
-                </button>
-                <button style="font-size:12px;padding:4px 10px" on:click=on_toggle_qr>
-                    {move || if qr_svg.get().is_empty() { "📷 QR" } else { "Hide QR" }}
-                </button>
-            </div>
+        // ── Receive / Send sub-tab buttons ──────────────────────────────────
+        <div class="account-subtabs">
+            <button class=move || if account_sub.get()==0 {"account-subtab active"} else {"account-subtab"}
+                on:click=move |_| account_sub.set(0)>
+                "\u{1f4e5} Receive"
+            </button>
+            <button class=move || if account_sub.get()==1 {"account-subtab active"} else {"account-subtab"}
+                on:click=move |_| account_sub.set(1)>
+                "\u{2197}\u{fe0f} Send"
+            </button>
+        </div>
 
-            {move || {
-                let svg = qr_svg.get();
-                if svg.is_empty() {
-                    view! { <span></span> }.into_any()
-                } else {
-                    view! {
-                        <div style="text-align:center;margin-top:12px;padding:12px;background:#fff;border-radius:8px">
-                            <div inner_html=svg></div>
-                            <p style="color:#555;font-size:11px;margin-top:6px">
-                                "Scan on Send to transfer \u{b7} Scan on Send Later to make a promise"
-                            </p>
-                        </div>
-                    }.into_any()
-                }
-            }}
-
-            <div class="row">
-                <div>
-                    <p class="label">"Balance"</p>
-                    <p class="balance">
-                        {move || {
-                            if loading.get() { "\u{2026}".into() }
-                            else {
-                                info.get()
-                                    .map(|a| format!("{} KX", format_kx(&a.balance_chronos)))
-                                    .unwrap_or_else(|| "\u{2014}".into())
-                            }
-                        }}
+        // ── Receive sub-tab ─────────────────────────────────────────────────
+        <div style:display=move || if account_sub.get() == 0 { "" } else { "none" }>
+            <div class="card">
+                <p class="label">"Account ID"</p>
+                <div class="copy-row">
+                    <p class="mono"
+                       title="Click to copy address"
+                       style="cursor:pointer;flex:1"
+                       on:click=on_copy>
+                        {move || info.get()
+                            .map(|a| a.account_id)
+                            .unwrap_or_else(|| "\u{2014}".into())}
                     </p>
-                    <p class="label" style="margin-top:4px">
-                        "Spendable: "
-                        {move || {
-                            if loading.get() { "\u{2026}".into() }
-                            else {
-                                let pending = pending_email_chronos.get();
-                                let base_str = info.get()
-                                    .map(|a| a.spendable_chronos)
-                                    .unwrap_or_default();
-                                if base_str.is_empty() { return "\u{2014}".into(); }
-                                if pending > 0 {
-                                    let base: u128 = base_str.parse().unwrap_or(0);
-                                    let spendable = base.saturating_sub(pending as u128);
-                                    format!("{} KX  ({} KX pending email)",
-                                        format_kx(&spendable.to_string()),
-                                        format_kx(&pending.to_string()))
-                                } else {
-                                    format!("{} KX", format_kx(&base_str))
-                                }
-                            }
-                        }}
-                    </p>
-                    <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
-                    <p style="margin-top:8px;font-size:12px">
-                        <a class="exchange-link" href="#" on:click=move |ev| {
-                            ev.prevent_default();
-                            spawn_local(async move {
-                                let args = serde_wasm_bindgen::to_value(
-                                    &serde_json::json!({ "url": "https://coinmarketcap.com/currencies/chronx/" })
-                                ).unwrap_or(no_args());
-                                let _ = call::<()>("open_url", args).await;
-                            });
-                        }>"\u{1f4c8} View KX on CoinMarketCap"</a>
-                    </p>
+                    <button style="font-size:12px;padding:4px 10px" on:click=on_copy title="Copy address">
+                        {move || if copy_success.get() { "Copied!" } else { "\u{1f4cb} Copy" }}
+                    </button>
+                    <button style="font-size:12px;padding:4px 10px" on:click=on_toggle_qr>
+                        {move || if qr_svg.get().is_empty() { "\u{1f4f7} QR" } else { "Hide QR" }}
+                    </button>
                 </div>
-                <button on:click=on_refresh disabled=move || loading.get()>
-                    {move || if loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
-                </button>
-            </div>
 
-            {move || {
-                let e = err_msg.get();
-                if e.is_empty() { view! { <span></span> }.into_any() }
-                else { view! { <p class="error">{e}</p> }.into_any() }
-            }}
-
-            {move || {
-                let locks = incoming.get();
-                if inc_loading.get() {
-                    view! { <p class="muted" style="margin-top:12px">"Checking incoming promises\u{2026}"</p> }.into_any()
-                } else if locks.is_empty() {
-                    view! { <span></span> }.into_any()
-                } else {
-                    let inc_total = locks.len();
-                    let inc_total_pages = if inc_total == 0 { 1 } else { (inc_total + INC_PAGE_SIZE - 1) / INC_PAGE_SIZE };
-                    let inc_pg = inc_page.get().min(inc_total_pages.saturating_sub(1));
-                    let rows: Vec<_> = locks.into_iter()
-                        .skip(inc_pg * INC_PAGE_SIZE)
-                        .take(INC_PAGE_SIZE)
-                        .map(|lock| {
-                        let unlock_date = {
-                            let d = js_sys::Date::new(
-                                &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
-                            );
-                            format!("{:04}-{:02}-{:02}",
-                                d.get_utc_full_year(),
-                                d.get_utc_month() + 1,
-                                d.get_utc_date())
-                        };
+                {move || {
+                    let svg = qr_svg.get();
+                    if svg.is_empty() {
+                        view! { <span></span> }.into_any()
+                    } else {
                         view! {
-                            <div class="incoming-lock-row">
-                                <span class="tl-amount" style="color:#d4a84b">
-                                    {format_kx(&lock.amount_chronos)} " KX"
-                                </span>
-                                <span class="tl-unlock">"Unlocks " {unlock_date}</span>
-                                {lock.memo.map(|m| view! { <span class="tl-memo">{m}</span> })}
+                            <div style="text-align:center;margin-top:12px;padding:12px;background:#fff;border-radius:8px">
+                                <div inner_html=svg></div>
+                                <p style="color:#555;font-size:11px;margin-top:6px">
+                                    "Scan on Send to transfer \u{b7} Scan on Send Later to make a promise"
+                                </p>
                             </div>
-                        }
-                    }).collect();
-                    view! {
-                        <div style="margin-top:12px;border-top:1px solid #1e2130;padding-top:12px">
-                            <p class="label">"Incoming Promises"</p>
-                            <div class="timelock-list">{rows}</div>
-                            {if inc_total_pages > 1 {
-                                view! {
-                                    <div class="pagination-bar">
-                                        <button class="pill"
-                                            disabled={move || inc_page.get() == 0}
-                                            on:click={move |_| inc_page.update(|p| if *p > 0 { *p -= 1; })}>
-                                            "\u{2190} Prev"
-                                        </button>
-                                        <span class="page-indicator">
-                                            {format!("Page {} of {}", inc_pg + 1, inc_total_pages)}
-                                        </span>
-                                        <button class="pill"
-                                            disabled={move || inc_page.get() >= inc_total_pages - 1}
-                                            on:click={move |_| { inc_page.update(|p| { *p += 1; }); }}>
-                                            "Next \u{2192}"
-                                        </button>
-                                    </div>
-                                }.into_any()
-                            } else { view! { <span></span> }.into_any() }}
-                        </div>
-                    }.into_any()
-                }
-            }}
+                        }.into_any()
+                    }
+                }}
+
+                <div class="row">
+                    <div>
+                        <p class="label">"Balance"</p>
+                        <p class="balance">
+                            {move || {
+                                if loading.get() { "\u{2026}".into() }
+                                else {
+                                    info.get()
+                                        .map(|a| format!("{} KX", format_kx(&a.balance_chronos)))
+                                        .unwrap_or_else(|| "\u{2014}".into())
+                                }
+                            }}
+                        </p>
+                        <p class="label" style="margin-top:4px">
+                            "Spendable: "
+                            {move || {
+                                if loading.get() { "\u{2026}".into() }
+                                else {
+                                    let pending = pending_email_chronos.get();
+                                    let base_str = info.get()
+                                        .map(|a| a.spendable_chronos)
+                                        .unwrap_or_default();
+                                    if base_str.is_empty() { return "\u{2014}".into(); }
+                                    if pending > 0 {
+                                        let base: u128 = base_str.parse().unwrap_or(0);
+                                        let spendable = base.saturating_sub(pending as u128);
+                                        format!("{} KX  ({} KX pending email)",
+                                            format_kx(&spendable.to_string()),
+                                            format_kx(&pending.to_string()))
+                                    } else {
+                                        format!("{} KX", format_kx(&base_str))
+                                    }
+                                }
+                            }}
+                        </p>
+                        <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
+                        <p style="margin-top:8px;font-size:12px">
+                            <a class="exchange-link" href="#" on:click=move |ev| {
+                                ev.prevent_default();
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({ "url": "https://coinmarketcap.com/currencies/chronx/" })
+                                    ).unwrap_or(no_args());
+                                    let _ = call::<()>("open_url", args).await;
+                                });
+                            }>"\u{1f4c8} View KX on CoinMarketCap"</a>
+                        </p>
+                    </div>
+                    <button on:click=on_refresh disabled=move || loading.get()>
+                        {move || if loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
+                    </button>
+                </div>
+
+                {move || {
+                    let e = err_msg.get();
+                    if e.is_empty() { view! { <span></span> }.into_any() }
+                    else { view! { <p class="error">{e}</p> }.into_any() }
+                }}
+
+                {move || {
+                    let locks = incoming.get();
+                    if inc_loading.get() {
+                        view! { <p class="muted" style="margin-top:12px">"Checking incoming promises\u{2026}"</p> }.into_any()
+                    } else if locks.is_empty() {
+                        view! { <span></span> }.into_any()
+                    } else {
+                        let inc_total = locks.len();
+                        let inc_total_pages = if inc_total == 0 { 1 } else { (inc_total + INC_PAGE_SIZE - 1) / INC_PAGE_SIZE };
+                        let inc_pg = inc_page.get().min(inc_total_pages.saturating_sub(1));
+                        let rows: Vec<_> = locks.into_iter()
+                            .skip(inc_pg * INC_PAGE_SIZE)
+                            .take(INC_PAGE_SIZE)
+                            .map(|lock| {
+                            let now = (js_sys::Date::now() / 1000.0) as i64;
+                            let matured = lock.unlock_at <= now && lock.status == "Pending";
+                            let unlock_date = {
+                                let d = js_sys::Date::new(
+                                    &wasm_bindgen::JsValue::from_f64(lock.unlock_at as f64 * 1000.0)
+                                );
+                                format!("{:04}-{:02}-{:02}",
+                                    d.get_utc_full_year(),
+                                    d.get_utc_month() + 1,
+                                    d.get_utc_date())
+                            };
+                            let lock_id = lock.lock_id.clone();
+                            let on_claim_inc = move |_: web_sys::MouseEvent| {
+                                let lid = lock_id.clone();
+                                spawn_local(async move {
+                                    inc_claim_msg.set("Mining PoW\u{2026}".into());
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({ "lockIdHex": lid })
+                                    ).unwrap_or(no_args());
+                                    match call::<String>("claim_timelock", args).await {
+                                        Ok(txid) => {
+                                            inc_claim_msg.set(format!("Claimed! TxId: {}", &txid[..16]));
+                                            // Refresh incoming list + balance
+                                            if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
+                                                incoming.set(locks);
+                                            }
+                                            if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                                info.set(Some(fresh));
+                                            }
+                                        }
+                                        Err(e) => inc_claim_msg.set(format!("Error: {e}")),
+                                    }
+                                });
+                            };
+                            view! {
+                                <div class="incoming-lock-row">
+                                    <span class="tl-amount" style="color:#d4a84b">
+                                        {format_kx(&lock.amount_chronos)} " KX"
+                                    </span>
+                                    <span class="tl-unlock">{if matured { "Ready to claim!" } else { "Unlocks " }}</span>
+                                    {if !matured { Some(view! { <span class="tl-unlock">{unlock_date}</span> }) } else { None }}
+                                    {lock.memo.map(|m| view! { <span class="tl-memo">{m}</span> })}
+                                    {if matured {
+                                        view! {
+                                            <button class="claim-btn"
+                                                style="background:#d4a84b;color:#0a0a0a;margin-top:4px;padding:4px 12px;border-radius:4px;border:none;cursor:pointer;font-weight:600"
+                                                on:click=on_claim_inc>
+                                                "Claim Now"
+                                            </button>
+                                        }.into_any()
+                                    } else {
+                                        view! { <span></span> }.into_any()
+                                    }}
+                                </div>
+                            }
+                        }).collect();
+                        view! {
+                            <div style="margin-top:12px;border-top:1px solid #1e2130;padding-top:12px">
+                                <p class="label">"Incoming Promises"</p>
+                                {move || {
+                                    let m = inc_claim_msg.get();
+                                    if m.is_empty() { view! { <span></span> }.into_any() }
+                                    else { view! { <p class="msg" style="font-size:12px;margin:4px 0">{m}</p> }.into_any() }
+                                }}
+                                <div class="timelock-list">{rows}</div>
+                                {if inc_total_pages > 1 {
+                                    view! {
+                                        <div class="pagination-bar">
+                                            <button class="pill"
+                                                disabled={move || inc_page.get() == 0}
+                                                on:click={move |_| inc_page.update(|p| if *p > 0 { *p -= 1; })}>
+                                                "\u{2190} Prev"
+                                            </button>
+                                            <span class="page-indicator">
+                                                {format!("Page {} of {}", inc_pg + 1, inc_total_pages)}
+                                            </span>
+                                            <button class="pill"
+                                                disabled={move || inc_page.get() >= inc_total_pages - 1}
+                                                on:click={move |_| { inc_page.update(|p| { *p += 1; }); }}>
+                                                "Next \u{2192}"
+                                            </button>
+                                        </div>
+                                    }.into_any()
+                                } else { view! { <span></span> }.into_any() }}
+                            </div>
+                        }.into_any()
+                    }
+                }}
+            </div>
+        </div>
+
+        // ── Send sub-tab ────────────────────────────────────────────────────
+        <div style:display=move || if account_sub.get() == 1 { "" } else { "none" }>
+            <SendPanel info=info pending_email_chronos=pending_email_chronos />
         </div>
     }
 }
@@ -1608,6 +1698,9 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
     let msg       = RwSignal::new(String::new());
     let scan_msg  = RwSignal::new(String::new());
     let spam_warn = RwSignal::new(false);
+
+    // Series entries for Email + Send Later (additional payments beyond the first)
+    let series_entries: RwSignal<Vec<(RwSignal<String>, RwSignal<String>, RwSignal<String>)>> = RwSignal::new(Vec::new()); // (amount, date, memo)
 
     let utc_clock = RwSignal::new(String::new());
     Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
@@ -1817,63 +1910,148 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                 Some(t) => t,
                 None => { msg.set("Error: invalid date.".into()); return; }
             };
-            spawn_local(async move {
-                sending.set(true);
-                pending_email_chronos.set((amt * 1_000_000.0) as u64);
-                msg.set("Mining PoW\u{2026} (~10s)".into());
-                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                    "email": email_str.clone(),
-                    "amountKx": amt,
-                    "unlockAtUnix": unlock_unix,
+
+            // Check if this is a series (additional entries present)
+            let extra = series_entries.get_untracked();
+            if !extra.is_empty() {
+                // --- Promise Series ---
+                // Build entries array: first entry from main fields, rest from series_entries
+                let mut entries_json = vec![serde_json::json!({
+                    "amount_kx": amt,
+                    "unlock_at_unix": unlock_unix,
                     "memo": memo_opt.clone(),
-                })).unwrap_or(no_args());
-                match call::<EmailLockResult>("create_email_timelock", args).await {
-                    Ok(result) => {
-                        let txid = result.tx_id.clone();
-                        let claim_code = result.claim_code.clone();
-                        // Save email→lock mapping for History tab (includes claim code)
-                        let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                            "lockId": txid.clone(),
-                            "email": email_str.clone(),
-                            "claimCode": claim_code.clone(),
-                        })).unwrap_or(no_args());
-                        let _ = call::<()>("save_email_send", save_args).await;
-                        email.set(String::new());
-                        amount.set(String::new());
-                        lock_date.set(String::new());
-                        memo.set(String::new());
-                        let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                            "email": email_str,
-                            "amountKx": amt,
-                            "unlockAtUnix": unlock_unix,
-                            "memo": memo_opt,
-                            "claimCode": claim_code.clone(),
-                        })).unwrap_or(no_args());
-                        match call::<()>("notify_email_recipient", notify_args).await {
-                            Ok(_) => { msg.set(format!("Sent! Email delivered. Claim code: {claim_code}")); spam_warn.set(true); }
-                            Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
-                        }
-                        let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
-                        // Check immediately (transaction is already on-chain), then poll as fallback
-                        for i in 0..=10u8 {
-                            if i > 0 { delay_ms(1500).await; }
-                            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                if a.nonce > prev_nonce { info.set(Some(a)); break; }
-                            }
-                        }
-                        // Always force a final refresh so balance is correct even if nonce poll timed out
-                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                            info.set(Some(a));
-                        }
-                        pending_email_chronos.set(0);
-                    }
-                    Err(e) => {
-                        pending_email_chronos.set(0);
-                        msg.set(format!("Error: {e}"));
-                    }
+                })];
+                for (s_amt, s_date, s_memo) in &extra {
+                    let sa: f64 = s_amt.get_untracked().parse().unwrap_or(0.0);
+                    let sd = s_date.get_untracked();
+                    let su = match date_str_to_unix(&sd) {
+                        Some(t) => t,
+                        None => { msg.set("Error: invalid date in a series entry.".into()); return; }
+                    };
+                    let sm = s_memo.get_untracked();
+                    if sa <= 0.0 { msg.set("Error: all series amounts must be > 0.".into()); return; }
+                    entries_json.push(serde_json::json!({
+                        "amount_kx": sa,
+                        "unlock_at_unix": su,
+                        "memo": if sm.is_empty() { None::<String> } else { Some(sm) },
+                    }));
                 }
-                sending.set(false);
-            });
+                let total_chronos: u64 = entries_json.iter()
+                    .map(|e| (e["amount_kx"].as_f64().unwrap_or(0.0) * 1_000_000.0) as u64)
+                    .sum();
+                spawn_local(async move {
+                    sending.set(true);
+                    pending_email_chronos.set(total_chronos);
+                    msg.set(format!("Mining PoW for {} payments\u{2026}", entries_json.len()));
+                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                        "email": email_str.clone(),
+                        "entries": entries_json,
+                    })).unwrap_or(no_args());
+                    match call::<EmailSeriesResult>("create_email_timelock_series", args).await {
+                        Ok(result) => {
+                            let claim_code = result.claim_code.clone();
+                            let count = result.tx_ids.len();
+                            // Save each lock's email mapping
+                            for txid in &result.tx_ids {
+                                let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                    "lockId": txid, "email": email_str.clone(), "claimCode": claim_code.clone(),
+                                })).unwrap_or(no_args());
+                                let _ = call::<()>("save_email_send", save_args).await;
+                            }
+                            email.set(String::new());
+                            amount.set(String::new());
+                            lock_date.set(String::new());
+                            memo.set(String::new());
+                            series_entries.set(Vec::new());
+                            // Notify recipient (series-aware)
+                            let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                "email": email_str,
+                                "amountKx": amt,
+                                "unlockAtUnix": unlock_unix,
+                                "memo": memo_opt,
+                                "claimCode": claim_code.clone(),
+                            })).unwrap_or(no_args());
+                            match call::<()>("notify_email_recipient", notify_args).await {
+                                Ok(_) => { msg.set(format!("Series sent! {count} promises created. Claim code: {claim_code}")); spam_warn.set(true); }
+                                Err(_) => { msg.set(format!("Series on-chain! Email failed \u{2014} claim code: {claim_code}")); }
+                            }
+                            // Poll for balance update
+                            let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
+                            for i in 0..=10u8 {
+                                if i > 0 { delay_ms(1500).await; }
+                                if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                    if a.nonce > prev_nonce { info.set(Some(a)); break; }
+                                }
+                            }
+                            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                info.set(Some(a));
+                            }
+                            pending_email_chronos.set(0);
+                        }
+                        Err(e) => {
+                            pending_email_chronos.set(0);
+                            msg.set(format!("Error: {e}"));
+                        }
+                    }
+                    sending.set(false);
+                });
+            } else {
+                // --- Single email send ---
+                spawn_local(async move {
+                    sending.set(true);
+                    pending_email_chronos.set((amt * 1_000_000.0) as u64);
+                    msg.set("Mining PoW\u{2026} (~10s)".into());
+                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                        "email": email_str.clone(),
+                        "amountKx": amt,
+                        "unlockAtUnix": unlock_unix,
+                        "memo": memo_opt.clone(),
+                    })).unwrap_or(no_args());
+                    match call::<EmailLockResult>("create_email_timelock", args).await {
+                        Ok(result) => {
+                            let txid = result.tx_id.clone();
+                            let claim_code = result.claim_code.clone();
+                            let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                "lockId": txid.clone(),
+                                "email": email_str.clone(),
+                                "claimCode": claim_code.clone(),
+                            })).unwrap_or(no_args());
+                            let _ = call::<()>("save_email_send", save_args).await;
+                            email.set(String::new());
+                            amount.set(String::new());
+                            lock_date.set(String::new());
+                            memo.set(String::new());
+                            let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                "email": email_str,
+                                "amountKx": amt,
+                                "unlockAtUnix": unlock_unix,
+                                "memo": memo_opt,
+                                "claimCode": claim_code.clone(),
+                            })).unwrap_or(no_args());
+                            match call::<()>("notify_email_recipient", notify_args).await {
+                                Ok(_) => { msg.set(format!("Sent! Email delivered. Claim code: {claim_code}")); spam_warn.set(true); }
+                                Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
+                            }
+                            let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
+                            for i in 0..=10u8 {
+                                if i > 0 { delay_ms(1500).await; }
+                                if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                    if a.nonce > prev_nonce { info.set(Some(a)); break; }
+                                }
+                            }
+                            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                info.set(Some(a));
+                            }
+                            pending_email_chronos.set(0);
+                        }
+                        Err(e) => {
+                            pending_email_chronos.set(0);
+                            msg.set(format!("Error: {e}"));
+                        }
+                    }
+                    sending.set(false);
+                });
+            }
         }
     };
 
@@ -2095,6 +2273,51 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
+            // Series entries (Email + Send Later only)
+            {move || {
+                if send_sub.get() != 1 || send_mode.get() != 1 {
+                    return view! { <span></span> }.into_any();
+                }
+                let entries = series_entries.get();
+                view! {
+                    <div>
+                        {entries.into_iter().enumerate().map(|(i, (s_amt, s_date, s_memo))| {
+                            view! {
+                                <div class="series-entry">
+                                    <div style="display:flex;justify-content:space-between;align-items:center">
+                                        <span style="font-size:12px;color:#9ca3af;font-weight:600">{format!("Payment #{}", i + 2)}</span>
+                                        <button class="remove-btn" on:click=move |_| {
+                                            series_entries.update(|v| { v.remove(i); });
+                                        }>"✕"</button>
+                                    </div>
+                                    <input type="number" class="input" placeholder="Amount (KX)" step="0.000001" min="0"
+                                        prop:value=move || s_amt.get()
+                                        on:input=move |ev| s_amt.set(event_target_value(&ev))
+                                        disabled=move || sending.get() />
+                                    <input type="datetime-local" class="input" style="margin-top:4px"
+                                        prop:value=move || s_date.get()
+                                        on:input=move |ev| s_date.set(event_target_value(&ev))
+                                        disabled=move || sending.get() />
+                                    <input type="text" class="input" placeholder="Memo (optional)" maxlength="256" style="margin-top:4px"
+                                        prop:value=move || s_memo.get()
+                                        on:input=move |ev| s_memo.set(event_target_value(&ev))
+                                        disabled=move || sending.get() />
+                                </div>
+                            }
+                        }).collect::<Vec<_>>()}
+                        <button class="pill" style="width:100%;margin:8px 0;color:#d4a84b;border-color:#d4a84b"
+                            disabled=move || sending.get() || (series_entries.get().len() >= 9)
+                            on:click=move |_| {
+                                series_entries.update(|v| {
+                                    v.push((RwSignal::new(String::new()), RwSignal::new(String::new()), RwSignal::new(String::new())));
+                                });
+                            }>
+                            "+ Add Another Payment"
+                        </button>
+                    </div>
+                }.into_any()
+            }}
+
             // Send Later warning
             {move || if send_mode.get() == 1 {
                 view! {
@@ -2109,8 +2332,11 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
             <button class=move || if send_mode.get()==1 { "primary danger" } else { "primary" }
                 on:click=on_send disabled=move || sending.get()>
                 {move || {
+                    let has_series = !series_entries.get().is_empty() && send_sub.get() == 1 && send_mode.get() == 1;
                     if sending.get() {
                         if send_sub.get() == 1 || send_mode.get() == 0 { "Sending\u{2026}" } else { "Promising\u{2026}" }
+                    } else if has_series {
+                        "Send Promise Series"
                     } else if send_sub.get() == 1 {
                         "Send to Email"
                     } else if send_mode.get() == 1 {
@@ -2151,6 +2377,7 @@ fn PromisesPanel(
     info: RwSignal<Option<AccountInfo>>,
     email_locks: RwSignal<Vec<TimeLockInfo>>,
     on_email_check: impl Fn() + Clone + 'static,
+    deep_link_code: RwSignal<String>,
 ) -> impl IntoView {
     let timelocks  = RwSignal::new(Vec::<TimeLockInfo>::new());
     let tl_loading = RwSignal::new(false);
@@ -2263,6 +2490,10 @@ fn PromisesPanel(
                                                     .filter(|l| l.lock_id != lid)
                                                     .collect();
                                                 email_locks.set(remaining);
+                                                // Refresh balance
+                                                if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                                    info.set(Some(fresh));
+                                                }
                                             }
                                             Err(e) => claim_msg.set(format!("Error: {e}")),
                                         }
@@ -2351,6 +2582,169 @@ fn PromisesPanel(
                     }.into_any()
                 }
             }}
+
+            // ── Claim with Code (standalone + series) ──────────────────────────
+            {
+                let standalone_lock_id = RwSignal::new(String::new());
+                // Pre-fill from deep link if available
+                let dl_code = deep_link_code.get_untracked();
+                let standalone_code    = RwSignal::new(dl_code.clone());
+                if !dl_code.is_empty() {
+                    deep_link_code.set(String::new()); // consume it
+                }
+                let standalone_msg     = RwSignal::new(String::new());
+                let standalone_busy    = RwSignal::new(false);
+                let series_claim_code  = RwSignal::new(String::new());
+                let series_msg         = RwSignal::new(String::new());
+                let series_busy        = RwSignal::new(false);
+                view! {
+                    // Series claim: appears when multiple pending email locks exist
+                    {move || {
+                        let locks = email_locks.get();
+                        let my_id = info.get().map(|a| a.account_id).unwrap_or_default();
+                        let pending_cross: Vec<&TimeLockInfo> = locks.iter()
+                            .filter(|l| l.sender != my_id && l.status == "Pending")
+                            .collect();
+                        if pending_cross.len() < 2 {
+                            return view! { <span></span> }.into_any();
+                        }
+                        let lock_ids: Vec<String> = pending_cross.iter().map(|l| l.lock_id.clone()).collect();
+                        let count = pending_cross.len();
+                        let total: u128 = pending_cross.iter()
+                            .map(|l| l.amount_chronos.parse::<u128>().unwrap_or(0))
+                            .sum();
+                        view! {
+                            <div class="claim-code-section" style="margin:16px 0;padding:14px;border:1px solid #d4a84b;border-radius:10px;background:#1a1a10">
+                                <p class="section-title" style="color:#d4a84b">
+                                    {format!("Claim Series ({count} promises, {} KX total)", format_kx(&total.to_string()))}
+                                </p>
+                                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                                    "Enter one claim code to claim all promises in this series at once."
+                                </p>
+                                <input
+                                    type="text"
+                                    placeholder="KX-XXXX-XXXX-XXXX-XXXX"
+                                    class="input-field claim-code-input"
+                                    style="font-family:monospace;font-size:13px;letter-spacing:1px;text-align:center;margin-bottom:8px"
+                                    prop:value=move || series_claim_code.get()
+                                    on:input=move |ev| series_claim_code.set(event_target_value(&ev))
+                                />
+                                <button
+                                    class="btn-primary"
+                                    style="width:100%;background:#d4a84b;color:#0a0a0a;font-weight:700"
+                                    disabled=move || series_busy.get()
+                                    on:click=move |_| {
+                                        let code = series_claim_code.get_untracked().trim().to_string();
+                                        if code.is_empty() {
+                                            series_msg.set("Enter your claim code".into());
+                                            return;
+                                        }
+                                        let ids = lock_ids.clone();
+                                        series_busy.set(true);
+                                        spawn_local(async move {
+                                            series_msg.set("Mining PoW\u{2026}".into());
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "lockIds": ids, "claimCode": code })
+                                            ).unwrap_or(no_args());
+                                            match call::<Vec<String>>("claim_email_series", args).await {
+                                                Ok(txids) => {
+                                                    series_msg.set(format!("Claimed {} promises!", txids.len()));
+                                                    series_claim_code.set(String::new());
+                                                    // Remove claimed locks
+                                                    email_locks.update(|locks| {
+                                                        locks.retain(|l| !ids.contains(&l.lock_id));
+                                                    });
+                                                }
+                                                Err(e) => series_msg.set(format!("Error: {e}")),
+                                            }
+                                            series_busy.set(false);
+                                        });
+                                    }
+                                >
+                                    {move || if series_busy.get() { "Claiming\u{2026}" } else { "Claim All" }}
+                                </button>
+                                {move || {
+                                    let s = series_msg.get();
+                                    if s.is_empty() { view! { <span></span> }.into_any() }
+                                    else {
+                                        let cls = if s.starts_with("Error") || s.starts_with("Enter") { "msg error" }
+                                                  else if s.starts_with("Mining") || s.starts_with("Claiming") { "msg mining" }
+                                                  else { "msg success" };
+                                        view! { <p class=cls style="margin-top:6px">{s}</p> }.into_any()
+                                    }
+                                }}
+                            </div>
+                        }.into_any()
+                    }}
+
+                    // Single lock claim with code
+                    <div class="claim-code-section" style="margin:16px 0;padding:14px;border:1px solid #333;border-radius:10px;background:#151515">
+                        <p class="section-title">"Claim with Code"</p>
+                        <p class="muted" style="font-size:12px;margin-bottom:8px">
+                            "Have a claim code? Enter the Lock ID and code below to claim your KX."
+                        </p>
+                        <input
+                            type="text"
+                            placeholder="Lock ID (hex)"
+                            class="input-field"
+                            style="font-family:monospace;font-size:12px;margin-bottom:6px"
+                            prop:value=move || standalone_lock_id.get()
+                            on:input=move |ev| standalone_lock_id.set(event_target_value(&ev))
+                        />
+                        <input
+                            type="text"
+                            placeholder="KX-XXXX-XXXX-XXXX-XXXX"
+                            class="input-field claim-code-input"
+                            style="font-family:monospace;font-size:13px;letter-spacing:1px;text-align:center;margin-bottom:8px"
+                            prop:value=move || standalone_code.get()
+                            on:input=move |ev| standalone_code.set(event_target_value(&ev))
+                        />
+                        <button
+                            class="btn-primary"
+                            style="width:100%"
+                            disabled=move || standalone_busy.get()
+                            on:click=move |_| {
+                                let lid = standalone_lock_id.get_untracked().trim().to_string();
+                                let code = standalone_code.get_untracked().trim().to_string();
+                                if lid.is_empty() || code.is_empty() {
+                                    standalone_msg.set("Enter both Lock ID and claim code".into());
+                                    return;
+                                }
+                                standalone_busy.set(true);
+                                spawn_local(async move {
+                                    standalone_msg.set("Mining PoW\u{2026}".into());
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({ "lockIdHex": lid, "claimCode": code })
+                                    ).unwrap_or(no_args());
+                                    match call::<String>("claim_email_timelock", args).await {
+                                        Ok(txid) => {
+                                            standalone_msg.set(format!("Claimed! TxId: {txid}"));
+                                            standalone_lock_id.set(String::new());
+                                            standalone_code.set(String::new());
+                                            // Also remove from email_locks if present
+                                            email_locks.update(|locks| locks.retain(|l| l.lock_id != lid));
+                                        }
+                                        Err(e) => standalone_msg.set(format!("Error: {e}")),
+                                    }
+                                    standalone_busy.set(false);
+                                });
+                            }
+                        >
+                            {move || if standalone_busy.get() { "Claiming\u{2026}" } else { "Claim Now" }}
+                        </button>
+                        {move || {
+                            let s = standalone_msg.get();
+                            if s.is_empty() { view! { <span></span> }.into_any() }
+                            else {
+                                let cls = if s.starts_with("Error") || s.starts_with("Enter") { "msg error" }
+                                          else if s.starts_with("Mining") || s.starts_with("Claiming") { "msg mining" }
+                                          else { "msg success" };
+                                view! { <p class=cls style="margin-top:6px">{s}</p> }.into_any()
+                            }
+                        }}
+                    </div>
+                }
+            }
 
             <div class="row" style="margin-top:8px">
                 <p class="section-title">"Promises I Have Sent"</p>
@@ -2459,8 +2853,17 @@ fn PromisesPanel(
                                                 &serde_json::json!({ "lockIdHex": lid2 })
                                             ).unwrap_or(no_args());
                                             match call::<String>("claim_timelock", args).await {
-                                                Ok(txid) => claim_msg.set(format!("Claimed! TxId: {txid}")),
-                                                Err(e)   => claim_msg.set(format!("Error: {e}")),
+                                                Ok(txid) => {
+                                                    claim_msg.set(format!("Claimed! TxId: {txid}"));
+                                                    // Refresh timelocks + balance
+                                                    if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                                        info.set(Some(fresh));
+                                                    }
+                                                    if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_timelocks", no_args()).await {
+                                                        timelocks.set(locks);
+                                                    }
+                                                }
+                                                Err(e) => claim_msg.set(format!("Error: {e}")),
                                             }
                                         });
                                     }
@@ -2879,13 +3282,23 @@ struct RewardsStatus {
 }
 
 #[component]
-fn RewardsPanel() -> impl IntoView {
+fn RewardsPanel(active_tab: RwSignal<u8>) -> impl IntoView {
     let email      = RwSignal::new(String::new());
     // 0 = loading, 1 = not registered, 2 = pending confirmation, 3 = confirmed
     let phase      = RwSignal::new(0u8);
     let masked_email = RwSignal::new(String::new());
     let reg_msg    = RwSignal::new(String::new());
     let submitting = RwSignal::new(false);
+    let has_claim_emails = RwSignal::new(true); // assume true until we check
+
+    // Check claim emails on mount
+    spawn_local(async move {
+        if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+            has_claim_emails.set(!emails.is_empty());
+        } else {
+            has_claim_emails.set(false);
+        }
+    });
 
     // Check rewards status on mount
     spawn_local(async move {
@@ -2967,6 +3380,25 @@ fn RewardsPanel() -> impl IntoView {
             <p class="label" style="color:var(--muted);margin-bottom:16px;">
                 "Earn free KX for being part of the ChronX community. Register your wallet to receive rewards, announcements, and exclusive airdrops."
             </p>
+
+            // Claim email nudge
+            {move || {
+                if !has_claim_emails.get() {
+                    view! {
+                        <div class="rewards-nudge" style="margin-bottom:16px;">
+                            <p style="font-size:13px;font-weight:600;color:#d4a84b;">
+                                "Set up claim emails in Settings to receive KX sent to your email address."
+                            </p>
+                            <button class="pill" style="margin-top:8px;color:#d4a84b;border-color:#d4a84b;"
+                                on:click=move |_| active_tab.set(4)>
+                                "Go to Settings"
+                            </button>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }
+            }}
 
             {move || match phase.get() {
                 0 => {
@@ -3121,8 +3553,8 @@ fn SettingsPanel(
     let show_updates = RwSignal::new(false);
     let show_change_pin = RwSignal::new(false);
 
-    // Claim email (local only, never sent to server)
-    let claim_email_val = RwSignal::new(String::new());
+    // Multi claim emails (up to 3, local only, never sent to server)
+    let claim_emails = RwSignal::new(Vec::<String>::new());
     let claim_email_msg = RwSignal::new(String::new());
 
     // Change PIN state
@@ -3136,9 +3568,8 @@ fn SettingsPanel(
         spawn_local(async move {
             let url = call::<String>("get_node_url", no_args()).await.unwrap_or_default();
             node_url.set(url);
-            let email = call::<Option<String>>("get_claim_email", no_args()).await
-                .ok().flatten().unwrap_or_default();
-            claim_email_val.set(email);
+            let emails = call::<Vec<String>>("get_claim_emails", no_args()).await.unwrap_or_default();
+            claim_emails.set(emails);
         });
     });
 
@@ -3175,17 +3606,14 @@ fn SettingsPanel(
         });
     };
 
-    let on_save_email = move |_: web_sys::MouseEvent| {
-        let email = claim_email_val.get_untracked();
+    let on_save_emails = move |_: web_sys::MouseEvent| {
+        let emails = claim_emails.get_untracked();
         spawn_local(async move {
             let args = serde_wasm_bindgen::to_value(
-                &serde_json::json!({ "email": email })
+                &serde_json::json!({ "emails": emails })
             ).unwrap_or(no_args());
-            match call::<()>("set_claim_email", args).await {
-                Ok(_) => {
-                    let msg = if email.trim().is_empty() { "Email cleared." } else { "Email saved on this device only." };
-                    claim_email_msg.set(msg.into());
-                }
+            match call::<()>("set_claim_emails", args).await {
+                Ok(_) => claim_email_msg.set("Emails saved on this device only.".into()),
                 Err(e) => claim_email_msg.set(format!("Error: {e}")),
             }
         });
@@ -3363,34 +3791,56 @@ fn SettingsPanel(
                 }>"🔐 Change PIN"</button>
             </div>
 
-            // My Email for KX Claims
+            // My Emails for KX Claims (up to 3)
             <div class="settings-section">
-                <p class="label">"My Email for KX Claims"</p>
+                <p class="label">"My Emails for KX Claims"</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    "If someone sends KX to your email address, your wallet uses this to detect it automatically. "
-                    "Stored on this device only — never sent to any server."
+                    "If someone sends KX to your email, your wallet detects it automatically. "
+                    "Add up to 3 email addresses. Stored on this device only — never sent to any server."
                 </p>
-                <div class="field">
-                    <input type="email" placeholder="you@example.com"
-                        prop:value=move || claim_email_val.get()
-                        on:input=move |ev| {
-                            claim_email_val.set(event_target_value(&ev));
-                            claim_email_msg.set(String::new());
-                        } />
+                <div class="claim-emails-list">
+                    {move || {
+                        let emails = claim_emails.get();
+                        let rows: Vec<_> = emails.iter().enumerate().map(|(i, email)| {
+                            let email_clone = email.clone();
+                            let idx = i;
+                            view! {
+                                <div class="claim-email-row">
+                                    <input type="email" placeholder="you@example.com"
+                                        prop:value=email_clone
+                                        on:input=move |ev| {
+                                            let val = event_target_value(&ev);
+                                            claim_emails.update(|list| {
+                                                if idx < list.len() { list[idx] = val; }
+                                            });
+                                            claim_email_msg.set(String::new());
+                                        } />
+                                    <button style="font-size:12px;padding:4px 8px;color:#f87171;background:transparent;border:1px solid #f87171;border-radius:4px"
+                                        on:click=move |_| {
+                                            claim_emails.update(|list| { if idx < list.len() { list.remove(idx); } });
+                                            claim_email_msg.set(String::new());
+                                        }
+                                    >"\u{2716}"</button>
+                                </div>
+                            }
+                        }).collect();
+                        view! { <div>{rows}</div> }.into_any()
+                    }}
                 </div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    <button class="primary" on:click=on_save_email>"Save Email"</button>
-                    <button on:click=move |_| {
-                        claim_email_val.set(String::new());
-                        claim_email_msg.set(String::new());
-                        let args = serde_wasm_bindgen::to_value(
-                            &serde_json::json!({ "email": "" })
-                        ).unwrap_or(no_args());
-                        spawn_local(async move {
-                            let _ = call::<()>("set_claim_email", args).await;
-                            claim_email_msg.set("Email cleared.".into());
-                        });
-                    }>"Clear"</button>
+                    {move || {
+                        if claim_emails.get().len() < 3 {
+                            view! {
+                                <button on:click=move |_| {
+                                    claim_emails.update(|list| list.push(String::new()));
+                                    claim_email_msg.set(String::new());
+                                }>"+ Add Email"</button>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }
+                    }}
+                    <button class="primary" on:click=on_save_emails>"Save Emails"</button>
                 </div>
                 {move || {
                     let s = claim_email_msg.get();

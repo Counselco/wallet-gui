@@ -1028,6 +1028,114 @@ input[type="datetime-local"] { color-scheme: dark; }
 }
 .email-locks-banner:hover { background: rgba(212,168,75,0.22); }
 
+/* Red urgency variant for email lock expiry */
+.email-locks-banner.email-locks-urgent {
+    background: linear-gradient(135deg, rgba(231,76,60,0.2) 0%, rgba(192,57,43,0.1) 100%);
+    border-bottom: 1px solid rgba(231,76,60,0.5);
+    color: #f87171;
+}
+.email-locks-banner.email-locks-urgent:hover { background: rgba(231,76,60,0.3); }
+
+/* ── Account Receive / Send sub-tabs ──────────────────────────────────────── */
+.account-subtabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.account-subtab {
+    flex: 1;
+    padding: 14px 12px;
+    font-size: 15px;
+    font-weight: 700;
+    border: 1px solid #2d3748;
+    border-radius: 8px;
+    background: #161b27;
+    color: #8b9197;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+}
+.account-subtab.active {
+    background: #1e2845;
+    color: #d4a84b;
+    border-color: #d4a84b;
+}
+.account-subtab:hover:not(.active) {
+    background: #1a1f2e;
+    color: #a5b4c8;
+}
+
+/* ── Claim with Code section ──────────────────────────────────────────────── */
+.claim-code-section {
+    background: rgba(212,168,75,0.06);
+    border: 1px solid rgba(212,168,75,0.2);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+.claim-code-input {
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 14px;
+    text-align: center;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* ── Series entry row ─────────────────────────────────────────────────────── */
+.series-entry {
+    background: #161b27;
+    border: 1px solid #2d3748;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 8px;
+    position: relative;
+}
+.series-entry .remove-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: #f87171;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+}
+
+/* ── Email claim list ─────────────────────────────────────────────────────── */
+.claim-emails-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.claim-email-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.claim-email-row input { flex: 1; }
+
+/* ── Rewards nudge ────────────────────────────────────────────────────────── */
+.rewards-nudge {
+    background: rgba(212,168,75,0.08);
+    border: 1px solid rgba(212,168,75,0.25);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+    text-align: center;
+    font-size: 13px;
+    color: #d4a84b;
+}
+.rewards-nudge a, .rewards-nudge button {
+    color: #d4a84b;
+    text-decoration: underline;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    font-size: 13px;
+}
+
 /* ── Email send status badges ───────────────────────────────────────────────── */
 .email-badge {
     display: inline-block;

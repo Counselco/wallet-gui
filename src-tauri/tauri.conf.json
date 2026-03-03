@@ -1,6 +1,6 @@
 {
   "productName": "ChronX Wallet",
-  "version": "1.4.14",
+  "version": "1.4.16",
   "identifier": "com.chronx.wallet",
   "build": {
     "frontendDist": "../dist",
@@ -14,6 +14,13 @@
     "icon": ["icons/icon.png", "icons/icon.ico"],
     "android": {
       "minSdkVersion": 24
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["chronx"]
+      }
     }
   },
   "app": {

@@ -65,16 +65,34 @@ struct WalletConfig {
     node_url: String,
     #[serde(default)]
     pin_hash: Option<String>,
+    /// Legacy single claim email (kept for backward compat with old config files).
     #[serde(default)]
     claim_email: Option<String>,
+    /// Up to 3 claim email addresses stored locally for incoming email-lock discovery.
+    #[serde(default)]
+    claim_emails: Option<Vec<String>>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
     let path = config_path(app);
-    std::fs::read_to_string(&path)
+    let mut cfg: WalletConfig = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(WalletConfig { node_url: DEFAULT_RPC_URL.to_string(), pin_hash: None, claim_email: None })
+        .unwrap_or(WalletConfig {
+            node_url: DEFAULT_RPC_URL.to_string(),
+            pin_hash: None,
+            claim_email: None,
+            claim_emails: None,
+        });
+    // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
+    if cfg.claim_emails.is_none() {
+        if let Some(ref e) = cfg.claim_email {
+            if !e.trim().is_empty() {
+                cfg.claim_emails = Some(vec![e.trim().to_string()]);
+            }
+        }
+    }
+    cfg
 }
 
 fn rpc_url(app: &AppHandle) -> String {
@@ -118,6 +136,12 @@ pub struct TimeLockInfo {
     pub created_at: i64,
     pub status: String,
     pub memo: Option<String>,
+    /// Hex of BLAKE3(claim_code) — locks sharing the same hash belong to a Promise Series.
+    #[serde(default)]
+    pub claim_secret_hash: Option<String>,
+    /// Cancellation window in seconds (72 h for email, 24 h for ≥1-year).
+    #[serde(default)]
+    pub cancellation_window_secs: Option<u32>,
 }
 
 /// Returned by `create_email_timelock` — carries both the on-chain TxId and
@@ -125,6 +149,21 @@ pub struct TimeLockInfo {
 #[derive(Debug, Serialize, Clone)]
 pub struct EmailLockResult {
     pub tx_id: String,
+    pub claim_code: String,
+}
+
+/// Input for a single entry in a Promise Series.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SeriesEntryInput {
+    pub amount_kx: f64,
+    pub unlock_at_unix: i64,
+    pub memo: Option<String>,
+}
+
+/// Returned by `create_email_timelock_series`.
+#[derive(Debug, Serialize, Clone)]
+pub struct EmailSeriesResult {
+    pub tx_ids: Vec<String>,
     pub claim_code: String,
 }
 
@@ -548,20 +587,27 @@ pub async fn get_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> 
 
     let locks = raw
         .into_iter()
-        .map(|v| TimeLockInfo {
-            lock_id: v["lock_id"].as_str().unwrap_or("").to_string(),
-            sender: v["sender"].as_str().unwrap_or("").to_string(),
-            recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
-            amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
-            amount_chronos: v["amount_chronos"].as_str().unwrap_or("0").to_string(),
-            unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
-            created_at: v["created_at"].as_i64().unwrap_or(0),
-            status: v["status"].as_str().unwrap_or("Pending").to_string(),
-            memo: v["memo"].as_str().map(|s| s.to_string()),
-        })
+        .map(|v| parse_timelock_json(&v))
         .collect();
 
     Ok(locks)
+}
+
+/// Shared helper: parse a JSON Value into TimeLockInfo (used by get_timelocks and check_email_timelocks).
+fn parse_timelock_json(v: &serde_json::Value) -> TimeLockInfo {
+    TimeLockInfo {
+        lock_id: v["lock_id"].as_str().unwrap_or("").to_string(),
+        sender: v["sender"].as_str().unwrap_or("").to_string(),
+        recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
+        amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
+        amount_chronos: v["amount_chronos"].as_str().unwrap_or("0").to_string(),
+        unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
+        created_at: v["created_at"].as_i64().unwrap_or(0),
+        status: v["status"].as_str().unwrap_or("Pending").to_string(),
+        memo: v["memo"].as_str().map(|s| s.to_string()),
+        claim_secret_hash: v["claim_secret_hash"].as_str().map(|s| s.to_string()),
+        cancellation_window_secs: v["cancellation_window_secs"].as_u64().map(|n| n as u32),
+    }
 }
 
 // ── Wallet backup / restore ───────────────────────────────────────────────────
@@ -771,6 +817,30 @@ pub async fn get_claim_email(app: AppHandle) -> Option<String> {
 pub async fn set_claim_email(app: AppHandle, email: String) -> Result<(), String> {
     let mut cfg = read_config(&app);
     cfg.claim_email = if email.trim().is_empty() { None } else { Some(email.trim().to_string()) };
+    write_config(&app, &cfg)
+}
+
+/// Return all locally-stored claim emails (up to 3). Never sent to any server.
+#[tauri::command]
+pub async fn get_claim_emails(app: AppHandle) -> Vec<String> {
+    read_config(&app).claim_emails.unwrap_or_default()
+}
+
+/// Store up to 3 claim emails in local wallet config. Pass empty vec to clear all.
+#[tauri::command]
+pub async fn set_claim_emails(app: AppHandle, emails: Vec<String>) -> Result<(), String> {
+    if emails.len() > 3 {
+        return Err("Maximum 3 claim emails allowed".to_string());
+    }
+    let cleaned: Vec<String> = emails
+        .iter()
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty())
+        .collect();
+    let mut cfg = read_config(&app);
+    // Keep legacy field in sync with first entry.
+    cfg.claim_email = cleaned.first().cloned();
+    cfg.claim_emails = if cleaned.is_empty() { None } else { Some(cleaned) };
     write_config(&app, &cfg)
 }
 
@@ -1207,60 +1277,229 @@ pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, S
     let locks = raw
         .into_iter()
         .take(20)
-        .map(|v| TimeLockInfo {
-            lock_id: v["lock_id"].as_str().unwrap_or("").to_string(),
-            sender: v["sender"].as_str().unwrap_or("").to_string(),
-            recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
-            amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
-            amount_chronos: v["amount_chronos"].as_str().unwrap_or("0").to_string(),
-            unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
-            created_at: v["created_at"].as_i64().unwrap_or(0),
-            status: v["status"].as_str().unwrap_or("Pending").to_string(),
-            memo: v["memo"].as_str().map(|s| s.to_string()),
-        })
+        .map(|v| parse_timelock_json(&v))
         .collect();
 
     Ok(locks)
 }
 
 /// Check the node for any email-addressed timelocks destined for the wallet's registered
-/// claim email. Returns all Pending locks matching BLAKE3(lowercase(claim_email)).
-/// Returns empty Vec if no claim_email is set in local config.
+/// claim emails. Scans all configured claim_emails (up to 3), deduplicates by lock_id.
+/// Returns empty Vec if no claim emails are set in local config.
 #[tauri::command]
 pub async fn check_email_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> {
     let cfg = read_config(&app);
-    let email = match cfg.claim_email {
-        Some(e) if !e.trim().is_empty() => e,
-        _ => return Ok(Vec::new()),
-    };
-
-    // BLAKE3(lowercase(email)) → 64-char hex
-    let email_lower = email.to_lowercase();
-    let hash = blake3::hash(email_lower.as_bytes());
-    let hash_hex = hex::encode(hash.as_bytes());
+    let emails = cfg.claim_emails.unwrap_or_default();
+    if emails.is_empty() {
+        return Ok(Vec::new());
+    }
 
     let url = rpc_url(&app);
-    let result = rpc_call(&url, "chronx_getEmailLocks", serde_json::json!([hash_hex]))
-        .await
-        .map_err(|e| format!("RPC failed: {e}"))?;
+    let mut all_locks = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
 
-    let raw: Vec<serde_json::Value> =
-        serde_json::from_value(result).map_err(|e| format!("Parsing email locks: {e}"))?;
+    for email in &emails {
+        if email.trim().is_empty() {
+            continue;
+        }
+        // BLAKE3(lowercase(email)) → 64-char hex
+        let email_lower = email.to_lowercase();
+        let hash = blake3::hash(email_lower.as_bytes());
+        let hash_hex = hex::encode(hash.as_bytes());
 
-    let locks = raw
-        .into_iter()
-        .map(|v| TimeLockInfo {
-            lock_id: v["lock_id"].as_str().unwrap_or("").to_string(),
-            sender: v["sender"].as_str().unwrap_or("").to_string(),
-            recipient_account_id: v["recipient_account_id"].as_str().unwrap_or("").to_string(),
-            amount_kx: v["amount_kx"].as_str().unwrap_or("0").to_string(),
-            amount_chronos: v["amount_chronos"].as_str().unwrap_or("0").to_string(),
-            unlock_at: v["unlock_at"].as_i64().unwrap_or(0),
-            created_at: v["created_at"].as_i64().unwrap_or(0),
-            status: v["status"].as_str().unwrap_or("Pending").to_string(),
-            memo: v["memo"].as_str().map(|s| s.to_string()),
+        let result = rpc_call(&url, "chronx_getEmailLocks", serde_json::json!([hash_hex]))
+            .await
+            .map_err(|e| format!("RPC failed: {e}"))?;
+
+        let raw: Vec<serde_json::Value> =
+            serde_json::from_value(result).map_err(|e| format!("Parsing email locks: {e}"))?;
+
+        for v in raw {
+            let lock = parse_timelock_json(&v);
+            if seen_ids.insert(lock.lock_id.clone()) {
+                all_locks.push(lock);
+            }
+        }
+    }
+
+    Ok(all_locks)
+}
+
+// ── Promise Series commands ──────────────────────────────────────────────────
+
+/// Create a Promise Series: multiple email-based timelocks with ONE shared claim code.
+/// All locks are sent in a single transaction so the recipient only needs one code
+/// to claim them all.
+#[tauri::command]
+pub async fn create_email_timelock_series(
+    app: AppHandle,
+    email: String,
+    entries: Vec<SeriesEntryInput>,
+) -> Result<EmailSeriesResult, String> {
+    use chronx_core::account::UnclaimedAction;
+
+    if entries.is_empty() {
+        return Err("At least one entry is required".to_string());
+    }
+    if entries.len() > 12 {
+        return Err("Maximum 12 entries per series".to_string());
+    }
+    if !email.contains('@') {
+        return Err("Invalid email address".to_string());
+    }
+
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let now = chrono::Utc::now().timestamp();
+
+    // Validate all entries before building any actions.
+    for (i, e) in entries.iter().enumerate() {
+        if e.amount_kx <= 0.0 {
+            return Err(format!("Entry {}: amount must be > 0", i + 1));
+        }
+        if e.unlock_at_unix <= now {
+            return Err(format!("Entry {}: unlock date must be in the future", i + 1));
+        }
+        if e.unlock_at_unix < now + 86_400 {
+            return Err(format!("Entry {}: unlock date must be at least 24 hours from now", i + 1));
+        }
+    }
+
+    // Generate ONE claim code shared across all locks in the series.
+    let mut secret_bytes = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut secret_bytes);
+    let secret_hex = hex::encode(secret_bytes).to_uppercase();
+    let claim_code = format!(
+        "KX-{}-{}-{}-{}",
+        &secret_hex[0..4],
+        &secret_hex[4..8],
+        &secret_hex[8..12],
+        &secret_hex[12..16],
+    );
+
+    let claim_secret_hash = blake3::hash(claim_code.as_bytes());
+    let hash_bytes = claim_secret_hash.as_bytes();
+
+    // Same extension_data for every lock — this is how the wallet groups them as a series.
+    let mut extension_data = Vec::with_capacity(33);
+    extension_data.push(0xC5u8);
+    extension_data.extend_from_slice(hash_bytes);
+
+    let email_hash = chronx_crypto::blake3_hash(email.as_bytes());
+    let recipient = kp.public_key.clone();
+
+    // Build one TimeLockCreate action per entry, all sharing the same extension_data.
+    let actions: Vec<Action> = entries
+        .iter()
+        .map(|e| {
+            let chronos = (e.amount_kx * CHRONOS_PER_KX as f64) as u128;
+            let memo = e.memo.as_ref().map(|m| {
+                if m.len() > 256 { m[..256].to_string() } else { m.clone() }
+            });
+            Action::TimeLockCreate {
+                recipient: recipient.clone(),
+                amount: chronos,
+                unlock_at: e.unlock_at_unix,
+                memo,
+                cancellation_window_secs: Some(259_200),
+                notify_recipient: Some(true),
+                tags: None,
+                private: None,
+                expiry_policy: None,
+                split_policy: None,
+                claim_attempts_max: None,
+                recurring: None,
+                extension_data: Some(extension_data.clone()),
+                oracle_hint: None,
+                jurisdiction_hint: None,
+                governance_proposal_id: None,
+                client_ref: None,
+                recipient_email_hash: Some(email_hash),
+                claim_window_secs: Some(259_200),
+                unclaimed_action: Some(UnclaimedAction::RevertToSender),
+            }
         })
         .collect();
 
-    Ok(locks)
+    let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+
+    // The single tx_id covers all locks. Each lock gets its own lock_id on-chain,
+    // but they're all created in this one transaction.
+    Ok(EmailSeriesResult {
+        tx_ids: vec![tx_id],
+        claim_code,
+    })
+}
+
+/// Claim all locks in a Promise Series using one shared claim code.
+/// Each lock_id gets a TimeLockClaimWithSecret action with the same code.
+#[tauri::command]
+pub async fn claim_email_series(
+    app: AppHandle,
+    lock_ids: Vec<String>,
+    claim_code: String,
+) -> Result<Vec<String>, String> {
+    if lock_ids.is_empty() {
+        return Err("No lock IDs provided".to_string());
+    }
+
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let normalized = claim_code.trim().to_uppercase();
+
+    let actions: Vec<Action> = lock_ids
+        .iter()
+        .map(|id| {
+            let lock_txid = TxId::from_hex(id).map_err(|e| format!("Invalid lock ID {id}: {e}"))?;
+            Ok(Action::TimeLockClaimWithSecret {
+                lock_id: TimeLockId(lock_txid),
+                claim_secret: normalized.clone(),
+            })
+        })
+        .collect::<Result<_, String>>()?;
+
+    let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(vec![tx_id])
+}
+
+/// Cancel all unclaimed locks in a Promise Series in one transaction.
+#[tauri::command]
+pub async fn cancel_timelock_series(
+    app: AppHandle,
+    lock_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if lock_ids.is_empty() {
+        return Err("No lock IDs provided".to_string());
+    }
+
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let actions: Vec<Action> = lock_ids
+        .iter()
+        .map(|id| {
+            let lock_txid = TxId::from_hex(id).map_err(|e| format!("Invalid lock ID {id}: {e}"))?;
+            Ok(Action::CancelTimeLock {
+                lock_id: TimeLockId(lock_txid),
+            })
+        })
+        .collect::<Result<_, String>>()?;
+
+    let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(vec![tx_id])
+}
+
+// ── Deep-link claim code ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_pending_deep_link(_app: AppHandle) -> Option<String> {
+    let path = expand_tilde("~/.chronx/pending-deep-link.txt");
+    if path.exists() {
+        let code = std::fs::read_to_string(&path).ok()?;
+        let _ = std::fs::remove_file(&path); // consume it
+        let code = code.trim().to_string();
+        if code.is_empty() { None } else { Some(code) }
+    } else {
+        None
+    }
 }
