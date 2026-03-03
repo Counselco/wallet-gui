@@ -230,6 +230,26 @@ button.primary.danger:hover:not(:disabled) { background: #9a3412; border-color: 
     color: #c5cfe0;
     border-color: #3b4e72;
 }
+.pill.active {
+    background: #d4a84b;
+    color: #0a0a0a;
+    border-color: #d4a84b;
+    font-weight: 700;
+}
+
+/* Sort bar */
+.sort-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 8px 0;
+}
+.sort-label {
+    font-size: 11px;
+    color: #6b7280;
+    margin-right: 2px;
+}
 
 /* Claim button */
 .claim-btn {

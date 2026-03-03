@@ -3,7 +3,7 @@ use sha2::{Sha256, Digest};
 #[cfg(target_os = "android")]
 use tauri::Manager;
 use chronx_core::{
-    constants::{CHRONOS_PER_KX, MIN_LOCK_DURATION_SECS, POW_INITIAL_DIFFICULTY},
+    constants::{CHRONOS_PER_KX, POW_INITIAL_DIFFICULTY},
     transaction::{Action, AuthScheme, Transaction, TransactionBody},
     types::{AccountId, TimeLockId, TxId},
 };
@@ -368,9 +368,11 @@ pub async fn create_timelock(
     if unlock_at_unix <= now {
         return Err("Unlock date must be in the future".to_string());
     }
-    if unlock_at_unix < now + MIN_LOCK_DURATION_SECS {
-        let mins = MIN_LOCK_DURATION_SECS / 60;
-        return Err(format!("Unlock time must be at least {mins} minutes from now (chain minimum)"));
+    // Wallet enforces 1-day minimum (protocol allows 1 second, but we protect users
+    // from accidentally creating very short locks).
+    const WALLET_MIN_LOCK_SECS: i64 = 86_400; // 1 day
+    if unlock_at_unix < now + WALLET_MIN_LOCK_SECS {
+        return Err("Unlock date must be at least 1 day from now. Promises are meant to last.".to_string());
     }
 
     // Resolve recipient: use provided pubkey hex, or default to self.
@@ -448,9 +450,10 @@ pub async fn create_email_timelock(
     if unlock_at_unix <= now {
         return Err("Unlock date must be in the future".to_string());
     }
-    if unlock_at_unix < now + MIN_LOCK_DURATION_SECS {
-        let mins = MIN_LOCK_DURATION_SECS / 60;
-        return Err(format!("Unlock time must be at least {mins} minutes from now"));
+    // Wallet enforces 1-day minimum for email locks too.
+    const WALLET_MIN_LOCK_SECS: i64 = 86_400; // 1 day
+    if unlock_at_unix < now + WALLET_MIN_LOCK_SECS {
+        return Err("Unlock date must be at least 1 day from now. Promises are meant to last.".to_string());
     }
 
     // ── Generate claim secret ──────────────────────────────────────────────────

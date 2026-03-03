@@ -156,8 +156,9 @@ fn format_kx(chronos_str: &str) -> String {
 }
 
 fn format_kx_str(kx_str: &str) -> String {
-    let n: u128 = kx_str.trim().parse().unwrap_or(0);
-    format_int_with_commas(n)
+    let kx: f64 = kx_str.trim().parse().unwrap_or(0.0);
+    let chronos = (kx * 1_000_000.0).round() as u128;
+    format_kx(&chronos.to_string())
 }
 
 // ── Display helpers ───────────────────────────────────────────────────────────
@@ -825,22 +826,40 @@ fn App() -> impl IntoView {
                         </button>
                     </nav>
 
-                    // Incoming email locks banner — hide when already on Promises tab
+                    // Incoming email locks banner — only for non-self email sends, hide on Promises tab
                     {move || {
                         let locks = email_locks.get();
-                        if locks.is_empty() || active_tab.get() == 2 {
+                        let my_id = info.get().map(|a| a.account_id).unwrap_or_default();
+                        let incoming: Vec<&TimeLockInfo> = locks.iter()
+                            .filter(|l| l.sender != my_id && l.status == "Pending")
+                            .collect();
+                        if incoming.is_empty() || active_tab.get() == 2 {
                             view! { <span></span> }.into_any()
                         } else {
-                            let total: f64 = locks.iter()
+                            let total: f64 = incoming.iter()
                                 .map(|l| l.amount_kx.parse::<f64>().unwrap_or(0.0))
                                 .sum();
-                            let label = format!(
-                                "\u{1f4ec} You have incoming KX \u{2014} {:.6} KX waiting. Tap to view \u{2192}",
-                                total
-                            );
+                            // Find the earliest expiry (created_at + 72h claim window)
+                            let now = (js_sys::Date::now() / 1000.0) as i64;
+                            let earliest_expiry = incoming.iter()
+                                .map(|l| l.created_at + 259_200) // 72 hours
+                                .min()
+                                .unwrap_or(0);
+                            let remaining = (earliest_expiry - now).max(0);
+                            let hours = remaining / 3600;
+                            let mins = (remaining % 3600) / 60;
+                            let countdown = if hours > 0 {
+                                format!("{}h {}m left to claim", hours, mins)
+                            } else {
+                                format!("{}m left to claim", mins.max(1))
+                            };
                             view! {
                                 <div class="email-locks-banner" on:click=move |_| active_tab.set(2)>
-                                    {label}
+                                    {format!("\u{1f4ec} {} KX waiting for you!", format_kx_str(&format!("{:.6}", total)))}
+                                    <span style="color:#e74c3c;font-weight:800;margin-left:8px">
+                                        {countdown}
+                                    </span>
+                                    <span style="margin-left:4px">" Tap to claim \u{2192}"</span>
                                 </div>
                             }.into_any()
                         }
@@ -1620,14 +1639,17 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
         };
         let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
 
-        // Balance check — reject before PoW mining starts
+        // Balance check — reject before PoW mining starts (account for pending email sends)
         if let Some(ref ai) = info.get_untracked() {
-            let spendable = ai.spendable_kx.parse::<f64>().unwrap_or(0.0);
-            if spendable == 0.0 {
+            let raw_spendable: f64 = ai.spendable_chronos.parse::<f64>().unwrap_or(0.0);
+            let pending = pending_email_chronos.get_untracked() as f64;
+            let available_chronos = (raw_spendable - pending).max(0.0);
+            let available_kx = available_chronos / 1_000_000.0;
+            if available_kx == 0.0 {
                 msg.set("Your balance is zero. You cannot send KX.".into()); return;
             }
-            if amt > spendable {
-                msg.set(format!("Insufficient balance. You have {:.6} KX available.", spendable)); return;
+            if amt > available_kx {
+                msg.set(format!("Insufficient balance. You have {:.6} KX available.", available_kx)); return;
             }
         }
 
@@ -1702,7 +1724,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
             if !is_valid_email(&email_str) {
                 msg.set("Error: Please enter a valid email address.".into()); return;
             }
-            let unlock_unix = (js_sys::Date::now() / 1000.0) as i64 + 3600;
+            let unlock_unix = (js_sys::Date::now() / 1000.0) as i64 + 86_400; // 1 day
             spawn_local(async move {
                 sending.set(true);
                 pending_email_chronos.set((amt * 1_000_000.0) as u64);
@@ -1954,7 +1976,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                         </div>
                         <label>"Unlock Date \u{0026} Time (UTC)"</label>
                         <input type="datetime-local"
-                            prop:min=move || min_datetime_str(3600)
+                            prop:min=move || min_datetime_str(86400)
                             prop:value=move || lock_date.get()
                             on:input=move |ev| lock_date.set(event_target_value(&ev))
                             disabled=move || sending.get() />
@@ -2099,6 +2121,8 @@ fn PromisesPanel(
     // Per-lock claim code inputs for cross-user email locks (lock_id → typed code)
     let code_inputs: RwSignal<std::collections::HashMap<String, String>> =
         RwSignal::new(Default::default());
+    // Sort: 0=unlock date asc (default), 1=unlock date desc, 2=amount desc, 3=amount asc, 4=status
+    let tl_sort = RwSignal::new(0u8);
 
     let reload = move || {
         spawn_local(async move {
@@ -2292,6 +2316,19 @@ fn PromisesPanel(
                     {move || if tl_loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
                 </button>
             </div>
+            <div class="sort-bar">
+                <span class="sort-label">"Sort:"</span>
+                <button class=move || if tl_sort.get()==0 { "pill active" } else { "pill" }
+                    on:click=move |_| tl_sort.set(0)>"Soonest"</button>
+                <button class=move || if tl_sort.get()==1 { "pill active" } else { "pill" }
+                    on:click=move |_| tl_sort.set(1)>"Latest"</button>
+                <button class=move || if tl_sort.get()==2 { "pill active" } else { "pill" }
+                    on:click=move |_| tl_sort.set(2)>"Amount \u{2193}"</button>
+                <button class=move || if tl_sort.get()==3 { "pill active" } else { "pill" }
+                    on:click=move |_| tl_sort.set(3)>"Amount \u{2191}"</button>
+                <button class=move || if tl_sort.get()==4 { "pill active" } else { "pill" }
+                    on:click=move |_| tl_sort.set(4)>"Status"</button>
+            </div>
 
             {move || {
                 let e = tl_err.get();
@@ -2300,7 +2337,28 @@ fn PromisesPanel(
             }}
 
             {move || {
-                let locks = timelocks.get();
+                let mut locks = timelocks.get();
+                // Apply sort
+                match tl_sort.get() {
+                    0 => locks.sort_by(|a, b| a.unlock_at.cmp(&b.unlock_at)),
+                    1 => locks.sort_by(|a, b| b.unlock_at.cmp(&a.unlock_at)),
+                    2 => {
+                        locks.sort_by(|a, b| {
+                            let ak: f64 = a.amount_kx.parse().unwrap_or(0.0);
+                            let bk: f64 = b.amount_kx.parse().unwrap_or(0.0);
+                            bk.partial_cmp(&ak).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
+                    3 => {
+                        locks.sort_by(|a, b| {
+                            let ak: f64 = a.amount_kx.parse().unwrap_or(0.0);
+                            let bk: f64 = b.amount_kx.parse().unwrap_or(0.0);
+                            ak.partial_cmp(&bk).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
+                    4 => locks.sort_by(|a, b| a.status.cmp(&b.status)),
+                    _ => {}
+                }
                 if tl_loading.get() {
                     view! { <p class="muted">"Loading\u{2026}"</p> }.into_any()
                 } else if locks.is_empty() {
@@ -2402,6 +2460,8 @@ fn HistoryPanel() -> impl IntoView {
     let cancel_is_email  = RwSignal::new(false);
     let cancel_busy      = RwSignal::new(false);
     let cancel_msg       = RwSignal::new(String::new());
+    // Sort: 0=date desc (default), 1=date asc, 2=amount desc, 3=amount asc, 4=type
+    let h_sort = RwSignal::new(0u8);
 
     let reload = move || {
         spawn_local(async move {
@@ -2426,6 +2486,19 @@ fn HistoryPanel() -> impl IntoView {
                     {move || if h_loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
                 </button>
             </div>
+            <div class="sort-bar">
+                <span class="sort-label">"Sort:"</span>
+                <button class=move || if h_sort.get()==0 { "pill active" } else { "pill" }
+                    on:click=move |_| h_sort.set(0)>"Newest"</button>
+                <button class=move || if h_sort.get()==1 { "pill active" } else { "pill" }
+                    on:click=move |_| h_sort.set(1)>"Oldest"</button>
+                <button class=move || if h_sort.get()==2 { "pill active" } else { "pill" }
+                    on:click=move |_| h_sort.set(2)>"Amount \u{2193}"</button>
+                <button class=move || if h_sort.get()==3 { "pill active" } else { "pill" }
+                    on:click=move |_| h_sort.set(3)>"Amount \u{2191}"</button>
+                <button class=move || if h_sort.get()==4 { "pill active" } else { "pill" }
+                    on:click=move |_| h_sort.set(4)>"Type"</button>
+            </div>
 
             {move || {
                 let e = h_err.get();
@@ -2434,7 +2507,24 @@ fn HistoryPanel() -> impl IntoView {
             }}
 
             {move || {
-                let list = entries.get();
+                let mut list = entries.get();
+                // Apply sort
+                match h_sort.get() {
+                    0 => list.sort_by(|a, b| b.timestamp.cmp(&a.timestamp)),
+                    1 => list.sort_by(|a, b| a.timestamp.cmp(&b.timestamp)),
+                    2 => list.sort_by(|a, b| {
+                        let ac: u128 = a.amount_chronos.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let bc: u128 = b.amount_chronos.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        bc.cmp(&ac)
+                    }),
+                    3 => list.sort_by(|a, b| {
+                        let ac: u128 = a.amount_chronos.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let bc: u128 = b.amount_chronos.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        ac.cmp(&bc)
+                    }),
+                    4 => list.sort_by(|a, b| a.tx_type.cmp(&b.tx_type)),
+                    _ => {}
+                }
                 if h_loading.get() {
                     view! { <p class="muted">"Loading\u{2026}"</p> }.into_any()
                 } else if list.is_empty() && h_err.get().is_empty() {
