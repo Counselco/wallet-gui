@@ -825,10 +825,10 @@ fn App() -> impl IntoView {
                         </button>
                     </nav>
 
-                    // Incoming email locks banner
+                    // Incoming email locks banner — hide when already on Promises tab
                     {move || {
                         let locks = email_locks.get();
-                        if locks.is_empty() {
+                        if locks.is_empty() || active_tab.get() == 2 {
                             view! { <span></span> }.into_any()
                         } else {
                             let total: f64 = locks.iter()
@@ -1739,8 +1739,9 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
-                        for _ in 0..15u8 {
-                            delay_ms(1000).await;
+                        // Check immediately (transaction is already on-chain), then poll as fallback
+                        for i in 0..=10u8 {
+                            if i > 0 { delay_ms(1500).await; }
                             if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
                                 if a.nonce > prev_nonce { info.set(Some(a)); break; }
                             }
@@ -1807,8 +1808,9 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
-                        for _ in 0..15u8 {
-                            delay_ms(1000).await;
+                        // Check immediately (transaction is already on-chain), then poll as fallback
+                        for i in 0..=10u8 {
+                            if i > 0 { delay_ms(1500).await; }
                             if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
                                 if a.nonce > prev_nonce { info.set(Some(a)); break; }
                             }
