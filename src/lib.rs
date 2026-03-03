@@ -842,7 +842,7 @@ fn App() -> impl IntoView {
                                 <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos />
                             }.into_any(),
                             1 => view! { <SendPanel info=info pending_email_chronos=pending_email_chronos /> }.into_any(),
-                            2 => view! { <PromisesPanel email_locks=email_locks on_email_check=check_email /> }.into_any(),
+                            2 => view! { <PromisesPanel info=info email_locks=email_locks on_email_check=check_email /> }.into_any(),
                             3 => view! { <HistoryPanel /> }.into_any(),
                             4 => view! { <RewardsPanel /> }.into_any(),
                             5 => view! {
@@ -2066,6 +2066,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
 
 #[component]
 fn PromisesPanel(
+    info: RwSignal<Option<AccountInfo>>,
     email_locks: RwSignal<Vec<TimeLockInfo>>,
     on_email_check: impl Fn() + Clone + 'static,
 ) -> impl IntoView {
@@ -2145,7 +2146,16 @@ fn PromisesPanel(
                                             d.get_utc_full_year(), d.get_utc_month() + 1, d.get_utc_date())
                                     }
                                 };
-                                let lock_id = lock.lock_id.clone();
+                                    let lock_id = lock.lock_id.clone();
+                                // Determine if this is a self-send (sender == this wallet's account).
+                                // self-sends can be claimed directly; cross-user sends cannot because
+                                // the on-chain recipient key is the *sender's* pubkey, not ours.
+                                let my_account = info.get_untracked()
+                                    .map(|a| a.account_id)
+                                    .unwrap_or_default();
+                                let is_self_send = lock.sender == my_account;
+                                let sender_short = shorten_addr(&lock.sender);
+
                                 let on_claim_email = move |_: web_sys::MouseEvent| {
                                     let lid = lock_id.clone();
                                     spawn_local(async move {
@@ -2179,9 +2189,20 @@ fn PromisesPanel(
                                                 {unlock_label}
                                             </span>
                                             {lock.memo.clone().map(|m| view! { <span class="tl-memo">{m}</span> })}
+                                            // For cross-user sends, show who sent it and why direct claim won't work
+                                            {if !is_self_send {
+                                                view! {
+                                                    <span class="tl-memo" style="color:#9ca3af;font-size:11px">
+                                                        "From: " {sender_short} " \u{b7} Reply to their email with your KX address to receive"
+                                                    </span>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
                                         </div>
                                         <div class="tl-right">
-                                            {if claimable {
+                                            {if is_self_send && claimable {
+                                                // Self-send and matured: can claim directly
                                                 view! {
                                                     <button class="claim-btn"
                                                         style="background:#d4a84b;color:#0a0a0a"
@@ -2189,8 +2210,13 @@ fn PromisesPanel(
                                                         "Claim Now"
                                                     </button>
                                                 }.into_any()
-                                            } else {
+                                            } else if is_self_send {
+                                                // Self-send but not yet matured
                                                 view! { <span class="badge pending">"Pending"</span> }.into_any()
+                                            } else {
+                                                // Cross-user send: cannot claim via protocol
+                                                // KX auto-reverts to sender after 72h if not forwarded
+                                                view! { <span class="badge pending" style="font-size:10px">"Auto-reverts in 72h"</span> }.into_any()
                                             }}
                                         </div>
                                     </div>
