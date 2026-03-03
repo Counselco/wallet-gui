@@ -904,6 +904,20 @@ input[type="datetime-local"] { color-scheme: dark; }
     opacity: 0.85;
 }
 
+/* ── Copy Code button (claim code display in History) ───────────────────────── */
+.copy-btn {
+    background: #1e2130;
+    border: 1px solid #2d3748;
+    color: #9ca3af;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-top: 4px;
+    transition: background 0.12s;
+}
+.copy-btn:hover { background: #252a3a; color: #e5e7eb; }
+
 /* ── Notice badge on Settings tab ──────────────────────────────────────────── */
 .notice-badge {
     background: #e74c3c;

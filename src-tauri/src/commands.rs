@@ -7,6 +7,7 @@ use chronx_core::{
     transaction::{Action, AuthScheme, Transaction, TransactionBody},
     types::{AccountId, TimeLockId, TxId},
 };
+use rand::RngCore as _;
 use chronx_crypto::{hash::tx_id_from_body, mine_pow, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -116,6 +117,14 @@ pub struct TimeLockInfo {
     pub created_at: i64,
     pub status: String,
     pub memo: Option<String>,
+}
+
+/// Returned by `create_email_timelock` — carries both the on-chain TxId and
+/// the human-readable claim code that should be emailed to the recipient.
+#[derive(Debug, Serialize, Clone)]
+pub struct EmailLockResult {
+    pub tx_id: String,
+    pub claim_code: String,
 }
 
 // ── RPC helper ────────────────────────────────────────────────────────────────
@@ -330,6 +339,7 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
         unlock_date: None,
         cancellation_window_secs: None,
         created_at: Some(now),
+        claim_code: None,
     });
     Ok(txid)
 }
@@ -404,9 +414,15 @@ pub async fn create_timelock(
     build_sign_mine_submit(&kp, actions, &url).await
 }
 
-/// Create an email-based timelock. The recipient is identified by email hash.
-/// Uses the sender's own pubkey as the on-chain recipient (the claim process
-/// is handled off-chain). Sets a 72-hour claim window with auto-revert.
+/// Create an email-based timelock with a secure claim secret.
+///
+/// Generates a random "KX-XXXX-XXXX-XXXX-XXXX" claim code. BLAKE3(claim_code)
+/// is embedded in extension_data (marker 0xC5 + 32 hash bytes) and stored on-chain.
+/// The plaintext code is returned to the caller so it can be:
+///   1. Emailed to the recipient via notify_email_recipient
+///   2. Saved locally in email-history.json for re-sharing if needed
+///
+/// The recipient enters the code in their wallet to claim via TimeLockClaimWithSecret.
 #[tauri::command]
 pub async fn create_email_timelock(
     app: AppHandle,
@@ -414,7 +430,7 @@ pub async fn create_email_timelock(
     amount_kx: f64,
     unlock_at_unix: i64,
     memo: Option<String>,
-) -> Result<String, String> {
+) -> Result<EmailLockResult, String> {
     use chronx_core::account::UnclaimedAction;
 
     let url = rpc_url(&app);
@@ -437,10 +453,35 @@ pub async fn create_email_timelock(
         return Err(format!("Unlock time must be at least {mins} minutes from now"));
     }
 
-    // BLAKE3 hash of the recipient's email
+    // ── Generate claim secret ──────────────────────────────────────────────────
+    // 8 random bytes from the OS entropy source → formatted as "KX-XXXX-XXXX-XXXX-XXXX".
+    // 64 bits of entropy + PoW rate limiting makes brute force completely infeasible.
+    let mut secret_bytes = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut secret_bytes);
+    let secret_hex = hex::encode(secret_bytes).to_uppercase();
+    let claim_code = format!(
+        "KX-{}-{}-{}-{}",
+        &secret_hex[0..4],
+        &secret_hex[4..8],
+        &secret_hex[8..12],
+        &secret_hex[12..16],
+    );
+
+    // Hash the display string itself — the node hashes claim_secret.as_bytes() on claim.
+    let claim_secret_hash = blake3::hash(claim_code.as_bytes());
+    let hash_bytes = claim_secret_hash.as_bytes();
+
+    // Encode in extension_data: [0xC5 marker] + [32 bytes of hash].
+    // The engine reads this marker and stores the hash in the email_claim_hashes tree.
+    let mut extension_data = Vec::with_capacity(33);
+    extension_data.push(0xC5u8);
+    extension_data.extend_from_slice(hash_bytes);
+
+    // BLAKE3 hash of the recipient's email (for on-chain indexing, no PII on-chain)
     let email_hash = chronx_crypto::blake3_hash(email.as_bytes());
 
-    // Use sender's own pubkey as on-chain recipient — claim is handled off-chain
+    // Use sender's own pubkey as on-chain recipient.
+    // Actual KX delivery happens via TimeLockClaimWithSecret (using the secret code).
     let recipient = kp.public_key.clone();
 
     let memo = memo.map(|m| {
@@ -460,7 +501,7 @@ pub async fn create_email_timelock(
         split_policy: None,
         claim_attempts_max: None,
         recurring: None,
-        extension_data: None,
+        extension_data: Some(extension_data),
         oracle_hint: None,
         jurisdiction_hint: None,
         governance_proposal_id: None,
@@ -470,7 +511,8 @@ pub async fn create_email_timelock(
         unclaimed_action: Some(UnclaimedAction::RevertToSender),
     }];
 
-    build_sign_mine_submit(&kp, actions, &url).await
+    let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(EmailLockResult { tx_id, claim_code })
 }
 
 /// Fetch all timelocks for this wallet's account.
@@ -600,6 +642,35 @@ pub async fn claim_timelock(app: AppHandle, lock_id_hex: String) -> Result<Strin
     build_sign_mine_submit(&kp, actions, &url).await
 }
 
+/// Claim an email-based time-lock using the plaintext claim code.
+///
+/// Bob receives the claim code ("KX-XXXX-XXXX-XXXX-XXXX") by email.
+/// He enters it in his wallet; this function submits a TimeLockClaimWithSecret
+/// transaction. The node verifies BLAKE3(claim_code) matches the stored hash
+/// and transfers KX to Bob's account.
+#[tauri::command]
+pub async fn claim_email_timelock(
+    app: AppHandle,
+    lock_id_hex: String,
+    claim_code: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let lock_txid =
+        TxId::from_hex(&lock_id_hex).map_err(|e| format!("Invalid lock ID: {e}"))?;
+
+    // Normalize: uppercase and trim so minor formatting differences don't fail.
+    let normalized = claim_code.trim().to_uppercase();
+
+    let actions = vec![Action::TimeLockClaimWithSecret {
+        lock_id: TimeLockId(lock_txid),
+        claim_secret: normalized,
+    }];
+
+    build_sign_mine_submit(&kp, actions, &url).await
+}
+
 /// Cancel a timelock that is still within its cancellation window.
 /// `lock_id_hex` is the hex TxId of the lock to cancel.
 #[tauri::command]
@@ -713,6 +784,9 @@ pub struct TxHistoryEntry {
     pub cancellation_window_secs: Option<u32>,
     #[serde(default)]
     pub created_at: Option<i64>,
+    /// Claim code for pending email sends (so Alice can re-share it if needed).
+    #[serde(default)]
+    pub claim_code: Option<String>,
 }
 
 /// Fetch Promise (timelock) history for this wallet.
@@ -733,15 +807,15 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     let locks: Vec<serde_json::Value> =
         serde_json::from_value(tl_result).map_err(|e| format!("Parsing history: {e}"))?;
 
-    // Load email send history for enrichment (lock_id → email)
-    let email_map: std::collections::HashMap<String, String> = {
+    // Load email send history for enrichment (lock_id → (email, claim_code))
+    let email_map: std::collections::HashMap<String, (String, Option<String>)> = {
         let path = email_history_path(&app);
         std::fs::read_to_string(&path)
             .ok()
             .and_then(|s| serde_json::from_str::<Vec<EmailSendEntry>>(&s).ok())
             .unwrap_or_default()
             .into_iter()
-            .map(|e| (e.lock_id, e.email))
+            .map(|e| (e.lock_id, (e.email, e.claim_code)))
             .collect()
     };
 
@@ -757,12 +831,13 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             let created_at = v["created_at"].as_i64().unwrap_or(0);
             let cancellation_window_secs = v["cancellation_window_secs"]
                 .as_u64().map(|w| w as u32);
-            // Enrich with email if this was an email send
-            let (tx_type, counterparty) = if let Some(email) = email_map.get(&lock_id) {
-                ("Email Send".to_string(), Some(email.clone()))
-            } else {
-                ("Promise Sent".to_string(), v["memo"].as_str().map(|s| s.to_string()))
-            };
+            // Enrich with email and claim_code if this was an email send
+            let (tx_type, counterparty, claim_code) =
+                if let Some((email, code)) = email_map.get(&lock_id) {
+                    ("Email Send".to_string(), Some(email.clone()), code.clone())
+                } else {
+                    ("Promise Sent".to_string(), v["memo"].as_str().map(|s| s.to_string()), None)
+                };
             let raw_status = v["status"].as_str().unwrap_or("Pending").to_string();
             // Map on-chain status to user-facing labels for email sends
             let status = if tx_type == "Email Send" {
@@ -785,6 +860,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                 unlock_date:    Some(v["unlock_at"].as_i64().unwrap_or(0)),
                 cancellation_window_secs,
                 created_at:     Some(created_at),
+                claim_code,
             }
         })
         .collect();
@@ -877,11 +953,15 @@ pub struct Notice {
 // ── Email send history ───────────────────────────────────────────────────────
 
 /// Lightweight record saved locally when the user sends KX to an email address.
-/// Stores only lock_id + email so get_transaction_history can enrich the on-chain entry.
+/// Stores lock_id + email + claim_code so History and Promises tabs can show
+/// the code and get_transaction_history can enrich the on-chain entry.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct EmailSendEntry {
-    lock_id: String,
-    email:   String,
+    lock_id:    String,
+    email:      String,
+    /// The "KX-XXXX-XXXX-XXXX-XXXX" claim code. Older entries may not have this field.
+    #[serde(default)]
+    claim_code: Option<String>,
 }
 
 fn email_history_path(app: &AppHandle) -> PathBuf {
@@ -900,16 +980,26 @@ fn email_history_path(app: &AppHandle) -> PathBuf {
 }
 
 /// Save an email send record locally (called after a successful create_email_timelock).
+/// Stores lock_id, recipient email, and claim code so History/Promises can display the code.
 /// Idempotent: duplicate lock_ids are silently skipped.
 #[tauri::command]
-pub async fn save_email_send(app: AppHandle, lock_id: String, email: String) -> Result<(), String> {
+pub async fn save_email_send(
+    app: AppHandle,
+    lock_id: String,
+    email: String,
+    claim_code: String,
+) -> Result<(), String> {
     let path = email_history_path(&app);
     let mut entries: Vec<EmailSendEntry> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     if !entries.iter().any(|e| e.lock_id == lock_id) {
-        entries.push(EmailSendEntry { lock_id, email });
+        entries.push(EmailSendEntry {
+            lock_id,
+            email,
+            claim_code: Some(claim_code),
+        });
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
@@ -1015,13 +1105,16 @@ pub async fn notify_email_recipient(
     amount_kx: f64,
     unlock_at_unix: i64,
     memo: Option<String>,
+    claim_code: String,
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
+    // The API includes claim_code in the email body and then FORGETS it — never stored in DB.
     let body = serde_json::json!({
         "to": email,
         "amount": format!("{:.6}", amount_kx),
         "unlock_at": unlock_at_unix,
         "memo": memo,
+        "claim_code": claim_code,
     });
     let res = client
         .post("https://api.chronx.io/notify")

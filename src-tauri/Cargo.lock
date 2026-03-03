@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "chronx-wallet-gui"
-version = "1.4.8"
+version = "1.4.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -392,6 +392,7 @@ dependencies = [
  "chronx-core",
  "chronx-crypto",
  "hex",
+ "rand 0.8.5",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

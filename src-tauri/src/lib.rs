@@ -35,6 +35,7 @@ pub fn run() {
             commands::set_claim_email,
             commands::save_email_send,
             commands::check_email_timelocks,
+            commands::claim_email_timelock,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ChronX Wallet");

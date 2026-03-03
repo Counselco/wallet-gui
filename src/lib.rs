@@ -84,6 +84,17 @@ struct TxHistoryEntry {
     cancellation_window_secs: Option<u32>,
     #[serde(default)]
     created_at: Option<i64>,
+    /// Claim code for email sends — kept locally so Alice can re-share it.
+    #[serde(default)]
+    claim_code: Option<String>,
+}
+
+/// Returned by `create_email_timelock` — carries the on-chain TxId and
+/// the "KX-XXXX-XXXX-XXXX-XXXX" claim code to email/display to the recipient.
+#[derive(Clone, Deserialize, Default)]
+struct EmailLockResult {
+    tx_id: String,
+    claim_code: String,
 }
 
 // ── Server-pushed types ───────────────────────────────────────────────────────
@@ -1702,12 +1713,15 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                     "unlockAtUnix": unlock_unix,
                     "memo": memo_opt.clone(),
                 })).unwrap_or(no_args());
-                match call::<String>("create_email_timelock", args).await {
-                    Ok(txid) => {
-                        // Save email→lock mapping for History tab
+                match call::<EmailLockResult>("create_email_timelock", args).await {
+                    Ok(result) => {
+                        let txid = result.tx_id.clone();
+                        let claim_code = result.claim_code.clone();
+                        // Save email→lock mapping for History tab (includes claim code)
                         let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({
                             "lockId": txid.clone(),
                             "email": email_str.clone(),
+                            "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         let _ = call::<()>("save_email_send", save_args).await;
                         email.set(String::new());
@@ -1718,10 +1732,11 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             "amountKx": amt,
                             "unlockAtUnix": unlock_unix,
                             "memo": memo_opt,
+                            "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         match call::<()>("notify_email_recipient", notify_args).await {
-                            Ok(_) => { msg.set(format!("Sent! Email notification delivered. ID: {txid}")); spam_warn.set(true); }
-                            Err(e) => msg.set(format!("Error: Promise sent on-chain (ID: {}…) but email notification failed: {e}", &txid[..8.min(txid.len())])),
+                            Ok(_) => { msg.set(format!("Sent! Email delivered. Claim code: {claim_code}")); spam_warn.set(true); }
+                            Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                         for _ in 0..15u8 {
@@ -1765,12 +1780,15 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                     "unlockAtUnix": unlock_unix,
                     "memo": memo_opt.clone(),
                 })).unwrap_or(no_args());
-                match call::<String>("create_email_timelock", args).await {
-                    Ok(txid) => {
-                        // Save email→lock mapping for History tab
+                match call::<EmailLockResult>("create_email_timelock", args).await {
+                    Ok(result) => {
+                        let txid = result.tx_id.clone();
+                        let claim_code = result.claim_code.clone();
+                        // Save email→lock mapping for History tab (includes claim code)
                         let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({
                             "lockId": txid.clone(),
                             "email": email_str.clone(),
+                            "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         let _ = call::<()>("save_email_send", save_args).await;
                         email.set(String::new());
@@ -1782,10 +1800,11 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             "amountKx": amt,
                             "unlockAtUnix": unlock_unix,
                             "memo": memo_opt,
+                            "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         match call::<()>("notify_email_recipient", notify_args).await {
-                            Ok(_) => { msg.set(format!("Sent! Email notification delivered. ID: {txid}")); spam_warn.set(true); }
-                            Err(e) => msg.set(format!("Error: Promise sent on-chain (ID: {}…) but email notification failed: {e}", &txid[..8.min(txid.len())])),
+                            Ok(_) => { msg.set(format!("Sent! Email delivered. Claim code: {claim_code}")); spam_warn.set(true); }
+                            Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                         for _ in 0..15u8 {
@@ -2075,6 +2094,9 @@ fn PromisesPanel(
     let tl_err     = RwSignal::new(String::new());
     let claim_msg  = RwSignal::new(String::new());
     let email_checking = RwSignal::new(false);
+    // Per-lock claim code inputs for cross-user email locks (lock_id → typed code)
+    let code_inputs: RwSignal<std::collections::HashMap<String, String>> =
+        RwSignal::new(Default::default());
 
     let reload = move || {
         spawn_local(async move {
@@ -2178,6 +2200,10 @@ fn PromisesPanel(
                                         }
                                     });
                                 };
+                                // Per-lock signals for cross-user claim code entry
+                                let lid_for_prop   = lock.lock_id.clone();
+                                let lid_for_input  = lock.lock_id.clone();
+                                let lid_for_claim  = lock.lock_id.clone();
                                 view! {
                                     <div class="timelock-row" style="border-left:3px solid #d4a84b">
                                         <div class="tl-main">
@@ -2189,16 +2215,6 @@ fn PromisesPanel(
                                                 {unlock_label}
                                             </span>
                                             {lock.memo.clone().map(|m| view! { <span class="tl-memo">{m}</span> })}
-                                            // For cross-user sends, show who sent it and why direct claim won't work
-                                            {if !is_self_send {
-                                                view! {
-                                                    <span class="tl-memo" style="color:#9ca3af;font-size:11px">
-                                                        "From: " {sender_short} " \u{b7} Reply to their email with your KX address to receive"
-                                                    </span>
-                                                }.into_any()
-                                            } else {
-                                                view! { <span></span> }.into_any()
-                                            }}
                                         </div>
                                         <div class="tl-right">
                                             {if is_self_send && claimable {
@@ -2214,9 +2230,50 @@ fn PromisesPanel(
                                                 // Self-send but not yet matured
                                                 view! { <span class="badge pending">"Pending"</span> }.into_any()
                                             } else {
-                                                // Cross-user send: cannot claim via protocol
-                                                // KX auto-reverts to sender after 72h if not forwarded
-                                                view! { <span class="badge pending" style="font-size:10px">"Auto-reverts in 72h"</span> }.into_any()
+                                                // Cross-user send: claim with secret code
+                                                view! {
+                                                    <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+                                                        <span class="tl-memo" style="color:#9ca3af;font-size:11px">
+                                                            "From: " {sender_short}
+                                                        </span>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="KX-XXXX-XXXX-XXXX-XXXX"
+                                                            class="input-field"
+                                                            style="font-family:monospace;font-size:12px;letter-spacing:1px;text-align:center;width:200px"
+                                                            prop:value=move || code_inputs.get().get(&lid_for_prop).cloned().unwrap_or_default()
+                                                            on:input=move |ev| {
+                                                                let val = event_target_value(&ev);
+                                                                code_inputs.update(|m| { m.insert(lid_for_input.clone(), val); });
+                                                            }
+                                                        />
+                                                        <button
+                                                            class="claim-btn"
+                                                            style="background:#d4a84b;color:#0a0a0a;width:100%"
+                                                            on:click=move |_| {
+                                                                let lid = lid_for_claim.clone();
+                                                                let code = code_inputs.get_untracked().get(&lid).cloned().unwrap_or_default();
+                                                                if code.trim().is_empty() {
+                                                                    claim_msg.set("Error: enter your claim code from the email".into());
+                                                                    return;
+                                                                }
+                                                                spawn_local(async move {
+                                                                    claim_msg.set("Mining PoW\u{2026}".into());
+                                                                    let args = serde_wasm_bindgen::to_value(
+                                                                        &serde_json::json!({ "lockIdHex": lid.clone(), "claimCode": code })
+                                                                    ).unwrap_or(no_args());
+                                                                    match call::<String>("claim_email_timelock", args).await {
+                                                                        Ok(txid) => {
+                                                                            claim_msg.set(format!("Claimed! TxId: {txid}"));
+                                                                            email_locks.update(|locks| locks.retain(|l| l.lock_id != lid));
+                                                                        }
+                                                                        Err(e) => claim_msg.set(format!("Error: {e}")),
+                                                                    }
+                                                                });
+                                                            }
+                                                        >"Claim Now"</button>
+                                                    </div>
+                                                }.into_any()
                                             }}
                                         </div>
                                     </div>
@@ -2433,6 +2490,7 @@ fn HistoryPanel() -> impl IntoView {
                                 };
 
                                 let cancel_lock_id = entry.tx_id.clone();
+                                let entry_claim_code = entry.claim_code.clone();
 
                                 view! {
                                     <div class="history-row"
@@ -2471,10 +2529,28 @@ fn HistoryPanel() -> impl IntoView {
                                             if is_expanded {
                                                 let cancel_id = cancel_lock_id.clone();
                                                 let btn_label = if is_email_send { "Cancel Send" } else { "Cancel Promise" };
+                                                let code_opt = entry_claim_code.clone();
                                                 view! {
                                                     <div class="history-detail">
                                                         <p>"TxID: " {tx_id_short.clone()}</p>
                                                         <p class="muted">"Status: " {status_display.clone()}</p>
+                                                        // Show claim code for email sends so Alice can re-share it
+                                                        {if is_email_send {
+                                                            if let Some(code) = code_opt {
+                                                                let code_copy = code.clone();
+                                                                view! {
+                                                                    <div style="margin:6px 0">
+                                                                        <p class="muted" style="font-size:11px;margin-bottom:2px">"Claim code (share with recipient):"</p>
+                                                                        <p style="font-family:monospace;letter-spacing:2px;color:#d4a84b;font-size:14px;margin:2px 0">{code_copy.clone()}</p>
+                                                                        <button class="copy-btn" on:click=move |ev: web_sys::MouseEvent| {
+                                                                            ev.stop_propagation();
+                                                                            let c = code_copy.clone();
+                                                                            spawn_local(async move { copy_to_clipboard(c).await; });
+                                                                        }>"📋 Copy Code"</button>
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else { view! { <span></span> }.into_any() }
+                                                        } else { view! { <span></span> }.into_any() }}
                                                         {if can_cancel {
                                                             view! {
                                                                 <button
