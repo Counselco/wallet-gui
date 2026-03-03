@@ -973,10 +973,10 @@ pub struct TxHistoryEntry {
     pub claim_code: Option<String>,
 }
 
-/// Fetch Promise (timelock) history for this wallet.
-/// Regular Transfer entries are omitted — the node does not return transfer amounts,
-/// so they provide no useful information. Self-sends were also excluded by the previous
-/// `action_count < 2` filter (the node counts self-transfers with action_count >= 2).
+/// Fetch full transaction history for this wallet.
+/// Includes outgoing promises (timelocks), local transfer history, and incoming
+/// transactions (transfers received, email claims, timelock claims) via the
+/// `chronx_getIncomingTransfers` RPC method. All entries merged and sorted newest-first.
 #[tauri::command]
 pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntry>, String> {
     let url = rpc_url(&app);
@@ -1065,6 +1065,37 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             .unwrap_or_default()
     };
     entries.extend(local);
+
+    // ── Incoming transactions (transfers received, claimed timelocks) ────────
+    let incoming_result = rpc_call(
+        &url, "chronx_getIncomingTransfers", serde_json::json!([b58])
+    ).await;
+
+    if let Ok(incoming_val) = incoming_result {
+        let incoming: Vec<serde_json::Value> =
+            serde_json::from_value(incoming_val).unwrap_or_default();
+        for v in incoming {
+            let raw_type = v["tx_type"].as_str().unwrap_or("transfer");
+            let tx_type = match raw_type {
+                "email_claim"   => "Email Claimed".to_string(),
+                "timelock_claim" => "Promise Kept".to_string(),
+                _               => "Transfer Received".to_string(),
+            };
+            entries.push(TxHistoryEntry {
+                tx_id: v["tx_id"].as_str().unwrap_or("").to_string(),
+                tx_type,
+                amount_chronos: Some(v["amount_chronos"].as_str().unwrap_or("0").to_string()),
+                counterparty: Some(v["from"].as_str().unwrap_or("").to_string()),
+                timestamp: v["timestamp"].as_i64().unwrap_or(0),
+                status: "Confirmed".to_string(),
+                unlock_date: None,
+                cancellation_window_secs: None,
+                created_at: Some(v["timestamp"].as_i64().unwrap_or(0)),
+                claim_code: None,
+            });
+        }
+    }
+
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(entries)
 }

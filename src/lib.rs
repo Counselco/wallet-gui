@@ -3034,19 +3034,33 @@ fn HistoryPanel() -> impl IntoView {
                                 let tx_id = entry.tx_id.clone();
                                 let tx_id_for_toggle = tx_id.clone();
                                 let is_email_send = entry.tx_type == "Email Send";
+                                let is_incoming = matches!(entry.tx_type.as_str(),
+                                    "Transfer Received" | "Email Claimed" | "Promise Kept");
                                 let type_icon = match entry.tx_type.as_str() {
                                     "Promise Sent" | "TimeLockCreate" => "\u{23f3}",
                                     "TimeLockClaim" => "\u{2705}",
                                     "Email Send" => "\u{1f4e7}",
+                                    "Transfer Received" => "\u{2199}",
+                                    "Email Claimed" => "\u{1f4ec}",
+                                    "Promise Kept" => "\u{1f381}",
                                     _ => "\u{2197}",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
-                                    .map(|c| format!("{} KX", format_kx(c)))
+                                    .map(|c| {
+                                        let kx = format_kx(c);
+                                        if is_incoming { format!("+{} KX", kx) } else { format!("{} KX", kx) }
+                                    })
                                     .unwrap_or_else(|| "\u{2014}".to_string());
+                                let amount_class = if is_incoming { "history-amount incoming" } else { "history-amount" };
                                 // Email sends: show email address (truncated) regardless of unlock_date
                                 let addr_display = if is_email_send {
                                     entry.counterparty.as_deref()
                                         .map(|e| if e.len() > 26 { format!("{}…", &e[..24]) } else { e.to_string() })
+                                        .unwrap_or_default()
+                                } else if is_incoming {
+                                    // Show "From: <shortened account>" for incoming entries
+                                    entry.counterparty.as_deref()
+                                        .map(|a| format!("From {}", shorten_addr(a)))
                                         .unwrap_or_default()
                                 } else if let Some(unlock_ts) = entry.unlock_date {
                                     format!("Unlocks {}", unix_to_date_str(unlock_ts))
@@ -3092,7 +3106,7 @@ fn HistoryPanel() -> impl IntoView {
                                             <span class="history-type">
                                                 {type_icon} " " {entry.tx_type.clone()}
                                             </span>
-                                            <span class="history-amount">{amount_display}</span>
+                                            <span class={amount_class}>{amount_display}</span>
                                         </div>
                                         <div class="history-row-bottom">
                                             <span class="history-addr">{addr_display}</span>

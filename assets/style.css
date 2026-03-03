@@ -662,6 +662,9 @@ input[type="datetime-local"] { color-scheme: dark; }
     font-weight: 600;
     color: #fff;
 }
+.history-amount.incoming {
+    color: #2ecc71;
+}
 
 .history-row-bottom {
     display: flex;
