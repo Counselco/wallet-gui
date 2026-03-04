@@ -4,12 +4,21 @@
     box-sizing: border-box;
 }
 
+html {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    touch-action: manipulation;
+}
+
 body {
     background: #0f1117;
     color: #e1e4ea;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     font-size: 14px;
-    min-height: 100vh;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
 }
 
 .app {
@@ -17,6 +26,9 @@ body {
     margin: 0 auto;
     padding: 16px;
     padding-top: max(24px, env(safe-area-inset-top, 24px));
+    height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
