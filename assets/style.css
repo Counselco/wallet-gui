@@ -16,6 +16,7 @@ body {
     max-width: 500px;
     margin: 0 auto;
     padding: 16px;
+    padding-top: max(24px, env(safe-area-inset-top, 24px));
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
@@ -24,7 +25,7 @@ header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    padding: 12px 0 16px;
+    padding: 16px 0 16px;
     border-bottom: 1px solid #1e2130;
     margin-bottom: 16px;
     gap: 12px;
@@ -659,6 +660,32 @@ input[type="datetime-local"] { color-scheme: dark; }
     font-weight: 600;
     color: #8b9197;
     white-space: nowrap;
+}
+
+.history-type-badge {
+    display: inline-block;
+    font-size: 9px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.history-type-badge.sent {
+    background: rgba(231,76,60,0.15);
+    color: #e74c3c;
+}
+.history-type-badge.received {
+    background: rgba(46,204,113,0.15);
+    color: #2ecc71;
+}
+.history-type-badge.incoming-promise {
+    background: rgba(212,168,75,0.15);
+    color: #d4a84b;
+}
+.history-type-badge.outgoing-promise {
+    background: rgba(52,152,219,0.15);
+    color: #3498db;
 }
 
 .history-amount {
