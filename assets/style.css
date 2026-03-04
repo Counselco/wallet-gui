@@ -1249,6 +1249,11 @@ input[type="datetime-local"] { color-scheme: dark; }
     color: #e74c3c;
     border: 1px solid rgba(231,76,60,0.25);
 }
+.email-badge.reclaiming {
+    background: rgba(243,156,18,0.12);
+    color: #f39c12;
+    border: 1px solid rgba(243,156,18,0.3);
+}
 
 /* ── Update check info ──────────────────────────────────────────────────────── */
 .update-info {

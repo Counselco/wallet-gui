@@ -404,6 +404,7 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
         cancellation_window_secs: None,
         created_at: Some(now),
         claim_code: None,
+        claim_secret_hash: None,
     });
     Ok(txid)
 }
@@ -510,15 +511,10 @@ pub async fn create_email_timelock(
     }
     let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u128;
 
+    // unlock_at_unix == 0 means "Send Now" — immediately claimable.
+    // Any positive value means "Send Later" — must be in the future.
     let now = chrono::Utc::now().timestamp();
-    if unlock_at_unix <= now {
-        return Err("Unlock date must be in the future".to_string());
-    }
-    // Wallet enforces 1-day minimum for email locks too.
-    const WALLET_MIN_LOCK_SECS: i64 = 86_400; // 1 day
-    if unlock_at_unix < now + WALLET_MIN_LOCK_SECS {
-        return Err("Unlock date must be at least 24 hours from now.".to_string());
-    }
+    let unlock_at_unix = if unlock_at_unix <= 0 { now } else { unlock_at_unix };
 
     // ── Generate claim secret ──────────────────────────────────────────────────
     // 8 random bytes from the OS entropy source → formatted as "KX-XXXX-XXXX-XXXX-XXXX".
@@ -735,6 +731,30 @@ pub async fn claim_email_timelock(
     let lock_txid =
         TxId::from_hex(&lock_id_hex).map_err(|e| format!("Invalid lock ID: {e}"))?;
 
+    // Pre-validate: fetch lock and check maturity before submitting
+    // (sendTransaction is fire-and-forget — it returns TxId before execution,
+    //  so we must validate here to avoid false "success" messages)
+    if let Ok(result) = rpc_call(&url, "chronx_getTimeLockById", serde_json::json!([lock_id_hex])).await {
+        if let Ok(lock) = serde_json::from_value::<serde_json::Value>(result) {
+            if !lock.is_null() {
+                let now = chrono::Utc::now().timestamp();
+                if let Some(unlock_at) = lock["unlock_at"].as_i64() {
+                    if now < unlock_at {
+                        let dt = chrono::DateTime::from_timestamp(unlock_at, 0)
+                            .map(|d| d.format("%b %d, %Y %H:%M UTC").to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        return Err(format!("This promise hasn't unlocked yet. It unlocks on {dt}."));
+                    }
+                }
+                if let Some(status) = lock["status"].as_str() {
+                    if status != "Pending" {
+                        return Err(format!("This lock is already {status}."));
+                    }
+                }
+            }
+        }
+    }
+
     // Normalize: uppercase and trim so minor formatting differences don't fail.
     let normalized = claim_code.trim().to_uppercase();
 
@@ -812,13 +832,34 @@ pub async fn claim_by_code(app: AppHandle, claim_code: String) -> Result<ClaimBy
     }
 
     // Filter: Pending locks with matching claim_secret_hash
-    let matches: Vec<&TimeLockInfo> = candidates.iter()
+    let now = chrono::Utc::now().timestamp();
+    let all_matches: Vec<&TimeLockInfo> = candidates.iter()
         .filter(|l| l.status == "Pending"
             && l.claim_secret_hash.as_deref() == Some(target_hash.as_str()))
         .collect();
 
-    if matches.is_empty() {
+    if all_matches.is_empty() {
         return Err("No matching locks found for this code. Make sure your claim email is set in Settings.".to_string());
+    }
+
+    // Pre-validate maturity: only claim locks that have unlocked.
+    // (sendTransaction is fire-and-forget — returns TxId before execution,
+    //  so immature claims would silently fail on the node.)
+    let total_found = all_matches.len();
+    let soonest_unlock = all_matches.iter().map(|l| l.unlock_at).min().unwrap();
+    let matches: Vec<&TimeLockInfo> = all_matches.into_iter()
+        .filter(|l| now >= l.unlock_at)
+        .collect();
+
+    if matches.is_empty() {
+        // All matched locks exist but none have matured yet
+        let dt = chrono::DateTime::from_timestamp(soonest_unlock, 0)
+            .map(|d| d.format("%b %d, %Y %H:%M UTC").to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        return Err(format!(
+            "Found {} matching promise(s), but none have unlocked yet. The earliest unlocks on {dt}.",
+            total_found
+        ));
     }
 
     // Build claim actions for all matching locks
@@ -857,6 +898,24 @@ pub async fn cancel_timelock(app: AppHandle, lock_id_hex: String) -> Result<Stri
         TxId::from_hex(&lock_id_hex).map_err(|e| format!("Invalid lock ID: {e}"))?;
 
     let actions = vec![Action::CancelTimeLock {
+        lock_id: TimeLockId(lock_txid),
+    }];
+
+    build_sign_mine_submit(&kp, actions, &url).await
+}
+
+/// Reclaim an expired email lock whose 72-hour claim window has passed.
+/// The node validates that the lock is expired and the sender matches.
+/// Returns the TxId hex on success.
+#[tauri::command]
+pub async fn reclaim_expired_lock(app: AppHandle, lock_id_hex: String) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let lock_txid =
+        TxId::from_hex(&lock_id_hex).map_err(|e| format!("Invalid lock ID: {e}"))?;
+
+    let actions = vec![Action::ReclaimExpiredLock {
         lock_id: TimeLockId(lock_txid),
     }];
 
@@ -1034,6 +1093,9 @@ pub struct TxHistoryEntry {
     /// Claim code for pending email sends (so Alice can re-share it if needed).
     #[serde(default)]
     pub claim_code: Option<String>,
+    /// BLAKE3(claim_code) hex — locks sharing this hash belong to a Promise Series (cascade).
+    #[serde(default)]
+    pub claim_secret_hash: Option<String>,
 }
 
 /// Fetch full transaction history for this wallet.
@@ -1093,12 +1155,24 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                     ("Promise Sent".to_string(), v["memo"].as_str().map(|s| s.to_string()), None)
                 };
             let raw_status = v["status"].as_str().unwrap_or("Pending").to_string();
+            let claim_secret_hash = v["claim_secret_hash"].as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            let now = chrono::Utc::now().timestamp();
             // Map on-chain status to user-facing labels for email sends
             let status = if tx_type == "Email Send" {
                 match raw_status.as_str() {
-                    "Pending" => "Pending Claim".to_string(),
+                    "Pending" => {
+                        // If 72h claim window has passed but sweep hasn't run yet
+                        if now > created_at + 259_200 {
+                            "Expired \u{2014} Reclaiming".to_string()
+                        } else {
+                            "Pending Claim".to_string()
+                        }
+                    }
                     "Claimed" => "Claimed".to_string(),
                     "Expired" | "Reverted" => "Expired \u{2014} Reverted".to_string(),
+                    "Cancelled" => "Cancelled".to_string(),
                     other => other.to_string(),
                 }
             } else {
@@ -1115,6 +1189,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                 cancellation_window_secs,
                 created_at:     Some(created_at),
                 claim_code,
+                claim_secret_hash,
             }
         })
         .collect();
@@ -1155,6 +1230,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                 cancellation_window_secs: None,
                 created_at: Some(v["timestamp"].as_i64().unwrap_or(0)),
                 claim_code: None,
+                claim_secret_hash: None,
             });
         }
     }

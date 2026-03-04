@@ -58,6 +58,7 @@ pub fn run() {
             commands::create_email_timelock_series,
             commands::claim_email_series,
             commands::cancel_timelock_series,
+            commands::reclaim_expired_lock,
             commands::get_pending_deep_link,
             commands::get_pin_length,
             commands::set_pin_length,

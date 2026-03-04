@@ -2,3 +2,5 @@ target/
 dist/
 src-tauri/target/
 
+chronx-wallet-aligned.apk
+chronx-wallet-aligned.apk.idsig

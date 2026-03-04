@@ -116,6 +116,9 @@ struct TxHistoryEntry {
     /// Claim code for email sends — kept locally so Alice can re-share it.
     #[serde(default)]
     claim_code: Option<String>,
+    /// BLAKE3(claim_code) hex — locks sharing this hash belong to a Promise Series.
+    #[serde(default)]
+    claim_secret_hash: Option<String>,
 }
 
 /// Returned by `create_email_timelock` — carries the on-chain TxId and
@@ -3029,6 +3032,7 @@ fn HistoryPanel(
     let cancel_is_email  = RwSignal::new(false);
     let cancel_busy      = RwSignal::new(false);
     let cancel_msg       = RwSignal::new(String::new());
+    let cancel_cascade_ids = RwSignal::new(Vec::<String>::new()); // non-empty = series cancel
     // Sort: 0=date desc (default), 1=date asc, 2=amount desc, 3=amount asc, 4=type
     let h_sort = RwSignal::new(0u8);
     let h_page = RwSignal::new(0usize); // 0-indexed page number
@@ -3138,7 +3142,20 @@ fn HistoryPanel(
                         cancellation_window_secs: lock.cancellation_window_secs,
                         created_at: Some(lock.created_at),
                         claim_code: None,
+                        claim_secret_hash: lock.claim_secret_hash.clone(),
                     });
+                }
+
+                // Build cascade maps: which claim_secret_hash groups have any claimed lock?
+                let mut cascade_claimed: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+                let mut cascade_lock_ids: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                for e in &list {
+                    if let Some(ref hash) = e.claim_secret_hash {
+                        cascade_lock_ids.entry(hash.clone()).or_default().push(e.tx_id.clone());
+                        if e.status == "Claimed" || e.status.contains("Reverted") {
+                            cascade_claimed.insert(hash.clone(), true);
+                        }
+                    }
                 }
 
                 // Apply type filter
@@ -3268,16 +3285,31 @@ fn HistoryPanel(
                                 let tx_id_short = shorten_addr(&entry.tx_id);
                                 let entry_status = entry.status.clone();
 
+                                // Cascade awareness
+                                let is_cascade = entry.claim_secret_hash.as_ref()
+                                    .map_or(false, |h| cascade_lock_ids.get(h).map_or(false, |ids| ids.len() > 1));
+                                let cascade_has_claim = entry.claim_secret_hash.as_ref()
+                                    .map_or(false, |h| *cascade_claimed.get(h).unwrap_or(&false));
+                                let entry_cascade_ids: Vec<String> = entry.claim_secret_hash.as_ref()
+                                    .and_then(|h| cascade_lock_ids.get(h))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let is_expired_reclaiming = entry_status == "Expired \u{2014} Reclaiming";
+
                                 // Determine if this entry can be cancelled
-                                let can_cancel = (entry.status == "Pending" || entry.status == "Pending Claim")
+                                let can_cancel_base = (entry.status == "Pending" || entry.status == "Pending Claim")
                                     && entry.cancellation_window_secs.map_or(false, |w| w > 0)
                                     && entry.created_at.map_or(false, |ca| {
                                         let window = entry.cancellation_window_secs.unwrap_or(0) as f64;
                                         let deadline = (ca as f64 + window) * 1000.0; // ms
                                         js_sys::Date::now() < deadline
                                     });
+                                // For cascades: block cancel if any lock has been claimed
+                                let can_cancel = if is_cascade { can_cancel_base && !cascade_has_claim } else { can_cancel_base };
 
-                                let status_display = if can_cancel && !is_email_send {
+                                let status_display = if is_cascade && cascade_has_claim && !is_email_send {
+                                    "Promised \u{2713}".to_string()
+                                } else if can_cancel && !is_email_send {
                                     "Pending \u{2014} subject to reversion".to_string()
                                 } else {
                                     entry.status.clone()
@@ -3310,27 +3342,60 @@ fn HistoryPanel(
                                             <span class="history-addr">{addr_display}</span>
                                             <span class="history-date">{date_display}</span>
                                         </div>
-                                        // Email send status badge + inline Cancel for pending email sends
+                                        // Email send status badge + inline Cancel/Reclaim for email sends
                                         {if is_email_send {
                                             let badge_class = match entry_status.as_str() {
                                                 "Pending Claim" => "email-badge pending-claim",
                                                 "Claimed"       => "email-badge claimed",
+                                                "Expired \u{2014} Reclaiming" => "email-badge reclaiming",
                                                 _               => "email-badge expired",
                                             };
                                             let badge_text = entry_status.clone();
+                                            let reclaim_lock_id = entry.tx_id.clone();
+                                            let cancel_cascade_for_click = entry_cascade_ids.clone();
                                             view! {
-                                                <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                                                <div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap">
                                                     <span class=badge_class>{badge_text}</span>
-                                                    {if can_cancel {
+                                                    {if is_expired_reclaiming {
+                                                        // Show Reclaim button for expired-but-not-yet-swept locks
+                                                        view! {
+                                                            <button class="cancel-btn" style="margin-top:0;font-size:11px;padding:2px 10px;background:#d4a84b;color:#0a0a0a;border:none;border-radius:4px;cursor:pointer;font-weight:600"
+                                                                on:click={move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    let lid = reclaim_lock_id.clone();
+                                                                    inc_claim_msg.set("Reclaiming\u{2026}".into());
+                                                                    spawn_local(async move {
+                                                                        let args = serde_wasm_bindgen::to_value(
+                                                                            &serde_json::json!({ "lockIdHex": lid })
+                                                                        ).unwrap_or(no_args());
+                                                                        match call::<String>("reclaim_expired_lock", args).await {
+                                                                            Ok(_) => {
+                                                                                inc_claim_msg.set("Reclaimed! Funds returned.".into());
+                                                                                reload();
+                                                                            }
+                                                                            Err(e) => inc_claim_msg.set(format!("Reclaim error: {e}")),
+                                                                        }
+                                                                    });
+                                                                }}>
+                                                                "Reclaim"
+                                                            </button>
+                                                        }.into_any()
+                                                    } else if is_cascade && cascade_has_claim {
+                                                        // Cascade where claim has started — no cancel allowed
+                                                        view! {
+                                                            <span style="color:#d4a84b;font-size:11px;font-weight:700">"Promised \u{2713}"</span>
+                                                        }.into_any()
+                                                    } else if can_cancel {
                                                         view! {
                                                             <button class="cancel-btn" style="margin-top:0;font-size:11px;padding:2px 10px"
                                                                 on:click={move |ev: web_sys::MouseEvent| {
                                                                     ev.stop_propagation();
                                                                     cancel_msg.set(String::new());
                                                                     cancel_is_email.set(true);
+                                                                    cancel_cascade_ids.set(cancel_cascade_for_click.clone());
                                                                     cancel_target.set(Some(inline_cancel_id.clone()));
                                                                 }}>
-                                                                "Cancel"
+                                                                {if is_cascade { "Cancel Series" } else { "Cancel" }}
                                                             </button>
                                                         }.into_any()
                                                     } else { view! { <span></span> }.into_any() }}
@@ -3381,8 +3446,12 @@ fn HistoryPanel(
                                             let is_expanded = expanded.get().as_deref() == Some(tx_id.as_str());
                                             if is_expanded {
                                                 let cancel_id = cancel_lock_id.clone();
-                                                let btn_label = if is_email_send { "Cancel Send" } else { "Cancel Promise" };
+                                                let detail_cascade_ids = entry_cascade_ids.clone();
+                                                let btn_label = if is_cascade && is_email_send {
+                                                    "Cancel Series"
+                                                } else if is_email_send { "Cancel Send" } else { "Cancel Promise" };
                                                 let code_opt = entry_claim_code.clone();
+                                                let detail_reclaim_id = entry.tx_id.clone();
                                                 view! {
                                                     <div class="history-detail">
                                                         <p>"TxID: " {tx_id_short.clone()}</p>
@@ -3404,7 +3473,35 @@ fn HistoryPanel(
                                                                 }.into_any()
                                                             } else { view! { <span></span> }.into_any() }
                                                         } else { view! { <span></span> }.into_any() }}
-                                                        {if can_cancel {
+                                                        {if is_expired_reclaiming {
+                                                            view! {
+                                                                <button
+                                                                    class="cancel-btn"
+                                                                    style="background:#d4a84b;color:#0a0a0a;border:none;border-radius:4px;cursor:pointer;font-weight:600"
+                                                                    on:click=move |ev: web_sys::MouseEvent| {
+                                                                        ev.stop_propagation();
+                                                                        let lid = detail_reclaim_id.clone();
+                                                                        inc_claim_msg.set("Reclaiming\u{2026}".into());
+                                                                        spawn_local(async move {
+                                                                            let args = serde_wasm_bindgen::to_value(
+                                                                                &serde_json::json!({ "lockIdHex": lid })
+                                                                            ).unwrap_or(no_args());
+                                                                            match call::<String>("reclaim_expired_lock", args).await {
+                                                                                Ok(_) => {
+                                                                                    inc_claim_msg.set("Reclaimed! Funds returned.".into());
+                                                                                    reload();
+                                                                                }
+                                                                                Err(e) => inc_claim_msg.set(format!("Reclaim error: {e}")),
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                >"Reclaim Funds"</button>
+                                                            }.into_any()
+                                                        } else if is_cascade && cascade_has_claim {
+                                                            view! {
+                                                                <span style="color:#d4a84b;font-weight:700">"Promised \u{2713} \u{2014} cannot cancel"</span>
+                                                            }.into_any()
+                                                        } else if can_cancel {
                                                             view! {
                                                                 <button
                                                                     class="cancel-btn"
@@ -3412,6 +3509,7 @@ fn HistoryPanel(
                                                                         ev.stop_propagation();
                                                                         cancel_msg.set(String::new());
                                                                         cancel_is_email.set(is_email_send);
+                                                                        cancel_cascade_ids.set(detail_cascade_ids.clone());
                                                                         cancel_target.set(Some(cancel_id.clone()));
                                                                     }
                                                                 >{btn_label}</button>
@@ -3455,13 +3553,21 @@ fn HistoryPanel(
                 let lock_id = cancel_target.get_untracked().unwrap_or_default();
                 let lock_id_confirm = lock_id.clone();
                 let is_email = cancel_is_email.get_untracked();
-                let modal_title = if is_email { "Cancel Email Send?" } else { "Cancel Promise?" };
-                let modal_body = if is_email {
+                let cascade_ids = cancel_cascade_ids.get_untracked();
+                let is_series = cascade_ids.len() > 1;
+                let modal_title = if is_series {
+                    "Cancel Email Series?"
+                } else if is_email { "Cancel Email Send?" } else { "Cancel Promise?" };
+                let modal_body = if is_series {
+                    "Cancel all sends in this series? The KX will return to your balance immediately."
+                } else if is_email {
                     "Cancel this send? The KX will return to your balance immediately."
                 } else {
                     "Are you sure you wish to cancel this Promise? The KX will be returned to your balance immediately. This cannot be undone."
                 };
-                let confirm_label = if is_email { "Yes, Cancel Send" } else { "Yes, Cancel Promise" };
+                let confirm_label = if is_series {
+                    "Yes, Cancel Series"
+                } else if is_email { "Yes, Cancel Send" } else { "Yes, Cancel Promise" };
                 view! {
                     <div class="modal-overlay" on:click=move |_| {
                         if !cancel_busy.get_untracked() { cancel_target.set(None); }
@@ -3489,22 +3595,41 @@ fn HistoryPanel(
                                     disabled=move || cancel_busy.get()
                                     on:click=move |_| {
                                         let id = lock_id_confirm.clone();
+                                        let series_ids = cascade_ids.clone();
                                         cancel_busy.set(true);
                                         cancel_msg.set(String::new());
                                         spawn_local(async move {
-                                            let args = serde_wasm_bindgen::to_value(
-                                                &serde_json::json!({ "lockIdHex": id })
-                                            ).unwrap_or(no_args());
-                                            match call::<String>("cancel_timelock", args).await {
-                                                Ok(_) => {
-                                                    cancel_target.set(None);
-                                                    cancel_busy.set(false);
-                                                    // Refresh the history list
-                                                    reload();
+                                            if series_ids.len() > 1 {
+                                                // Cascade cancel — use cancel_timelock_series
+                                                let args = serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "lockIds": series_ids })
+                                                ).unwrap_or(no_args());
+                                                match call::<Vec<String>>("cancel_timelock_series", args).await {
+                                                    Ok(_) => {
+                                                        cancel_target.set(None);
+                                                        cancel_busy.set(false);
+                                                        reload();
+                                                    }
+                                                    Err(e) => {
+                                                        cancel_msg.set(format!("Cancel failed: {e}"));
+                                                        cancel_busy.set(false);
+                                                    }
                                                 }
-                                                Err(e) => {
-                                                    cancel_msg.set(format!("Cancel failed: {e}"));
-                                                    cancel_busy.set(false);
+                                            } else {
+                                                // Single cancel
+                                                let args = serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "lockIdHex": id })
+                                                ).unwrap_or(no_args());
+                                                match call::<String>("cancel_timelock", args).await {
+                                                    Ok(_) => {
+                                                        cancel_target.set(None);
+                                                        cancel_busy.set(false);
+                                                        reload();
+                                                    }
+                                                    Err(e) => {
+                                                        cancel_msg.set(format!("Cancel failed: {e}"));
+                                                        cancel_busy.set(false);
+                                                    }
                                                 }
                                             }
                                         });
