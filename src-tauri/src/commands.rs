@@ -748,6 +748,12 @@ pub async fn claim_email_timelock(
                 }
                 if let Some(status) = lock["status"].as_str() {
                     if status != "Pending" {
+                        if status.contains("Claimed") {
+                            return Err("This code has already been claimed.".to_string());
+                        }
+                        if status.contains("Reverted") {
+                            return Err("This code has expired \u{2014} the KX was automatically returned to the sender.".to_string());
+                        }
                         return Err(format!("This lock is already {status}."));
                     }
                 }
@@ -784,62 +790,50 @@ pub async fn claim_by_code(app: AppHandle, claim_code: String) -> Result<ClaimBy
     // Compute the target hash: BLAKE3(normalized_code)
     let target_hash = hex::encode(blake3::hash(normalized.as_bytes()).as_bytes());
 
-    // Gather candidate locks from multiple sources
-    let mut candidates: Vec<TimeLockInfo> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    // Look up locks directly by claim_secret_hash — no email required.
+    // getCascadeDetails returns all locks sharing this hash.
+    let cascade_result = rpc_call(
+        &url,
+        "chronx_getCascadeDetails",
+        serde_json::json!([target_hash]),
+    )
+    .await
+    .map_err(|e| format!("Failed to look up claim code: {e}"))?;
 
-    // Source 1: email locks for registered claim emails
-    let cfg = read_config(&app);
-    let emails = cfg.claim_emails.unwrap_or_default();
-    for email in &emails {
-        if email.trim().is_empty() { continue; }
-        let hash_hex = hex::encode(blake3::hash(email.to_lowercase().as_bytes()).as_bytes());
-        if let Ok(result) = rpc_call(&url, "chronx_getEmailLocks", serde_json::json!([hash_hex])).await {
-            if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
-                for v in raw {
-                    let lock = parse_timelock_json(&v);
-                    if seen.insert(lock.lock_id.clone()) {
-                        candidates.push(lock);
-                    }
-                }
-            }
-        }
+    let cascade: serde_json::Value = serde_json::from_value(cascade_result)
+        .map_err(|e| format!("Invalid cascade response: {e}"))?;
+
+    let locks_arr = cascade["locks"]
+        .as_array()
+        .ok_or_else(|| "Code not found. Check carefully \u{2014} should be KX-XXXX-XXXX-XXXX-XXXX with no extra characters.".to_string())?;
+
+    if locks_arr.is_empty() {
+        return Err("Code not found. Check carefully \u{2014} should be KX-XXXX-XXXX-XXXX-XXXX with no extra characters.".to_string());
     }
 
-    // Source 2: pending incoming locks for this wallet
-    let b58 = kp.account_id.to_b58();
-    if let Ok(result) = rpc_call(&url, "chronx_getPendingIncoming", serde_json::json!([b58])).await {
-        if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
-            for v in raw {
-                let lock = parse_timelock_json(&v);
-                if seen.insert(lock.lock_id.clone()) {
-                    candidates.push(lock);
-                }
-            }
-        }
-    }
-
-    // Source 3: this wallet's own timelocks (for self-sends)
-    if let Ok(result) = rpc_call(&url, "chronx_getTimeLockContracts", serde_json::json!([b58])).await {
-        if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
-            for v in raw {
-                let lock = parse_timelock_json(&v);
-                if seen.insert(lock.lock_id.clone()) {
-                    candidates.push(lock);
-                }
-            }
-        }
-    }
+    let candidates: Vec<TimeLockInfo> = locks_arr
+        .iter()
+        .map(|v| parse_timelock_json(v))
+        .collect();
 
     // Filter: Pending locks with matching claim_secret_hash
     let now = chrono::Utc::now().timestamp();
-    let all_matches: Vec<&TimeLockInfo> = candidates.iter()
-        .filter(|l| l.status == "Pending"
-            && l.claim_secret_hash.as_deref() == Some(target_hash.as_str()))
+    let all_matches: Vec<&TimeLockInfo> = candidates
+        .iter()
+        .filter(|l| l.status == "Pending")
         .collect();
 
     if all_matches.is_empty() {
-        return Err("No matching locks found for this code. Make sure your claim email is set in Settings.".to_string());
+        // Determine why no pending locks
+        let has_claimed = candidates.iter().any(|l| l.status == "Claimed");
+        let has_reverted = candidates.iter().any(|l| l.status.contains("Reverted"));
+        if has_claimed {
+            return Err("This code has already been claimed.".to_string());
+        }
+        if has_reverted {
+            return Err("This code has expired \u{2014} the KX was automatically returned to the sender.".to_string());
+        }
+        return Err("Code not found. Check carefully \u{2014} should be KX-XXXX-XXXX-XXXX-XXXX with no extra characters.".to_string());
     }
 
     // Pre-validate maturity: only claim locks that have unlocked.
@@ -877,7 +871,13 @@ pub async fn claim_by_code(app: AppHandle, claim_code: String) -> Result<ClaimBy
         .sum();
     let lock_ids: Vec<String> = matches.iter().map(|l| l.lock_id.clone()).collect();
 
-    let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+    eprintln!("claim_by_code: submitting claim tx, count={claimed_count}, chronos={total_chronos}, locks={lock_ids:?}");
+    let tx_id = build_sign_mine_submit(&kp, actions, &url).await
+        .map_err(|e| {
+            eprintln!("claim_by_code: submit failed: {e}");
+            e
+        })?;
+    eprintln!("claim_by_code: tx submitted: {tx_id}");
 
     Ok(ClaimByCodeResult {
         tx_id,
@@ -1305,10 +1305,25 @@ pub async fn check_for_updates() -> UpdateInfo {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Notice {
     pub id: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub body: String,
-    pub severity: String, // "info" | "warning" | "critical"
+    #[serde(default)]
+    pub severity: String, // "info" | "warning" | "critical" | "reward" | "urgent" | "message"
+    #[serde(default)]
     pub date: String,
+    /// New API field — "urgent" or "message"
+    #[serde(rename = "type", default)]
+    pub notice_type: String,
+    #[serde(default)]
+    pub dismissible: Option<bool>,
+    #[serde(default)]
+    pub expires: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub url_label: Option<String>,
 }
 
 // ── Email send history ───────────────────────────────────────────────────────
@@ -1420,18 +1435,26 @@ fn read_seen_notices(app: &AppHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Fetch all server notices from https://chronx.io/notices.json.
+/// Fetch active notices from https://api.chronx.io/notices.
 #[tauri::command]
-pub async fn fetch_notices() -> Result<Vec<Notice>, String> {
-    let resp = reqwest::get("https://chronx.io/notices.json")
+pub async fn fetch_notices(app: AppHandle) -> Result<Vec<Notice>, String> {
+    let version = app.package_info().version.to_string();
+    let url = format!("https://api.chronx.io/notices?version={version}");
+    let resp = reqwest::get(&url)
         .await
         .map_err(|e| format!("Network error: {e}"))?;
     let json: serde_json::Value = resp
         .json()
         .await
         .map_err(|e| format!("Parse error: {e}"))?;
-    let notices: Vec<Notice> =
+    let mut notices: Vec<Notice> =
         serde_json::from_value(json["notices"].clone()).unwrap_or_default();
+    // Map new API type field to severity for backward compat with frontend
+    for n in &mut notices {
+        if n.severity.is_empty() && !n.notice_type.is_empty() {
+            n.severity = n.notice_type.clone();
+        }
+    }
     Ok(notices)
 }
 
@@ -1441,16 +1464,36 @@ pub async fn get_seen_notices(app: AppHandle) -> Vec<String> {
     read_seen_notices(&app)
 }
 
-/// Persistently mark a notice as read on this device.
+/// Persistently mark a notice as read on this device and report to server.
 #[tauri::command]
 pub async fn mark_notice_seen(app: AppHandle, id: String) -> Result<(), String> {
     let path = seen_notices_path(&app);
     let mut ids = read_seen_notices(&app);
     if !ids.contains(&id) {
-        ids.push(id);
+        ids.push(id.clone());
         let json = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
         std::fs::write(&path, json).map_err(|e| e.to_string())?;
     }
+    // Best-effort report to server
+    let url = format!("https://api.chronx.io/notices/{id}/seen");
+    let _ = reqwest::Client::new().post(&url).json(&serde_json::json!({})).send().await;
+    Ok(())
+}
+
+/// Report notice dismissed to server and persist locally.
+#[tauri::command]
+pub async fn mark_notice_dismissed(app: AppHandle, id: String) -> Result<(), String> {
+    // Store in seen list so it won't show again
+    let path = seen_notices_path(&app);
+    let mut ids = read_seen_notices(&app);
+    if !ids.contains(&id) {
+        ids.push(id.clone());
+        let json = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
+        std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    }
+    // Best-effort report to server
+    let url = format!("https://api.chronx.io/notices/{id}/dismissed");
+    let _ = reqwest::Client::new().post(&url).json(&serde_json::json!({})).send().await;
     Ok(())
 }
 

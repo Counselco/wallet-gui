@@ -204,15 +204,15 @@ button:hover:not(:disabled) { background: #253354; border-color: #3b4e72; }
 button:disabled { opacity: 0.45; cursor: default; }
 
 button.primary {
-    background: #1d4ed8;
-    border-color: #1d4ed8;
-    color: #fff;
-    font-weight: 500;
+    background: #d4a84b;
+    border-color: #d4a84b;
+    color: #1a1a2e;
+    font-weight: 600;
     padding: 11px 20px;
     width: 100%;
     font-size: 14px;
 }
-button.primary:hover:not(:disabled) { background: #2563eb; border-color: #2563eb; }
+button.primary:hover:not(:disabled) { background: #e0b85c; border-color: #e0b85c; }
 
 button.primary.danger {
     background: #7c2d12;
@@ -333,6 +333,7 @@ input[type="datetime-local"] { color-scheme: dark; }
     font-size: 12px;
     font-family: 'Consolas', 'Monaco', monospace;
     word-break: break-all;
+    white-space: pre-line;
     line-height: 1.5;
     padding: 8px 10px;
     border-radius: 6px;
@@ -492,6 +493,8 @@ input[type="datetime-local"] { color-scheme: dark; }
     min-height: 80vh;
     gap: 20px;
     padding: 20px;
+    padding-bottom: 300px;
+    overflow-y: auto;
 }
 
 .pin-title {
@@ -701,9 +704,14 @@ input[type="datetime-local"] { color-scheme: dark; }
 }
 
 .history-amount {
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
     color: #fff;
+    text-align: right;
+    margin-left: auto;
+    max-width: 140px;
+    word-break: break-word;
+    flex-shrink: 0;
 }
 .history-amount.incoming {
     color: #2ecc71;

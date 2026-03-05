@@ -134,10 +134,18 @@ struct EmailLockResult {
 #[derive(Clone, serde::Deserialize)]
 struct Notice {
     id: String,
+    #[serde(default)]
     title: String,
+    #[serde(default)]
     body: String,
-    severity: String, // "info" | "warning" | "critical" | "reward"
+    #[serde(default)]
+    severity: String, // "info" | "warning" | "critical" | "reward" | "urgent" | "message"
+    #[serde(default)]
     date: String,
+    #[serde(rename = "type", default)]
+    notice_type: String,
+    #[serde(default)]
+    dismissible: Option<bool>,
     #[serde(default)]
     expires: Option<String>,
     #[serde(default)]
@@ -184,7 +192,20 @@ fn format_int_with_commas(n: u128) -> String {
 
 fn format_kx(chronos_str: &str) -> String {
     let c: u128 = chronos_str.parse().unwrap_or(0);
-    format!("{}.{:06}", format_int_with_commas(c / 1_000_000), (c % 1_000_000) as u32)
+    let whole = c / 1_000_000;
+    let frac = (c % 1_000_000) as u32;
+    if frac == 0 {
+        format_int_with_commas(whole)
+    } else {
+        let d2 = frac / 10_000; // first 2 decimal digits
+        if d2 == 0 {
+            format_int_with_commas(whole)
+        } else if d2 % 10 == 0 {
+            format!("{}.{}", format_int_with_commas(whole), d2 / 10)
+        } else {
+            format!("{}.{:02}", format_int_with_commas(whole), d2)
+        }
+    }
 }
 
 // ── Display helpers ───────────────────────────────────────────────────────────
@@ -418,6 +439,26 @@ async fn delay_ms(ms: u32) {
     let _ = JsFuture::from(promise).await;
 }
 
+/// Poll until balance or nonce changes (node confirmed the tx), up to ~15 seconds.
+async fn poll_balance_update(info: RwSignal<Option<AccountInfo>>) {
+    let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
+    let prev_balance = info.get_untracked().as_ref()
+        .map(|a| a.balance_chronos.clone()).unwrap_or_default();
+    for _ in 0..15u8 {
+        delay_ms(1000).await;
+        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+            if a.nonce != prev_nonce || a.balance_chronos != prev_balance {
+                info.set(Some(a));
+                return;
+            }
+        }
+    }
+    // Final refresh even if nothing changed
+    if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+        info.set(Some(a));
+    }
+}
+
 // ── Countdown ticker (self-scheduling via spawn_local) ────────────────────────
 
 fn start_countdown_tick(countdown: RwSignal<u32>, locked_until: f64) {
@@ -609,6 +650,8 @@ fn App() -> impl IntoView {
                             ),
                             severity: "info".to_string(),
                             date: date_str,
+                            notice_type: "message".to_string(),
+                            dismissible: Some(true),
                             expires: None,
                             url: Some("https://chronx.io/wallet.html".to_string()),
                             url_label: Some("Download Update".to_string()),
@@ -656,6 +699,22 @@ fn App() -> impl IntoView {
             check_email();
         });
     };
+
+    // ── Auto-refresh balance every 10 seconds (silent, no spinner) ──────────
+    {
+        let cb = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+            spawn_local(async move {
+                // Silent refresh — don't touch loading signal
+                if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
+                    info.set(Some(a));
+                }
+            });
+        });
+        let _ = web_sys::window().unwrap().set_interval_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(), 10_000
+        );
+        cb.forget(); // leak closure — lives for app lifetime
+    }
 
     // ── Wallet creation (first run) ───────────────────────────────────────────
 
@@ -869,26 +928,21 @@ fn App() -> impl IntoView {
 
             AppPhase::Wallet => view! {
                 <div class="app">
-                    // Critical notices banner
+                    // Urgent notices banner (red, non-dismissible)
                     {move || {
-                        let crits: Vec<Notice> = notices.get().into_iter()
-                            .filter(|n| n.severity == "critical" && !crit_dismissed.get().contains(&n.id))
+                        let urgents: Vec<Notice> = notices.get().into_iter()
+                            .filter(|n| n.severity == "urgent" || n.severity == "critical")
+                            .filter(|n| n.dismissible != Some(true))
                             .collect();
-                        if crits.is_empty() {
+                        if urgents.is_empty() {
                             view! { <span></span> }.into_any()
                         } else {
                             view! {
                                 <div class="critical-notices-bar">
-                                    {crits.into_iter().map(|n| {
-                                        let nid = n.id.clone();
+                                    {urgents.into_iter().map(|n| {
                                         view! {
                                             <div class="critical-notice-item">
-                                                <span>"⚠ " {n.title.clone()} " — " {n.body.clone()}</span>
-                                                <button class="critical-notice-close" on:click=move |_| {
-                                                    let mut d = crit_dismissed.get_untracked();
-                                                    d.push(nid.clone());
-                                                    crit_dismissed.set(d);
-                                                }>"✕"</button>
+                                                <span>"\u{1F6A8} " {n.title.clone()} " — " {n.body.clone()}</span>
                                             </div>
                                         }
                                     }).collect::<Vec<_>>()}
@@ -921,7 +975,7 @@ fn App() -> impl IntoView {
                             "⚙ Settings"
                             {move || {
                                 let unread = notices.get().iter()
-                                    .filter(|n| !seen_ids.get().contains(&n.id))
+                                    .filter(|n| n.severity != "urgent" && !seen_ids.get().contains(&n.id))
                                     .count();
                                 let has_update = update_available.get();
                                 if has_update {
@@ -1004,7 +1058,7 @@ fn App() -> impl IntoView {
                                             let args = serde_wasm_bindgen::to_value(
                                                 &serde_json::json!({ "id": id })
                                             ).unwrap_or(no_args());
-                                            let _ = call::<()>("mark_notice_seen", args).await;
+                                            let _ = call::<()>("mark_notice_dismissed", args).await;
                                         });
                                     }
                                 />
@@ -1475,12 +1529,10 @@ fn AccountPanel(
     // Sub-tab: 0 = Receive (default), 1 = Send
     let account_sub = RwSignal::new(0u8);
     let copy_success = RwSignal::new(false);
-    let pk_copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
     let inc_loading  = RwSignal::new(false);
     let qr_svg       = RwSignal::new(String::new());
-    let qr_modal_open = RwSignal::new(false);
-    let pubkey_hex   = RwSignal::new(String::new());
+    let qr_visible   = RwSignal::new(false);
 
     // Claim code on Receive tab (pre-fill from deep link)
     let dl_code = deep_link_code.get_untracked();
@@ -1491,7 +1543,7 @@ fn AccountPanel(
     let home_claim_msg  = RwSignal::new(String::new());
     let home_claim_busy = RwSignal::new(false);
 
-    // Load incoming promises + public key on mount
+    // Load incoming promises on mount
     Effect::new(move |_| {
         spawn_local(async move {
             inc_loading.set(true);
@@ -1499,11 +1551,6 @@ fn AccountPanel(
                 incoming.set(locks);
             }
             inc_loading.set(false);
-        });
-        spawn_local(async move {
-            if let Ok(pk) = call::<String>("export_public_key", no_args()).await {
-                pubkey_hex.set(pk);
-            }
         });
     });
 
@@ -1518,28 +1565,15 @@ fn AccountPanel(
         });
     };
 
-    let on_show_qr = move |_: web_sys::MouseEvent| {
-        let account_id = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
-        if account_id.is_empty() { return; }
-        let pk = pubkey_hex.get_untracked();
-        let qr_data = if pk.is_empty() {
-            account_id
+    let on_toggle_qr = move |_: web_sys::MouseEvent| {
+        if qr_visible.get() {
+            qr_visible.set(false);
         } else {
-            format!("chronx:{account_id}:{pk}")
-        };
-        qr_svg.set(make_qr_svg(&qr_data));
-        qr_modal_open.set(true);
-    };
-
-    let on_copy_pubkey = move |_: web_sys::MouseEvent| {
-        let pk = pubkey_hex.get_untracked();
-        if pk.is_empty() { return; }
-        spawn_local(async move {
-            copy_to_clipboard(pk).await;
-            pk_copy_success.set(true);
-            delay_ms(2000).await;
-            pk_copy_success.set(false);
-        });
+            let account_id = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
+            if account_id.is_empty() { return; }
+            qr_svg.set(make_qr_svg(&account_id));
+            qr_visible.set(true);
+        }
     };
 
     view! {
@@ -1618,71 +1652,55 @@ fn AccountPanel(
                     else { view! { <p class="error">{e}</p> }.into_any() }
                 }}
 
-                // ── Incoming promise summary (Change 4) ─────────────────────
-                {move || {
-                    let count = incoming.get().len();
-                    if inc_loading.get() {
-                        view! { <p class="muted" style="margin-top:8px;font-size:13px">"Checking incoming promises\u{2026}"</p> }.into_any()
-                    } else if count > 0 {
-                        view! {
-                            <p style="margin-top:8px;font-size:13px;color:#d4a84b;font-weight:600">
-                                {format!("You have {} promised funds arriving \u{2014} ", count)}
-                                <a href="#" style="color:#d4a84b;text-decoration:underline;cursor:pointer" on:click=move |ev| {
-                                    ev.prevent_default();
-                                    active_tab.set(1); // navigate to History
-                                }>"find them in History"</a>
-                            </p>
-                        }.into_any()
-                    } else {
-                        view! { <span></span> }.into_any()
-                    }
-                }}
-
-                // ── Account ID ───────────────────────────────────────────────
+                // ── Section A: Account ID ────────────────────────────────
                 <div style="margin-top:12px">
-                    <p class="label">"Account ID"</p>
+                    <p class="label" style="text-transform:uppercase;letter-spacing:1px;font-size:10px;color:#6b7280">"ACCOUNT ID"</p>
                     <div class="copy-row">
                         <p class="mono"
-                           title="Click to copy address"
-                           style="cursor:pointer;flex:1"
+                           title="Click to copy full address"
+                           style="cursor:pointer;flex:1;font-size:13px"
                            on:click=on_copy>
                             {move || info.get()
-                                .map(|a| a.account_id)
+                                .map(|a| {
+                                    let id = a.account_id;
+                                    if id.len() > 28 {
+                                        format!("{}\u{2026}{}", &id[..16], &id[id.len()-8..])
+                                    } else {
+                                        id
+                                    }
+                                })
                                 .unwrap_or_else(|| "\u{2014}".into())}
                         </p>
-                        <button style="font-size:12px;padding:4px 10px" on:click=on_copy title="Copy address">
+                        <button style="font-size:12px;padding:4px 10px" on:click=on_copy title="Copy full address">
                             {move || if copy_success.get() { "Copied!" } else { "\u{1f4cb} Copy" }}
                         </button>
                     </div>
                     <p class="muted" style="font-size:11px;margin-top:4px">
-                        "\u{1f512} This is your public wallet address \u{2014} safe to share."
+                        "Share this address to receive KX"
                     </p>
                 </div>
 
                 <hr style="border:none;border-top:1px solid #1e2130;margin:14px 0" />
 
-                // ── Your Public Key ──────────────────────────────────────────
+                // ── Section B: QR Code (inline toggle) ──────────────────────
                 <div>
-                    <p class="label">"Your Public Key"</p>
-                    <p class="mono" style="font-size:10px;word-break:break-all;line-height:1.6;color:#9ca3af;margin:4px 0">
-                        {move || {
-                            let pk = pubkey_hex.get();
-                            if pk.is_empty() { "Loading\u{2026}".to_string() } else { pk }
-                        }}
-                    </p>
-                    <button style="font-size:12px;padding:4px 10px;margin-top:4px" on:click=on_copy_pubkey>
-                        {move || if pk_copy_success.get() { "Copied!" } else { "\u{1f4cb} Copy Public Key" }}
+                    <button style="font-size:13px;padding:8px 16px;border:1px solid #d4a84b;background:transparent;color:#d4a84b;border-radius:6px;cursor:pointer;width:100%"
+                        on:click=on_toggle_qr>
+                        {move || if qr_visible.get() { "Hide QR Code" } else { "Show QR Code" }}
                     </button>
-                </div>
-
-                <hr style="border:none;border-top:1px solid #1e2130;margin:14px 0" />
-
-                // ── QR Code ──────────────────────────────────────────────────
-                <div>
-                    <p class="label">"QR Code"</p>
-                    <button style="font-size:13px;padding:8px 16px;margin-top:4px" on:click=on_show_qr>
-                        "\u{1f4f7} Show QR Code"
-                    </button>
+                    {move || if qr_visible.get() {
+                        let svg = qr_svg.get();
+                        view! {
+                            <div style="margin-top:12px;text-align:center;background:#fff;border-radius:8px;padding:16px">
+                                <div inner_html=svg style="display:inline-block"></div>
+                                <p style="color:#555;font-size:11px;margin-top:8px">
+                                    "Others scan this to send KX to you"
+                                </p>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }}
                 </div>
 
                 <hr style="border:none;border-top:1px solid #1e2130;margin:14px 0" />
@@ -1726,9 +1744,8 @@ fn AccountPanel(
                                             home_claim_msg.set(format!("Claimed {} promises ({kx} KX total)!", result.claimed_count));
                                         }
                                         home_claim_code.set(String::new());
-                                        if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                            info.set(Some(fresh));
-                                        }
+                                        // Poll until node confirms (nonce changes)
+                                        poll_balance_update(info).await;
                                         if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
                                             incoming.set(locks);
                                         }
@@ -1772,37 +1789,6 @@ fn AccountPanel(
                     }
                 }}
             </div>
-
-            // ── QR Code Modal ────────────────────────────────────────────────
-            {move || if qr_modal_open.get() {
-                let svg = qr_svg.get();
-                view! {
-                    <div class="modal-overlay" on:click=move |ev| {
-                        use wasm_bindgen::JsCast;
-                        if let Some(target) = ev.target() {
-                            if target.dyn_into::<web_sys::HtmlElement>().ok()
-                                .and_then(|el| el.class_list().contains("modal-overlay").then_some(()))
-                                .is_some()
-                            {
-                                qr_modal_open.set(false);
-                            }
-                        }
-                    }>
-                        <div class="modal-box" style="background:#fff;padding:24px;border-radius:12px;max-width:340px;margin:auto">
-                            <div inner_html=svg></div>
-                            <p style="color:#555;font-size:11px;margin-top:10px;text-align:center">
-                                "Scan to receive KX"
-                            </p>
-                            <button style="margin-top:12px;width:100%;padding:8px;background:#1a1d27;color:#fff;border:none;border-radius:6px;cursor:pointer"
-                                on:click=move |_| qr_modal_open.set(false)>
-                                "Close"
-                            </button>
-                        </div>
-                    </div>
-                }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
-            }}
 
         </div>
 
@@ -1955,9 +1941,8 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                         msg.set(format!("Sent! TxId: {}", &txid[..16.min(txid.len())]));
                         to_addr.set(String::new());
                         amount.set(String::new());
-                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                            info.set(Some(a));
-                        }
+                        // Poll until node confirms
+                        poll_balance_update(info).await;
                     }
                     Err(e) => msg.set(format!("Error: {e}")),
                 }
@@ -2044,8 +2029,8 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         match call::<()>("notify_email_recipient", notify_args).await {
-                            Ok(_) => { msg.set(format!("Sent! Email delivered. Claim code: {claim_code}")); spam_warn.set(true); }
-                            Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
+                            Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                            Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                         // Check immediately (transaction is already on-chain), then poll as fallback
@@ -2060,6 +2045,10 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             info.set(Some(a));
                         }
                         pending_email_chronos.set(0);
+                        // Clear form fields after success
+                        email.set(String::new());
+                        amount.set(String::new());
+                        memo.set(String::new());
                     }
                     Err(e) => {
                         pending_email_chronos.set(0);
@@ -2199,8 +2188,8 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                                 "claimCode": claim_code.clone(),
                             })).unwrap_or(no_args());
                             match call::<()>("notify_email_recipient", notify_args).await {
-                                Ok(_) => { msg.set(format!("Sent! Email delivered. Claim code: {claim_code}")); spam_warn.set(true); }
-                                Err(_) => { msg.set(format!("Sent on-chain! Email failed \u{2014} claim code: {claim_code} \u{2014} share this code with the recipient manually.")); }
+                                Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                                Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
                             let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                             for i in 0..=10u8 {
@@ -2661,10 +2650,8 @@ fn PromisesPanel(
                                                     .filter(|l| l.lock_id != lid)
                                                     .collect();
                                                 email_locks.set(remaining);
-                                                // Refresh balance
-                                                if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                                    info.set(Some(fresh));
-                                                }
+                                                // Poll until node confirms
+                                                poll_balance_update(info).await;
                                             }
                                             Err(e) => claim_msg.set(format!("Error: {e}")),
                                         }
@@ -2736,6 +2723,8 @@ fn PromisesPanel(
                                                                         Ok(txid) => {
                                                                             claim_msg.set(format!("Claimed! TxId: {txid}"));
                                                                             email_locks.update(|locks| locks.retain(|l| l.lock_id != lid));
+                                                                            // Poll until node confirms
+                                                                            poll_balance_update(info).await;
                                                                         }
                                                                         Err(e) => claim_msg.set(format!("Error: {e}")),
                                                                     }
@@ -2806,10 +2795,8 @@ fn PromisesPanel(
                                             // Remove claimed locks from email_locks
                                             let ids = result.lock_ids;
                                             email_locks.update(|locks| locks.retain(|l| !ids.contains(&l.lock_id)));
-                                            // Refresh balance
-                                            if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                                info.set(Some(fresh));
-                                            }
+                                            // Poll until node confirms
+                                            poll_balance_update(info).await;
                                         }
                                         Err(e) => claim_msg.set(format!("Error: {e}")),
                                     }
@@ -2942,10 +2929,8 @@ fn PromisesPanel(
                                             match call::<String>("claim_timelock", args).await {
                                                 Ok(txid) => {
                                                     claim_msg.set(format!("Claimed! TxId: {txid}"));
-                                                    // Refresh timelocks + balance
-                                                    if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                                        info.set(Some(fresh));
-                                                    }
+                                                    // Poll until node confirms
+                                                    poll_balance_update(info).await;
                                                     if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_timelocks", no_args()).await {
                                                         timelocks.set(locks);
                                                     }
@@ -3421,11 +3406,10 @@ fn HistoryPanel(
                                                                     match call::<String>("claim_timelock", args).await {
                                                                         Ok(txid) => {
                                                                             inc_claim_msg.set(format!("Claimed! TxId: {}", &txid[..16.min(txid.len())]));
+                                                                            // Poll until node confirms
+                                                                            poll_balance_update(info).await;
                                                                             if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
                                                                                 incoming.set(locks);
-                                                                            }
-                                                                            if let Ok(fresh) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                                                                info.set(Some(fresh));
                                                                             }
                                                                         }
                                                                         Err(e) => inc_claim_msg.set(format!("Error: {e}")),
@@ -3755,24 +3739,7 @@ fn RewardsPanel(active_tab: RwSignal<u8>) -> impl IntoView {
                 "Earn free KX for being part of the ChronX community. Register your wallet to receive rewards, announcements, and exclusive airdrops."
             </p>
 
-            // Claim email nudge
-            {move || {
-                if !has_claim_emails.get() {
-                    view! {
-                        <div class="rewards-nudge" style="margin-bottom:16px;">
-                            <p style="font-size:13px;font-weight:600;color:#d4a84b;">
-                                "Set up claim emails in Settings to receive KX sent to your email address."
-                            </p>
-                            <button class="pill" style="margin-top:8px;color:#d4a84b;border-color:#d4a84b;"
-                                on:click=move |_| active_tab.set(3)>
-                                "Go to Settings"
-                            </button>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! { <span></span> }.into_any()
-                }
-            }}
+            // Claim email nudge removed — claim by code no longer requires email
 
             {move || match phase.get() {
                 0 => {
@@ -4101,7 +4068,10 @@ fn SettingsPanel(
 
             // Public Key
             <div class="settings-section">
-                <p class="label">"My Public Key (share so others can promise KX to you)"</p>
+                <p class="label" style="text-transform:uppercase;letter-spacing:1px">"MY PUBLIC KEY"</p>
+                <p class="muted" style="font-size:11px;margin-bottom:6px">
+                    "(Advanced \u{2014} share so others can time-lock KX directly to your key)"
+                </p>
                 <button on:click=on_show_pubkey disabled=move || pk_loading.get()>
                     {move || if pk_loading.get() {
                         "Loading\u{2026}"
@@ -4114,14 +4084,25 @@ fn SettingsPanel(
                 {move || {
                     let pk = pubkey_hex.get();
                     if pk.is_empty() { view! { <span></span> }.into_any() }
-                    else { view! {
-                        <div>
-                            <p class="mono" style="font-size:10px;word-break:break-all;margin-top:8px">{pk}</p>
-                            <p class="muted" style="font-size:11px;margin-top:4px">
-                                "\u{1f512} This is your public key \u{2014} safe to share. Never share your private key."
-                            </p>
-                        </div>
-                    }.into_any() }
+                    else {
+                        let pk_for_copy = pk.clone();
+                        view! {
+                            <div>
+                                <div style="max-height:120px;overflow-y:auto;background:#0f1117;border-radius:6px;padding:8px;margin-top:8px">
+                                    <p class="mono" style="font-size:10px;word-break:break-all;line-height:1.6;color:#9ca3af;margin:0">{pk}</p>
+                                </div>
+                                <button style="font-size:12px;padding:4px 10px;margin-top:6px"
+                                    on:click=move |_: web_sys::MouseEvent| {
+                                        let pk_val = pk_for_copy.clone();
+                                        spawn_local(async move {
+                                            copy_to_clipboard(pk_val).await;
+                                        });
+                                    }>
+                                    "\u{1f4cb} Copy Public Key"
+                                </button>
+                            </div>
+                        }.into_any()
+                    }
                 }}
             </div>
 
@@ -4160,7 +4141,8 @@ fn SettingsPanel(
                                     }.into_any()
                                 } else { view! { <span></span> }.into_any() }}
                                 {all.into_iter().filter(|n| {
-                                    // Filter out expired notices
+                                    // Filter out urgent notices (shown in banner) and expired
+                                    if n.severity == "urgent" { return false; }
                                     if let Some(ref exp) = n.expires {
                                         let now_str = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
                                         if now_str.as_str() > exp.as_str() { return false; }

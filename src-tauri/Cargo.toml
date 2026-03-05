@@ -3,7 +3,7 @@
 
 [package]
 name = "chronx-wallet-gui"
-version = "1.4.27"
+version = "1.4.32"
 edition = "2021"
 
 [lib]
