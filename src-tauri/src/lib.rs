@@ -44,6 +44,7 @@ pub fn run() {
             commands::fetch_notices,
             commands::get_seen_notices,
             commands::mark_notice_seen,
+            commands::mark_notice_dismissed,
             commands::notify_email_recipient,
             commands::register_for_rewards,
             commands::check_rewards_status,
@@ -65,6 +66,16 @@ pub fn run() {
             commands::generate_cold_wallet,
             commands::save_cold_wallet,
             commands::get_cold_wallets,
+            commands::get_trusted_contacts,
+            commands::add_trusted_contact,
+            commands::remove_trusted_contact,
+            commands::is_trusted_contact,
+            commands::get_pending_pokes,
+            commands::send_poke_request,
+            commands::decline_poke,
+            commands::confirm_poke_paid,
+            commands::get_language,
+            commands::set_language,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
@@ -78,6 +89,10 @@ pub fn run() {
                 for url in event.urls() {
                     let url_str = url.to_string();
                     // Parse chronx://claim?code=KX-XXXX-...
+                    // Handle poke deep links
+                    if url_str.starts_with("chronx://poke/pay") || url_str.starts_with("chronx://poke/decline") {
+                        let _ = handle.emit("deep-link-poke", &url_str);
+                    }
                     if url_str.starts_with("chronx://claim") {
                         if let Some(code) = url_str
                             .split("code=")

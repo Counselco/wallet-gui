@@ -3,8 +3,12 @@
 
 [package]
 name = "chronx-wallet-gui"
-version = "1.4.32"
+version = "1.4.33"
 edition = "2021"
+
+[features]
+default = []
+mobile = []
 
 [lib]
 name = "chronx_wallet_gui_lib"

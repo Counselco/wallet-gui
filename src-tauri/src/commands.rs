@@ -1825,3 +1825,232 @@ pub async fn get_pending_deep_link(_app: AppHandle) -> Option<String> {
         None
     }
 }
+
+// ── Trusted Contacts ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TrustedContact {
+    pub email: String,
+    pub wallet: Option<String>,
+    pub display_name: Option<String>,
+    pub added_at: u64,
+}
+
+fn trusted_contacts_path(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("trusted_contacts.json")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        expand_tilde("~/.chronx/trusted_contacts.json")
+    }
+}
+
+fn read_trusted_contacts(app: &AppHandle) -> Vec<TrustedContact> {
+    let path = trusted_contacts_path(app);
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_trusted_contacts(app: &AppHandle, contacts: &[TrustedContact]) -> Result<(), String> {
+    let path = trusted_contacts_path(app);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Creating dir: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(contacts).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Writing trusted contacts: {e}"))
+}
+
+#[tauri::command]
+pub async fn get_trusted_contacts(app: AppHandle) -> Result<Vec<TrustedContact>, String> {
+    Ok(read_trusted_contacts(&app))
+}
+
+#[tauri::command]
+pub async fn add_trusted_contact(
+    app: AppHandle,
+    email: String,
+    wallet: Option<String>,
+) -> Result<(), String> {
+    let mut contacts = read_trusted_contacts(&app);
+    let email_lower = email.trim().to_lowercase();
+    if contacts.iter().any(|c| c.email.to_lowercase() == email_lower) {
+        return Ok(()); // already trusted
+    }
+    contacts.push(TrustedContact {
+        email: email.trim().to_string(),
+        wallet,
+        display_name: None,
+        added_at: chrono::Utc::now().timestamp() as u64,
+    });
+    write_trusted_contacts(&app, &contacts)
+}
+
+#[tauri::command]
+pub async fn remove_trusted_contact(app: AppHandle, email: String) -> Result<(), String> {
+    let mut contacts = read_trusted_contacts(&app);
+    let email_lower = email.trim().to_lowercase();
+    contacts.retain(|c| c.email.to_lowercase() != email_lower);
+    write_trusted_contacts(&app, &contacts)
+}
+
+#[tauri::command]
+pub async fn is_trusted_contact(app: AppHandle, email: String) -> Result<bool, String> {
+    let contacts = read_trusted_contacts(&app);
+    let email_lower = email.trim().to_lowercase();
+    Ok(contacts.iter().any(|c| c.email.to_lowercase() == email_lower))
+}
+
+// ── Poke / Payment Request commands ──────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PendingPoke {
+    pub request_id: String,
+    pub from_wallet: String,
+    pub from_email: Option<String>,
+    pub amount_kx: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+    pub verified_sender: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PokeResult {
+    pub request_id: String,
+    pub expires_at: String,
+}
+
+const NOTIFY_API_URL: &str = "https://api.chronx.io";
+
+#[tauri::command]
+pub async fn get_pending_pokes(email: String) -> Result<Vec<PendingPoke>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("{}/poke/pending/{}", NOTIFY_API_URL, urlencoding(&email));
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let pokes: Vec<PendingPoke> = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(pokes)
+}
+
+fn urlencoding(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('@', "%40")
+        .replace('+', "%2B")
+        .replace('#', "%23")
+        .replace('&', "%26")
+        .replace('?', "%3F")
+}
+
+#[tauri::command]
+pub async fn send_poke_request(
+    from_wallet: String,
+    from_email: String,
+    to_email: String,
+    amount_kx: f64,
+    note: String,
+) -> Result<PokeResult, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "from_wallet": from_wallet,
+        "from_email": from_email,
+        "to_email": to_email,
+        "amount_kx": amount_kx,
+        "note": if note.is_empty() { None } else { Some(note) },
+    });
+    let resp = client
+        .post(format!("{}/poke", NOTIFY_API_URL))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.status() == 429 {
+        return Err("Rate limit exceeded. Max 3 requests per 24 hours.".to_string());
+    }
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Request failed: {text}"));
+    }
+    let result: PokeResult = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn decline_poke(request_id: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({ "request_id": request_id });
+    client
+        .post(format!("{}/poke/decline", NOTIFY_API_URL))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn confirm_poke_paid(request_id: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({ "request_id": request_id });
+    client
+        .post(format!("{}/poke/paid", NOTIFY_API_URL))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ── Language preference ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_language(app: AppHandle) -> String {
+    let path = language_path(&app);
+    std::fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "en".to_string())
+}
+
+#[tauri::command]
+pub async fn set_language(app: AppHandle, lang: String) -> Result<(), String> {
+    let path = language_path(&app);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Creating dir: {e}"))?;
+    }
+    std::fs::write(&path, lang.trim()).map_err(|e| format!("Writing language: {e}"))
+}
+
+fn language_path(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("language.txt")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        expand_tilde("~/.chronx/language.txt")
+    }
+}

@@ -1323,3 +1323,128 @@ input[type="datetime-local"] { color-scheme: dark; }
 }
 .send-subtab:hover:not(.active),
 .send-mode-btn:hover:not(.active) { background: #141720; color: #9ca3af; }
+
+/* ── Cascade Send ──────────────────────────────────────────────────────────── */
+.cascade-layout {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+.cascade-form { flex: 1; min-width: 0; }
+.cascade-preview {
+    width: 280px;
+    flex-shrink: 0;
+    background: #161b27;
+    border: 1px solid #2d3748;
+    border-radius: 10px;
+    padding: 16px;
+    font-size: 13px;
+}
+.cascade-preview h4 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    color: #d4a84b;
+    font-weight: 600;
+}
+.cascade-preview .preview-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    color: #9ca3af;
+}
+.cascade-preview .preview-row .val { color: #e5e7eb; }
+.cascade-preview .preview-stages {
+    margin-top: 10px;
+    border-top: 1px solid #2d3748;
+    padding-top: 10px;
+}
+.cascade-preview .stage-line {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 12px;
+    color: #e5e7eb;
+}
+.cascade-preview .stage-line .stage-date { color: #9ca3af; }
+.cascade-stage-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+    background: #161b27;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    margin-bottom: 6px;
+}
+.cascade-stage-row .stage-num {
+    color: #d4a84b;
+    font-weight: 600;
+    font-size: 13px;
+    min-width: 14px;
+}
+.cascade-stage-row input,
+.cascade-stage-row select {
+    background: #0f1117;
+    border: 1px solid #2d3748;
+    border-radius: 4px;
+    color: #e5e7eb;
+    padding: 6px 8px;
+    font-size: 13px;
+}
+.cascade-stage-row input[type="number"] { width: 90px; }
+.cascade-stage-row input[type="text"] { width: 60px; }
+.cascade-stage-row input[type="datetime-local"] { width: 170px; }
+.cascade-stage-row select { width: 110px; }
+.cascade-stage-row .remove-stage {
+    background: transparent;
+    border: none;
+    color: #f87171;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 2px 6px;
+    line-height: 1;
+}
+.cascade-template-btn {
+    display: block;
+    width: 100%;
+    margin: 8px 0 12px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px dashed #d4a84b;
+    background: rgba(212,168,75,0.06);
+    color: #d4a84b;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.cascade-template-btn:hover { background: rgba(212,168,75,0.12); }
+.cascade-confirm-modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+}
+.cascade-confirm-box {
+    background: #1a1d27;
+    border: 1px solid #2d3748;
+    border-radius: 12px;
+    padding: 24px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}
+.cascade-confirm-box h3 { margin: 0 0 12px; color: #e5e7eb; }
+.cascade-confirm-box p { color: #9ca3af; margin: 0 0 16px; font-size: 14px; }
+.cascade-confirm-box .btn-row { display: flex; gap: 12px; justify-content: center; }
+.cascade-confirm-box .btn-row button {
+    padding: 8px 24px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    border: none;
+}
+.cascade-confirm-box .btn-confirm { background: #d4a84b; color: #000; font-weight: 600; }
+.cascade-confirm-box .btn-cancel { background: #2d3748; color: #9ca3af; }
