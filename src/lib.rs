@@ -17,12 +17,13 @@ static I18N_ZH: &str = include_str!("i18n/zh.json");
 static I18N_ES: &str = include_str!("i18n/es.json");
 static I18N_RU: &str = include_str!("i18n/ru.json");
 static I18N_AR: &str = include_str!("i18n/ar.json");
+static I18N_UR: &str = include_str!("i18n/ur.json");
 
 fn load_translations() -> HashMap<String, HashMap<String, String>> {
     let mut all = HashMap::new();
     for (code, json_str) in [
         ("en", I18N_EN), ("fr", I18N_FR), ("de", I18N_DE),
-        ("zh", I18N_ZH), ("es", I18N_ES), ("ru", I18N_RU), ("ar", I18N_AR),
+        ("zh", I18N_ZH), ("es", I18N_ES), ("ru", I18N_RU), ("ar", I18N_AR), ("ur", I18N_UR),
     ] {
         let map: HashMap<String, String> = serde_json::from_str(json_str).unwrap_or_default();
         all.insert(code.to_string(), map);
@@ -1131,7 +1132,7 @@ fn App() -> impl IntoView {
                             match tab {
                                 // Tab 0: Receive (was part of AccountPanel)
                                 0 => view! {
-                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab deep_link_code=deep_link_code />
+                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab deep_link_code=deep_link_code lang=lang />
                                 }.into_any(),
                                 // Tab 1: Send (Simple or Cascade on desktop)
                                 1 => view! {
@@ -1668,6 +1669,7 @@ fn AccountPanel(
     pending_email_chronos: RwSignal<u64>,
     active_tab: RwSignal<u8>,
     deep_link_code: RwSignal<String>,
+    lang: RwSignal<String>,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
@@ -1820,11 +1822,16 @@ fn AccountPanel(
                     {move || if qr_visible.get() {
                         let svg = qr_svg.get();
                         view! {
-                            <div style="margin-top:12px;text-align:center;background:#fff;border-radius:8px;padding:16px">
-                                <div inner_html=svg style="display:inline-block"></div>
-                                <p style="color:#555;font-size:11px;margin-top:8px">
-                                    "Others scan this to send KX to you"
-                                </p>
+                            <div class="modal-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:1000;display:flex;align-items:center;justify-content:center"
+                                on:click=move |_| qr_visible.set(false)>
+                                <div style="background:#fff;border-radius:12px;padding:24px;text-align:center;max-width:320px" on:click=move |ev| ev.stop_propagation()>
+                                    <div inner_html=svg style="display:inline-block"></div>
+                                    <p style="color:#555;font-size:11px;margin-top:8px">
+                                        "Others scan this to send KX to you"
+                                    </p>
+                                    <button style="margin-top:12px;padding:8px 24px;background:#d4a84b;color:#0a0a0a;border:none;border-radius:6px;cursor:pointer;font-weight:700"
+                                        on:click=move |_| qr_visible.set(false)>{t(&lang.get(), "close")}</button>
+                                </div>
                             </div>
                         }.into_any()
                     } else {
@@ -1909,8 +1916,8 @@ fn AccountPanel(
                                 " "
                                 <a href="#" style="color:#d4a84b;text-decoration:underline;cursor:pointer" on:click=move |ev| {
                                     ev.prevent_default();
-                                    active_tab.set(1); // navigate to History
-                                }>"View in History"</a>
+                                    active_tab.set(2); // navigate to Promises
+                                }>{t(&lang.get(), "view_promises")}</a>
                             </p>
                         }.into_any()
                     } else {
@@ -3086,10 +3093,15 @@ fn PromisesPanel(
                     view! { <p class="muted">"\u{2026}"</p> }.into_any()
                 } else if locks.is_empty() {
                     view! {
-                        <p class="muted">{move || t(&lang.get(), "no_promises")}</p>
-                        <p class="muted" style="font-size:12px">
-                            "When someone sends you a time-locked payment, it will appear here."
-                        </p>
+                        <div style="text-align:center;padding:32px 16px">
+                            <div style="font-size:48px;margin-bottom:12px;opacity:0.4">{"\u{1f4e6}"}</div>
+                            <p style="font-size:16px;font-weight:600;color:#e0e0e0;margin-bottom:6px">
+                                {move || t(&lang.get(), "promises_empty_title")}
+                            </p>
+                            <p class="muted" style="font-size:13px">
+                                {move || t(&lang.get(), "promises_empty_sub")}
+                            </p>
+                        </div>
                     }.into_any()
                 } else {
                     view! {
@@ -4273,7 +4285,7 @@ fn SettingsPanel(
                 &serde_json::json!({ "emails": emails })
             ).unwrap_or(no_args());
             match call::<()>("set_claim_emails", args).await {
-                Ok(_) => claim_email_msg.set("Emails saved on this device only.".into()),
+                Ok(_) => claim_email_msg.set(t(&lang.get(), "settings_emails_saved")),
                 Err(e) => claim_email_msg.set(format!("Error: {e}")),
             }
         });
@@ -4297,7 +4309,7 @@ fn SettingsPanel(
                             Ok(true) => { cp_phase.set(1); cp_msg.set(String::new()); }
                             Ok(false) | Err(_) => {
                                 do_shake(cp_shake);
-                                cp_msg.set("Incorrect PIN".to_string());
+                                cp_msg.set(t(&lang.get(), "settings_incorrect_pin"));
                             }
                         }
                     });
@@ -4312,7 +4324,7 @@ fn SettingsPanel(
                             ).unwrap_or(no_args());
                             match call::<()>("set_pin", args).await {
                                 Ok(_) => {
-                                    cp_msg.set("PIN changed successfully!".to_string());
+                                    cp_msg.set(t(&lang.get(), "settings_pin_changed"));
                                     cp_phase.set(0);
                                     cp_first.set(String::new());
                                     // Close modal after brief delay
@@ -4327,7 +4339,7 @@ fn SettingsPanel(
                         });
                     } else {
                         do_shake(cp_shake);
-                        cp_msg.set("PINs do not match \u{2014} please try again".to_string());
+                        cp_msg.set(t(&lang.get(), "settings_pins_no_match"));
                         cp_phase.set(1);
                         cp_first.set(String::new());
                     }
@@ -4413,6 +4425,7 @@ fn SettingsPanel(
                         ("es", "\u{1f1ea}\u{1f1f8} Espa\u{f1}ol"),
                         ("ru", "\u{1f1f7}\u{1f1fa} \u{0420}\u{0443}\u{0441}\u{0441}\u{043a}\u{0438}\u{0439}"),
                         ("ar", "\u{1f1f8}\u{1f1e6} \u{0627}\u{0644}\u{0639}\u{0631}\u{0628}\u{064a}\u{0629}"),
+                        ("ur", "\u{1f1f5}\u{1f1f0} \u{0627}\u{0631}\u{062f}\u{0648}"),
                     ];
                     view! {
                         <div class="lang-picker" style="margin-top:8px">
@@ -4429,7 +4442,7 @@ fn SettingsPanel(
                                             // Set RTL for Arabic
                                             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                                                 if let Some(body) = doc.body() {
-                                                    let _ = body.set_attribute("dir", if c == "ar" { "rtl" } else { "ltr" });
+                                                    let _ = body.set_attribute("dir", if c == "ar" || c == "ur" { "rtl" } else { "ltr" });
                                                 }
                                             }
                                             // Save preference
@@ -4476,36 +4489,42 @@ fn SettingsPanel(
                 view! { <span></span> }.into_any()
             }}
 
-            // Node URL
-            <div class="field">
-                <label>"Node URL"</label>
-                <input type="text" placeholder="http://127.0.0.1:8545"
-                    prop:value=move || node_url.get()
-                    on:input=move |ev| node_url.set(event_target_value(&ev)) />
-            </div>
-            <button class="primary" on:click=on_save>"Save & Reconnect"</button>
-            {move || {
-                let s = save_msg.get();
-                if s.is_empty() { view! { <span></span> }.into_any() }
-                else {
-                    let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
-                    view! { <p class=cls>{s}</p> }.into_any()
-                }
+            // Node URL (desktop only)
+            {if desktop {
+                view! {
+                    <div class="field">
+                        <label>{move || t(&lang.get(), "settings_node_url")}</label>
+                        <input type="text" placeholder="http://127.0.0.1:8545"
+                            prop:value=move || node_url.get()
+                            on:input=move |ev| node_url.set(event_target_value(&ev)) />
+                    </div>
+                    <button class="primary" on:click=on_save>{move || t(&lang.get(), "settings_save_reconnect")}</button>
+                    {move || {
+                        let s = save_msg.get();
+                        if s.is_empty() { view! { <span></span> }.into_any() }
+                        else {
+                            let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
+                            view! { <p class=cls>{s}</p> }.into_any()
+                        }
+                    }}
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
             }}
 
             // Public Key
             <div class="settings-section">
-                <p class="label" style="text-transform:uppercase;letter-spacing:1px">"MY PUBLIC KEY"</p>
+                <p class="label" style="text-transform:uppercase;letter-spacing:1px">{move || t(&lang.get(), "settings_public_key")}</p>
                 <p class="muted" style="font-size:11px;margin-bottom:6px">
-                    "(Advanced \u{2014} share so others can time-lock KX directly to your key)"
+                    {move || format!("({})", t(&lang.get(), "settings_public_key_sub"))}
                 </p>
                 <button on:click=on_show_pubkey disabled=move || pk_loading.get()>
                     {move || if pk_loading.get() {
-                        "Loading\u{2026}"
+                        "\u{2026}".to_string()
                     } else if pubkey_hex.get().is_empty() {
-                        "Show Public Key"
+                        t(&lang.get(), "settings_show_pubkey")
                     } else {
-                        "Hide Public Key"
+                        t(&lang.get(), "settings_hide_pubkey")
                     }}
                 </button>
                 {move || {
@@ -4525,7 +4544,7 @@ fn SettingsPanel(
                                             copy_to_clipboard(pk_val).await;
                                         });
                                     }>
-                                    "\u{1f4cb} Copy Public Key"
+                                    {format!("\u{1f4cb} {}", t(&lang.get(), "settings_copy_pubkey"))}
                                 </button>
                             </div>
                         }.into_any()
@@ -4535,15 +4554,15 @@ fn SettingsPanel(
 
             // Notices
             <div class="settings-section">
-                <p class="label">"Notices"</p>
+                <p class="label">{move || t(&lang.get(), "settings_notices")}</p>
                 {move || if update_available.get() {
                     view! {
                         <div class="update-card" style="background:rgba(201,168,76,0.1);border:1px solid rgba(201,168,76,0.3);border-radius:8px;padding:12px;margin-bottom:8px">
                             <p style="font-weight:700;color:#c9a84c;font-size:13px">
-                                "\u{1f514} A new version of ChronX Wallet is available!"
+                                {format!("\u{1f514} {}", t(&lang.get(), "settings_update_available"))}
                             </p>
                             <p class="muted" style="font-size:12px;margin-top:4px">
-                                "Go to Check for Updates below to download the latest version."
+                                {t(&lang.get(), "settings_update_go")}
                             </p>
                         </div>
                     }.into_any()
@@ -4555,7 +4574,7 @@ fn SettingsPanel(
                     let seen = seen_ids.get();
                     let unread = all.iter().filter(|n| !seen.contains(&n.id)).count();
                     if all.is_empty() {
-                        view! { <p class="muted">"No notices."</p> }.into_any()
+                        view! { <p class="muted">{t(&lang.get(), "settings_no_notices")}</p> }.into_any()
                     } else {
                         let on_mark_c = on_mark_seen.clone();
                         view! {
@@ -4615,13 +4634,13 @@ fn SettingsPanel(
 
             // Security
             <div class="settings-section">
-                <p class="label">"Security"</p>
+                <p class="label">{move || t(&lang.get(), "settings_security")}</p>
                 <button on:click=move |_| {
                     cp_phase.set(0); cp_digits.set(String::new());
                     cp_msg.set(String::new()); show_change_pin.set(true);
-                }>"🔐 Change PIN"</button>
+                }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
 
-                <p class="muted" style="font-size:12px;margin-top:12px;margin-bottom:6px">"PIN Length"</p>
+                <p class="muted" style="font-size:12px;margin-top:12px;margin-bottom:6px">{move || t(&lang.get(), "settings_pin_length")}</p>
                 <div style="display:flex;gap:8px">
                     {[4u8, 6, 8].into_iter().map(|n| {
                         view! {
@@ -4643,7 +4662,7 @@ fn SettingsPanel(
                                         show_change_pin.set(true);
                                     }
                                 }
-                            >{format!("{} digits", n)}</button>
+                            >{format!("{} {}", n, t(&lang.get(), "settings_digits"))}</button>
                         }
                     }).collect::<Vec<_>>()}
                 </div>
@@ -4651,71 +4670,75 @@ fn SettingsPanel(
 
             // Backup Your Wallet
             <div class="settings-section">
-                <p class="label">"Backup Your Wallet"</p>
+                <p class="label">{move || t(&lang.get(), "settings_backup")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    "Export your private key to back up your wallet. Without it, your KX cannot be recovered."
+                    {move || t(&lang.get(), "settings_backup_sub")}
                 </p>
                 <button on:click=move |_| {
                     export_confirmed.set(false);
                     export_key.set(String::new());
                     show_export.set(true);
-                }>"🔑 Export Private Key"</button>
+                }>{move || format!("\u{1f511} {}", t(&lang.get(), "settings_export_key"))}</button>
             </div>
 
             // Restore Wallet
             <div class="settings-section">
-                <p class="label">"Restore Wallet"</p>
+                <p class="label">{move || t(&lang.get(), "settings_restore")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    "Import a private key to restore a wallet on this device."
+                    {move || t(&lang.get(), "settings_restore_sub")}
                 </p>
                 <button on:click=move |_| {
                     import_key.set(String::new());
                     import_msg.set(String::new());
                     show_import.set(true);
-                }>"📥 Import Private Key"</button>
+                }>{move || format!("\u{1f4e5} {}", t(&lang.get(), "settings_import_key"))}</button>
             </div>
 
-            // Cold Storage Wallet Generator
-            <div class="settings-section">
-                <p class="label">"Cold Storage"</p>
-                <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    "Generate an offline wallet for long-term cold storage. "
-                    "The private key is shown once \u{2014} save it somewhere safe. You can send KX to its address at any time."
-                </p>
-                <button on:click=move |_| {
-                    cold_result.set(None);
-                    cold_saved.set(false);
-                    show_cold.set(true);
-                }>"🧊 Generate Cold Wallet"</button>
-                {move || {
-                    let wallets = cold_wallets.get();
-                    if wallets.is_empty() {
-                        view! { <span></span> }.into_any()
-                    } else {
-                        view! {
-                            <div style="margin-top:8px">
-                                <p class="muted" style="font-size:11px;margin-bottom:4px">
-                                    {format!("Generated cold wallets ({})", wallets.len())}
-                                </p>
-                                {wallets.into_iter().map(|w| {
-                                    view! {
-                                        <p class="muted" style="font-size:11px;font-family:monospace;word-break:break-all;padding:2px 0">
-                                            {w}
+            // Cold Storage Wallet Generator (desktop only)
+            {if desktop {
+                view! {
+                    <div class="settings-section">
+                        <p class="label">{move || t(&lang.get(), "settings_cold_storage")}</p>
+                        <p class="muted" style="font-size:12px;margin-bottom:8px">
+                            {move || t(&lang.get(), "settings_cold_sub")}
+                        </p>
+                        <button on:click=move |_| {
+                            cold_result.set(None);
+                            cold_saved.set(false);
+                            show_cold.set(true);
+                        }>{move || format!("\u{1f9ca} {}", t(&lang.get(), "settings_gen_cold"))}</button>
+                        {move || {
+                            let wallets = cold_wallets.get();
+                            if wallets.is_empty() {
+                                view! { <span></span> }.into_any()
+                            } else {
+                                view! {
+                                    <div style="margin-top:8px">
+                                        <p class="muted" style="font-size:11px;margin-bottom:4px">
+                                            {format!("{} ({})", t(&lang.get(), "settings_cold_wallets"), wallets.len())}
                                         </p>
-                                    }
-                                }).collect::<Vec<_>>()}
-                            </div>
-                        }.into_any()
-                    }
-                }}
-            </div>
+                                        {wallets.into_iter().map(|w| {
+                                            view! {
+                                                <p class="muted" style="font-size:11px;font-family:monospace;word-break:break-all;padding:2px 0">
+                                                    {w}
+                                                </p>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                }.into_any()
+                            }
+                        }}
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
 
             // My Emails for KX Claims (up to 3)
             <div class="settings-section">
-                <p class="label">"My Emails for KX Claims"</p>
+                <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    "If someone sends KX to your email, your wallet detects it automatically. "
-                    "Add up to 3 email addresses. Stored on this device only — never sent to any server."
+                    {move || t(&lang.get(), "settings_claim_emails_sub")}
                 </p>
                 <div class="claim-emails-list">
                     {move || {
@@ -4753,13 +4776,13 @@ fn SettingsPanel(
                                 <button on:click=move |_| {
                                     claim_emails.update(|list| list.push(String::new()));
                                     claim_email_msg.set(String::new());
-                                }>"+ Add Email"</button>
+                                }>{move || t(&lang.get(), "settings_add_email")}</button>
                             }.into_any()
                         } else {
                             view! { <span></span> }.into_any()
                         }
                     }}
-                    <button class="primary" on:click=on_save_emails>"Save Emails"</button>
+                    <button class="primary" on:click=on_save_emails>{move || t(&lang.get(), "settings_save_emails")}</button>
                 </div>
                 {move || {
                     let s = claim_email_msg.get();
@@ -4773,10 +4796,10 @@ fn SettingsPanel(
 
             // About & Updates
             <div class="settings-section">
-                <p class="label">"About"</p>
+                <p class="label">{move || t(&lang.get(), "settings_about")}</p>
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    <button on:click=move |_| show_about.set(true)>"\u{2139} About ChronX"</button>
-                    <button on:click=move |_| show_updates.set(true)>"\u{1f504} Check for Updates"</button>
+                    <button on:click=move |_| show_about.set(true)>{move || format!("\u{2139} {}", t(&lang.get(), "settings_about_chronx"))}</button>
+                    <button on:click=move |_| show_updates.set(true)>{move || format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</button>
                 </div>
             </div>
         </div>
@@ -4801,7 +4824,7 @@ fn SettingsPanel(
                                 "github.com/Counselco/chronx"
                             </a>
                         </div>
-                        <button class="primary" on:click=move |_| show_about.set(false)>"Close"</button>
+                        <button class="primary" on:click=move |_| show_about.set(false)>{t(&lang.get(), "close")}</button>
                     </div>
                 </div>
             }.into_any()
@@ -4817,9 +4840,9 @@ fn SettingsPanel(
                     update_result.set(None);
                 }>
                     <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"\u{1f504} Check for Updates"</p>
+                        <p class="modal-title">{format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</p>
                         <div class="modal-body">
-                            <p class="label">"Current version: " {version}</p>
+                            <p class="label">{format!("{}: {}", t(&lang.get(), "settings_current_version"), version)}</p>
                             {move || {
                                 if update_checking.get() {
                                     view! { <p class="muted">"Checking\u{2026}"</p> }.into_any()
@@ -4875,12 +4898,12 @@ fn SettingsPanel(
                                     update_checking.set(false);
                                 });
                             } disabled=move || update_checking.get()>
-                                {move || if update_checking.get() { "Checking\u{2026}" } else { "Check Now" }}
+                                {move || if update_checking.get() { "\u{2026}".to_string() } else { t(&lang.get(), "settings_check_now") }}
                             </button>
                             <button on:click=move |_| {
                                 show_updates.set(false);
                                 update_result.set(None);
-                            }>"Close"</button>
+                            }>{t(&lang.get(), "close")}</button>
                         </div>
                     </div>
                 </div>
@@ -4891,9 +4914,9 @@ fn SettingsPanel(
 
         {move || if show_change_pin.get() {
             let cp_title = move || match cp_phase.get() {
-                0 => "Enter Current PIN",
-                1 => "Enter New PIN",
-                _ => "Confirm New PIN",
+                0 => t(&lang.get(), "settings_enter_current_pin"),
+                1 => t(&lang.get(), "settings_enter_new_pin"),
+                _ => t(&lang.get(), "settings_confirm_new_pin"),
             };
             view! {
                 <div class="modal-overlay" on:click=move |_| {
@@ -4902,7 +4925,7 @@ fn SettingsPanel(
                     cp_msg.set(String::new());
                 }>
                     <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"Change PIN"</p>
+                        <p class="modal-title">{t(&lang.get(), "settings_change_pin")}</p>
                         <p class="pin-subtitle">{cp_title}</p>
 
                         // Shared PIN digit entry — same component as login screen
