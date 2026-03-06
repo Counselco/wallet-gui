@@ -1813,15 +1813,16 @@ pub async fn create_email_timelock_series(
     let now = chrono::Utc::now().timestamp();
 
     // Validate all entries before building any actions.
+    // unlock_at_unix <= 0 means "Immediately" — map to `now` (same as single email send).
     for (i, e) in entries.iter().enumerate() {
         if e.amount_kx <= 0.0 {
             return Err(format!("Entry {}: amount must be > 0", i + 1));
         }
-        if e.unlock_at_unix <= now {
-            return Err(format!("Entry {}: unlock date must be in the future", i + 1));
-        }
-        if e.unlock_at_unix < now + 86_400 {
-            return Err(format!("Entry {}: unlock date must be at least 24 hours from now", i + 1));
+        // Skip time validation for "Immediately" stages (unlock_at_unix <= 0)
+        if e.unlock_at_unix > 0 {
+            if e.unlock_at_unix <= now {
+                return Err(format!("Entry {}: unlock date must be in the future", i + 1));
+            }
         }
     }
 
@@ -1856,10 +1857,12 @@ pub async fn create_email_timelock_series(
             let memo = e.memo.as_ref().map(|m| {
                 if m.len() > 256 { m[..256].to_string() } else { m.clone() }
             });
+            // Map unlock_at_unix <= 0 to `now` for "Immediately" stages
+            let unlock = if e.unlock_at_unix <= 0 { now } else { e.unlock_at_unix };
             Action::TimeLockCreate {
                 recipient: recipient.clone(),
                 amount: chronos,
-                unlock_at: e.unlock_at_unix,
+                unlock_at: unlock,
                 memo,
                 cancellation_window_secs: Some(259_200),
                 notify_recipient: Some(true),

@@ -3170,16 +3170,16 @@ fn stage_unlock_unix(s: &CascadeStage) -> Option<i64> {
 }
 
 fn stage_display_date(s: &CascadeStage) -> String {
-    match s.unlock_mode.get_untracked() {
+    match s.unlock_mode.get() {
         0 => "Immediately".to_string(),
         1 => {
-            let v = s.dur_value.get_untracked();
-            let u = s.dur_unit.get_untracked();
+            let v = s.dur_value.get();
+            let u = s.dur_unit.get();
             if v.is_empty() { return "—".to_string(); }
             format!("{v} {u}")
         }
         2 => {
-            let d = s.date.get_untracked();
+            let d = s.date.get();
             if d.is_empty() { "—".to_string() } else { d.replace('T', " ") }
         }
         _ => "—".to_string(),
@@ -3363,7 +3363,7 @@ fn CascadeSendPanel(
                                 view! {
                                     <div class="cascade-stage-row">
                                         <span class="stage-num">{i + 1}</span>
-                                        <input type="number" step="0.01" min="0.01"
+                                        <input type="number" step="any" min="0.000001"
                                             placeholder="KX"
                                             prop:value=move || s.amount.get()
                                             on:input=move |ev| s.amount.set(event_target_value(&ev))
