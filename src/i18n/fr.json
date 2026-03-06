@@ -102,5 +102,16 @@
   "settings_confirm_new_pin": "Confirmez le nouveau PIN",
   "settings_pin_changed": "PIN modifié avec succès !",
   "settings_pins_no_match": "Les PIN ne correspondent pas — réessayez",
-  "settings_incorrect_pin": "PIN incorrect"
+  "settings_incorrect_pin": "PIN incorrect",
+  "verify_send_code": "Envoyer le code de vérification",
+  "verify_enter_code": "Entrez le code à 6 caractères envoyé à votre email",
+  "verify_confirm": "Vérifier",
+  "verify_sending": "Envoi…",
+  "verify_checking": "Vérification…",
+  "verify_success": "Email vérifié !",
+  "verify_failed": "Code invalide ou expiré. Réessayez.",
+  "verify_code_sent": "Code envoyé ! Vérifiez votre boîte de réception.",
+  "verified": "Vérifié",
+  "unverified": "Non vérifié",
+  "settings_claim_emails_sub_v2": "Vérifiez votre email pour recevoir les KX envoyés. Les emails vérifiés sont surveillés automatiquement."
 }

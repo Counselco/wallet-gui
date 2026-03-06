@@ -77,6 +77,12 @@ struct WalletConfig {
     /// Account IDs of cold storage wallets (address book).
     #[serde(default)]
     cold_wallets: Option<Vec<String>>,
+    /// Email addresses that have been verified via the /verify-email flow.
+    #[serde(default)]
+    verified_emails: Option<Vec<String>>,
+    /// Blocked poke sender emails (user chose "Block this sender" on decline).
+    #[serde(default)]
+    blocked_senders: Option<Vec<String>>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -91,6 +97,8 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             claim_email: None,
             claim_emails: None,
             cold_wallets: None,
+            verified_emails: None,
+            blocked_senders: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -199,7 +207,7 @@ async fn rpc_call(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -217,10 +225,22 @@ async fn rpc_call(
         .await
         .map_err(|e| format!("Node unreachable ({url}): {e}"))?;
 
-    let json: serde_json::Value = resp
-        .json()
+    let status = resp.status();
+    let text = resp
+        .text()
         .await
-        .map_err(|e| format!("Bad RPC response: {e}"))?;
+        .map_err(|e| format!("Reading response body: {e}"))?;
+
+    if !status.is_success() {
+        let preview = if text.len() > 200 { &text[..200] } else { &text };
+        return Err(format!("HTTP {status}: {preview}"));
+    }
+
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| {
+            let preview = if text.len() > 200 { &text[..200] } else { &text };
+            format!("Bad RPC response (not JSON): {e} — body: {preview}")
+        })?;
 
     if let Some(err) = json.get("error") {
         return Err(format!("RPC error: {err}"));
@@ -1075,6 +1095,99 @@ pub async fn set_claim_emails(app: AppHandle, emails: Vec<String>) -> Result<(),
     write_config(&app, &cfg)
 }
 
+/// Return the list of verified email addresses.
+#[tauri::command]
+pub async fn get_verified_emails(app: AppHandle) -> Vec<String> {
+    read_config(&app).verified_emails.unwrap_or_default()
+}
+
+/// Send a verification code to an email address via the notify API.
+#[tauri::command]
+pub async fn send_verify_email(app: AppHandle, email: String, wallet_id: Option<String>) -> Result<String, String> {
+    let email = email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return Err("Invalid email address".to_string());
+    }
+    // Use wallet_id from frontend if provided, otherwise read from keyfile
+    let wallet_id = if let Some(ref wid) = wallet_id {
+        if !wid.is_empty() { wid.clone() } else { String::new() }
+    } else {
+        match std::fs::read_to_string(keyfile_path(&app)) {
+            Ok(s) => {
+                let kp: serde_json::Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+                kp["account_id"].as_str().unwrap_or("").to_string()
+            }
+            Err(e) => return Err(format!("Cannot read wallet: {e}")),
+        }
+    };
+    if wallet_id.is_empty() {
+        return Err("Wallet not initialized — no account ID found".to_string());
+    }
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://api.chronx.io/verify-email")
+        .json(&serde_json::json!({ "email": email, "wallet_id": wallet_id }))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+    if status.is_success() && body.get("sent").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok("sent".to_string())
+    } else {
+        let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+        Err(err.to_string())
+    }
+}
+
+/// Confirm a verification code and save the email as verified on success.
+#[tauri::command]
+pub async fn confirm_verify_email(app: AppHandle, email: String, code: String, wallet_id: Option<String>) -> Result<bool, String> {
+    let email = email.trim().to_lowercase();
+    let code = code.trim().to_uppercase();
+    let wallet_id = if let Some(ref wid) = wallet_id {
+        if !wid.is_empty() { wid.clone() } else { String::new() }
+    } else {
+        match std::fs::read_to_string(keyfile_path(&app)) {
+            Ok(s) => {
+                let kp: serde_json::Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+                kp["account_id"].as_str().unwrap_or("").to_string()
+            }
+            Err(e) => return Err(format!("Cannot read wallet: {e}")),
+        }
+    };
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://api.chronx.io/verify-email/confirm")
+        .json(&serde_json::json!({ "email": email, "code": code, "wallet_id": wallet_id }))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+    let verified = body.get("verified").and_then(|v| v.as_bool()).unwrap_or(false);
+    if verified {
+        // Save to verified_emails list in config
+        let mut cfg = read_config(&app);
+        let mut list = cfg.verified_emails.unwrap_or_default();
+        if !list.contains(&email) {
+            list.push(email.clone());
+        }
+        cfg.verified_emails = Some(list);
+        // Also ensure the email is in claim_emails for monitoring
+        let mut claims = cfg.claim_emails.unwrap_or_default();
+        if !claims.contains(&email) && claims.len() < 3 {
+            claims.push(email);
+        }
+        cfg.claim_emails = if claims.is_empty() { None } else { Some(claims.clone()) };
+        cfg.claim_email = claims.first().cloned();
+        write_config(&app, &cfg)?;
+        Ok(true)
+    } else {
+        let err = body.get("error").and_then(|v| v.as_str()).unwrap_or("Invalid or expired code");
+        Err(err.to_string())
+    }
+}
+
 // ── Transaction history ───────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1279,7 +1392,7 @@ pub async fn check_for_updates() -> UpdateInfo {
         Err(_) => return silent_ok,
     };
     let resp = match client
-        .get("https://api.github.com/repos/Counselco/wallet-gui/releases/latest")
+        .get("https://chronx.io/version.json")
         .send()
         .await
     {
@@ -1290,13 +1403,38 @@ pub async fn check_for_updates() -> UpdateInfo {
         Ok(j) => j,
         Err(_) => return silent_ok,
     };
-    let tag = json["tag_name"].as_str().unwrap_or("");
-    let latest = tag.trim_start_matches('v').to_string();
+    // Use android_version on Android, version (Windows) otherwise
+    let latest = if cfg!(target_os = "android") {
+        json["android_version"].as_str()
+            .or_else(|| json["version"].as_str())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        json["version"].as_str().unwrap_or("").to_string()
+    };
     if latest.is_empty() {
         return silent_ok;
     }
-    let up_to_date = latest == current;
-    let download_url = "https://chronx.io/dl/chronx-wallet-setup.exe".to_string();
+    // Numeric version comparison: compare each segment as integers
+    let up_to_date = {
+        let cur_parts: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
+        let lat_parts: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
+        let len = cur_parts.len().max(lat_parts.len());
+        let mut is_newer_or_equal = true;
+        for i in 0..len {
+            let c = cur_parts.get(i).copied().unwrap_or(0);
+            let l = lat_parts.get(i).copied().unwrap_or(0);
+            if c > l { break; }        // current is newer → up to date
+            if c < l { is_newer_or_equal = false; break; } // latest is newer → update available
+        }
+        is_newer_or_equal
+    };
+    // Platform-appropriate download URL
+    let download_url = if cfg!(target_os = "android") {
+        "https://play.google.com/store/apps/details?id=com.chronx.wallet".to_string()
+    } else {
+        "https://chronx.io/dl/chronx-wallet-setup.exe".to_string()
+    };
     UpdateInfo { up_to_date, current, latest, download_url, release_notes: String::new() }
 }
 
@@ -1811,19 +1949,16 @@ pub async fn cancel_timelock_series(
     Ok(vec![tx_id])
 }
 
-// ── Deep-link claim code ─────────────────────────────────────────────────────
+// ── Deep-link (managed state) ────────────────────────────────────────────────
 
+/// Reads the launch deep-link URL from managed state (set during cold start
+/// via `app.deep_link().get_current()`). Returns the raw URL and clears it.
 #[tauri::command]
-pub async fn get_pending_deep_link(_app: AppHandle) -> Option<String> {
-    let path = expand_tilde("~/.chronx/pending-deep-link.txt");
-    if path.exists() {
-        let code = std::fs::read_to_string(&path).ok()?;
-        let _ = std::fs::remove_file(&path); // consume it
-        let code = code.trim().to_string();
-        if code.is_empty() { None } else { Some(code) }
-    } else {
-        None
-    }
+pub async fn get_launch_deep_link(app: AppHandle) -> Option<String> {
+    use tauri::Manager;
+    let state = app.state::<crate::PendingDeepLink>();
+    let mut pending = state.0.lock().ok()?;
+    pending.take()
 }
 
 // ── Trusted Contacts ─────────────────────────────────────────────────────────
@@ -2018,6 +2153,50 @@ pub async fn confirm_poke_paid(request_id: String) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ── Blocked senders ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_blocked_senders(app: AppHandle) -> Vec<String> {
+    read_config(&app).blocked_senders.unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn add_blocked_sender(app: AppHandle, email: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let email_lower = email.trim().to_lowercase();
+    let mut list = cfg.blocked_senders.unwrap_or_default();
+    if !list.iter().any(|e| e.to_lowercase() == email_lower) {
+        list.push(email_lower);
+    }
+    cfg.blocked_senders = Some(list);
+    write_config(&app, &cfg)
+}
+
+#[tauri::command]
+pub async fn is_sender_blocked(app: AppHandle, email: String) -> bool {
+    let blocked = read_config(&app).blocked_senders.unwrap_or_default();
+    let email_lower = email.trim().to_lowercase();
+    blocked.iter().any(|e| e.to_lowercase() == email_lower)
+}
+
+// ── Poke detail by request_id ───────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_poke_by_id(request_id: String) -> Result<PendingPoke, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("{}/poke/{}", NOTIFY_API_URL, urlencoding(&request_id));
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Failed to fetch poke: {text}"));
+    }
+    let poke: PendingPoke = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(poke)
 }
 
 // ── Language preference ──────────────────────────────────────────────────────

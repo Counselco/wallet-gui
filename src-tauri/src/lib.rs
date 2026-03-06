@@ -1,7 +1,13 @@
 mod commands;
 
+use std::sync::Mutex;
 use tauri::Emitter;
+use tauri::Manager;
 use tauri_plugin_deep_link::DeepLinkExt;
+
+/// Managed state: holds the raw deep-link URL from the Android launch Intent
+/// (cold start). The frontend reads and clears it after PIN unlock.
+pub struct PendingDeepLink(pub Mutex<Option<String>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,6 +24,7 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_deep_link::init())
+        .manage(PendingDeepLink(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             commands::check_node,
             commands::get_account_info,
@@ -60,7 +67,7 @@ pub fn run() {
             commands::claim_email_series,
             commands::cancel_timelock_series,
             commands::reclaim_expired_lock,
-            commands::get_pending_deep_link,
+            commands::get_launch_deep_link,
             commands::get_pin_length,
             commands::set_pin_length,
             commands::generate_cold_wallet,
@@ -76,6 +83,13 @@ pub fn run() {
             commands::confirm_poke_paid,
             commands::get_language,
             commands::set_language,
+            commands::get_verified_emails,
+            commands::send_verify_email,
+            commands::confirm_verify_email,
+            commands::get_blocked_senders,
+            commands::add_blocked_sender,
+            commands::is_sender_blocked,
+            commands::get_poke_by_id,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
@@ -83,36 +97,63 @@ pub fn run() {
                 let _ = app.deep_link().register_all();
             }
 
-            // Listen for deep link URLs and store claim code for frontend
+            // ── Cold start: read the launch Intent URL via get_current() ──────
+            // on_open_url does NOT fire on Android cold start, so we must
+            // retrieve the initial URL here and store it in managed state.
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                if let Some(url) = urls.first() {
+                    let url_str = url.to_string();
+                    if !url_str.is_empty() {
+                        let state = app.state::<PendingDeepLink>();
+                        let mut pending = state.0.lock().unwrap();
+                        *pending = Some(url_str);
+                    }
+                }
+            }
+
+            // ── Warm start: on_open_url fires when app is already running ─────
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
                     let url_str = url.to_string();
-                    // Parse chronx://claim?code=KX-XXXX-...
-                    // Handle poke deep links
-                    if url_str.starts_with("chronx://poke/pay") || url_str.starts_with("chronx://poke/decline") {
-                        let _ = handle.emit("deep-link-poke", &url_str);
+
+                    // Also update managed state (in case frontend polls before event fires)
+                    if let Some(state) = handle.try_state::<PendingDeepLink>() {
+                        if let Ok(mut pending) = state.0.lock() {
+                            *pending = Some(url_str.clone());
+                        }
                     }
-                    if url_str.starts_with("chronx://claim") {
+
+                    // Route 1: PAY
+                    if url_str.starts_with("chronx://pay") || url_str.starts_with("chronx://poke/pay") {
+                        let normalized = if url_str.starts_with("chronx://poke/") {
+                            url_str.clone()
+                        } else {
+                            url_str.replacen("chronx://pay", "chronx://poke/pay", 1)
+                        };
+                        let _ = handle.emit("deep-link-poke", &normalized);
+                    }
+                    // Route 2: DECLINE
+                    else if url_str.starts_with("chronx://decline") || url_str.starts_with("chronx://poke/decline") {
+                        let normalized = if url_str.starts_with("chronx://poke/") {
+                            url_str.clone()
+                        } else {
+                            url_str.replacen("chronx://decline", "chronx://poke/decline", 1)
+                        };
+                        let _ = handle.emit("deep-link-poke", &normalized);
+                    }
+                    // Route 3: CLAIM
+                    else if url_str.starts_with("chronx://claim") {
                         if let Some(code) = url_str
                             .split("code=")
                             .nth(1)
                             .map(|c| c.split('&').next().unwrap_or(c))
                         {
-                            // Basic URL decode for the claim code
                             let code = code
                                 .replace("%20", " ")
                                 .replace("+", " ")
                                 .replace("%2D", "-")
                                 .replace("%2d", "-");
-                            // Store in file for frontend to pick up via get_pending_deep_link
-                            let home = std::env::var("USERPROFILE")
-                                .or_else(|_| std::env::var("HOME"))
-                                .unwrap_or_else(|_| ".".to_string());
-                            let dir = std::path::PathBuf::from(home).join(".chronx");
-                            let _ = std::fs::create_dir_all(&dir);
-                            let _ = std::fs::write(dir.join("pending-deep-link.txt"), &code);
-                            // Also emit event to frontend
                             let _ = handle.emit("deep-link-claim", &code);
                         }
                     }

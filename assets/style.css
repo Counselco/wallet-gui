@@ -340,6 +340,7 @@ input[type="datetime-local"] { color-scheme: dark; }
 }
 .msg.success { color: #4ade80; background: #0a1f0f; border: 1px solid #166534; }
 .msg.error   { color: #f87171; background: #1f0a0a; border: 1px solid #7f1d1d; }
+.msg.warning { color: #d4a84b; background: rgba(212,168,75,0.1); border: 1px solid #d4a84b; }
 .msg.mining  { color: #facc15; background: #1a1500; border: 1px solid #713f12; }
 
 /* ── Lock warning ────────────────────────────────────────────────────────── */
@@ -1327,12 +1328,13 @@ input[type="datetime-local"] { color-scheme: dark; }
 /* ── Cascade Send ──────────────────────────────────────────────────────────── */
 .cascade-layout {
     display: flex;
-    gap: 20px;
+    gap: 24px;
     align-items: flex-start;
+    flex-wrap: wrap;
 }
-.cascade-form { flex: 3; min-width: 0; }
+.cascade-form { flex: 1 1 300px; min-width: 0; }
 .cascade-preview {
-    flex: 2;
+    flex: 1 1 200px;
     position: sticky;
     top: 16px;
     background: #161b27;
@@ -1340,6 +1342,13 @@ input[type="datetime-local"] { color-scheme: dark; }
     border-radius: 10px;
     padding: 16px;
     font-size: 13px;
+}
+.cascade-send-btn {
+    width: 100%;
+    margin-top: 16px;
+    background: #d4a84b !important;
+    color: #0f1117 !important;
+    font-weight: 700;
 }
 .cascade-preview h4 {
     margin: 0 0 10px;

@@ -102,5 +102,16 @@
   "settings_confirm_new_pin": "确认新PIN",
   "settings_pin_changed": "PIN修改成功！",
   "settings_pins_no_match": "PIN不匹配——请重试",
-  "settings_incorrect_pin": "PIN不正确"
+  "settings_incorrect_pin": "PIN不正确",
+  "verify_send_code": "发送验证码",
+  "verify_enter_code": "输入发送到您邮箱的6位验证码",
+  "verify_confirm": "验证",
+  "verify_sending": "发送中…",
+  "verify_checking": "验证中…",
+  "verify_success": "邮箱已验证！",
+  "verify_failed": "验证码无效或已过期。请重试。",
+  "verify_code_sent": "验证码已发送！请检查您的收件箱。",
+  "verified": "已验证",
+  "unverified": "未验证",
+  "settings_claim_emails_sub_v2": "验证您的邮箱以接收发送给它的KX。已验证的邮箱会自动监控。"
 }

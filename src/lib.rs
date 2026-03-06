@@ -299,6 +299,16 @@ fn format_kx(chronos_str: &str) -> String {
     }
 }
 
+/// Format a f64 KX amount without trailing zeros: 100.0 → "100", 1.50 → "1.5"
+fn format_kx_display(val: f64) -> String {
+    if val.fract() == 0.0 {
+        format!("{}", val as u64)
+    } else {
+        let s = format!("{:.6}", val);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 fn shorten_addr(addr: &str) -> String {
@@ -609,6 +619,96 @@ async fn pick_image_file() -> Option<web_sys::File> {
     file
 }
 
+// ── Route a raw deep-link URL to the correct handler ─────────────────────────
+
+async fn route_deep_link_url(
+    url: &str,
+    deep_link_code: RwSignal<String>,
+    active_tab: RwSignal<u8>,
+    poke_prefill_email: RwSignal<String>,
+    poke_prefill_amount: RwSignal<String>,
+    poke_prefill_memo: RwSignal<String>,
+    poke_prefill_id: RwSignal<String>,
+    decline_request_id: RwSignal<String>,
+    decline_sender_email: RwSignal<String>,
+    decline_block_checked: RwSignal<bool>,
+    decline_modal_open: RwSignal<bool>,
+) {
+    if url.starts_with("chronx://pay") || url.starts_with("chronx://poke/pay")
+        || url.starts_with("chronx://decline") || url.starts_with("chronx://poke/decline")
+    {
+        // Normalize pay/decline URLs to poke/ prefix
+        let normalized = if url.starts_with("chronx://poke/") {
+            url.to_string()
+        } else if url.starts_with("chronx://pay") {
+            url.replacen("chronx://pay", "chronx://poke/pay", 1)
+        } else {
+            url.replacen("chronx://decline", "chronx://poke/decline", 1)
+        };
+        process_poke_link(&normalized, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, active_tab, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
+    } else if url.starts_with("chronx://claim") {
+        if let Some(code) = url.split("code=").nth(1).map(|c| c.split('&').next().unwrap_or(c)) {
+            let code = code
+                .replace("%20", " ")
+                .replace('+', " ")
+                .replace("%2D", "-")
+                .replace("%2d", "-");
+            deep_link_code.set(code);
+            active_tab.set(0);
+        }
+    }
+}
+
+// ── Poke deep link processor ─────────────────────────────────────────────────
+
+async fn process_poke_link(
+    url: &str,
+    poke_prefill_email: RwSignal<String>,
+    poke_prefill_amount: RwSignal<String>,
+    poke_prefill_memo: RwSignal<String>,
+    poke_prefill_id: RwSignal<String>,
+    active_tab: RwSignal<u8>,
+    decline_request_id: RwSignal<String>,
+    decline_sender_email: RwSignal<String>,
+    decline_block_checked: RwSignal<bool>,
+    decline_modal_open: RwSignal<bool>,
+) {
+    let request_id = url
+        .split("request_id=").nth(1)
+        .map(|s| s.split('&').next().unwrap_or(s))
+        .unwrap_or("")
+        .to_string();
+    if request_id.is_empty() { return; }
+
+    let args = serde_wasm_bindgen::to_value(
+        &serde_json::json!({ "requestId": request_id })
+    ).unwrap_or(no_args());
+
+    // Determine action: pay or decline (support both chronx://pay and chronx://poke/pay formats)
+    let is_pay = url.contains("/pay") || url.starts_with("chronx://pay");
+    let is_decline = url.contains("/decline") || url.starts_with("chronx://decline");
+
+    if is_pay && !is_decline {
+        active_tab.set(1); // Switch to Send tab immediately (before network)
+        if let Ok(poke) = call::<PendingPoke>("get_poke_by_id", args).await {
+            poke_prefill_email.set(poke.from_email.unwrap_or_default());
+            poke_prefill_amount.set(poke.amount_kx.clone());
+            poke_prefill_memo.set(poke.note.unwrap_or_default());
+            poke_prefill_id.set(poke.request_id);
+        }
+    } else if is_decline {
+        // Set request_id immediately from URL so modal works even if API call fails
+        decline_request_id.set(request_id.clone());
+        decline_block_checked.set(false);
+        if let Ok(poke) = call::<PendingPoke>("get_poke_by_id", args).await {
+            decline_sender_email.set(poke.from_email.unwrap_or_default());
+        } else {
+            decline_sender_email.set(String::new());
+        }
+        decline_modal_open.set(true);
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[wasm_bindgen(start)]
@@ -663,6 +763,22 @@ fn App() -> impl IntoView {
 
     // Update available flag (checked on load for Settings badge)
     let update_available = RwSignal::new(false);
+
+    // Pending poke requests count (badge on Send tab)
+    let poke_count = RwSignal::new(0usize);
+
+    // Poke pre-fill: when user taps PAY NOW in poke email → navigate to Send tab with pre-filled fields
+    let poke_prefill_email  = RwSignal::new(String::new());
+    let poke_prefill_amount = RwSignal::new(String::new());
+    let poke_prefill_memo   = RwSignal::new(String::new());
+    let poke_prefill_id     = RwSignal::new(String::new()); // request_id for confirm_poke_paid
+
+    // Poke decline modal state
+    let decline_modal_open    = RwSignal::new(false);
+    let decline_request_id    = RwSignal::new(String::new());
+    let decline_sender_email  = RwSignal::new(String::new());
+    let decline_block_checked = RwSignal::new(false);
+    let decline_busy          = RwSignal::new(false);
 
     // PIN length (loaded from config; default 4)
     let pin_len = RwSignal::new(4u8);
@@ -808,7 +924,7 @@ fn App() -> impl IntoView {
         });
     };
 
-    // ── Auto-refresh balance every 10 seconds (silent, no spinner) ──────────
+    // ── Auto-refresh balance + poke count every 10 seconds (silent) ─────────
     {
         let cb = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
             spawn_local(async move {
@@ -816,12 +932,100 @@ fn App() -> impl IntoView {
                 if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
                     info.set(Some(a));
                 }
+                // Refresh pending poke count (filter out blocked senders)
+                {
+                    let blocked = call::<Vec<String>>("get_blocked_senders", no_args()).await.unwrap_or_default();
+                    if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+                        let mut total = 0usize;
+                        for em in &emails {
+                            let args = serde_wasm_bindgen::to_value(
+                                &serde_json::json!({ "email": em })
+                            ).unwrap_or(no_args());
+                            if let Ok(pokes) = call::<Vec<PendingPoke>>("get_pending_pokes", args).await {
+                                total += pokes.iter().filter(|p| {
+                                    let sender = p.from_email.as_deref().unwrap_or("").to_lowercase();
+                                    sender.is_empty() || !blocked.iter().any(|b| b.to_lowercase() == sender)
+                                }).count();
+                            }
+                        }
+                        poke_count.set(total);
+                    }
+                }
             });
         });
         let _ = web_sys::window().unwrap().set_interval_with_callback_and_timeout_and_arguments_0(
             cb.as_ref().unchecked_ref(), 10_000
         );
         cb.forget(); // leak closure — lives for app lifetime
+    }
+
+    // ── Deep-link-poke listener (for warm-start — app already running) ─────
+    {
+        let listen_cb = wasm_bindgen::closure::Closure::<dyn Fn(JsValue)>::new(move |payload: JsValue| {
+            let url_str: String = js_sys::Reflect::get(&payload, &JsValue::from_str("payload"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            if !url_str.is_empty() {
+                spawn_local(async move {
+                    process_poke_link(&url_str, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, active_tab, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
+                });
+            }
+        });
+
+        spawn_local(async move {
+            if let Some(win) = web_sys::window() {
+                let tauri = js_sys::Reflect::get(&win, &JsValue::from_str("__TAURI__")).ok();
+                if let Some(tauri) = tauri {
+                    let event_mod = js_sys::Reflect::get(&tauri, &JsValue::from_str("event")).ok();
+                    if let Some(event_mod) = event_mod {
+                        let listen_fn = js_sys::Reflect::get(&event_mod, &JsValue::from_str("listen")).ok();
+                        if let Some(listen_fn) = listen_fn {
+                            let listen_fn: js_sys::Function = listen_fn.into();
+                            let _ = listen_fn.call2(&JsValue::NULL,
+                                &JsValue::from_str("deep-link-poke"),
+                                listen_cb.as_ref(),
+                            );
+                        }
+                    }
+                }
+            }
+            listen_cb.forget();
+        });
+    }
+
+    // ── Deep-link-claim listener (for warm-start — app already running) ──────
+    {
+        let listen_cb = wasm_bindgen::closure::Closure::<dyn Fn(JsValue)>::new(move |payload: JsValue| {
+            let code: String = js_sys::Reflect::get(&payload, &JsValue::from_str("payload"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            if !code.is_empty() {
+                deep_link_code.set(code);
+                active_tab.set(0);
+            }
+        });
+
+        spawn_local(async move {
+            if let Some(win) = web_sys::window() {
+                let tauri = js_sys::Reflect::get(&win, &JsValue::from_str("__TAURI__")).ok();
+                if let Some(tauri) = tauri {
+                    let event_mod = js_sys::Reflect::get(&tauri, &JsValue::from_str("event")).ok();
+                    if let Some(event_mod) = event_mod {
+                        let listen_fn = js_sys::Reflect::get(&event_mod, &JsValue::from_str("listen")).ok();
+                        if let Some(listen_fn) = listen_fn {
+                            let listen_fn: js_sys::Function = listen_fn.into();
+                            let _ = listen_fn.call2(&JsValue::NULL,
+                                &JsValue::from_str("deep-link-claim"),
+                                listen_cb.as_ref(),
+                            );
+                        }
+                    }
+                }
+            }
+            listen_cb.forget();
+        });
     }
 
     // ── Wallet creation (first run) ───────────────────────────────────────────
@@ -877,10 +1081,26 @@ fn App() -> impl IntoView {
                                 app_phase.set(AppPhase::Wallet);
                                 load_wallet(online, loading, info, err_msg).await;
                                 check_email();
-                                // Check for pending deep link (chronx://claim?code=...)
-                                if let Ok(Some(code)) = call::<Option<String>>("get_pending_deep_link", no_args()).await {
-                                    deep_link_code.set(code);
-                                    active_tab.set(0); // Navigate to Account/Receive tab (claim code is there)
+                                // Initial poke count fetch
+                                {
+                                    let blocked = call::<Vec<String>>("get_blocked_senders", no_args()).await.unwrap_or_default();
+                                    if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+                                        let mut total = 0usize;
+                                        for em in &emails {
+                                            let pa = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
+                                            if let Ok(pokes) = call::<Vec<PendingPoke>>("get_pending_pokes", pa).await {
+                                                total += pokes.iter().filter(|p| {
+                                                    let sender = p.from_email.as_deref().unwrap_or("").to_lowercase();
+                                                    sender.is_empty() || !blocked.iter().any(|b| b.to_lowercase() == sender)
+                                                }).count();
+                                            }
+                                        }
+                                        poke_count.set(total);
+                                    }
+                                }
+                                // Check for cold-start deep link (managed state)
+                                if let Ok(Some(url)) = call::<Option<String>>("get_launch_deep_link", no_args()).await {
+                                    route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
                                 }
                             }
                             Err(e) => {
@@ -920,10 +1140,26 @@ fn App() -> impl IntoView {
                             app_phase.set(AppPhase::Wallet);
                             load_wallet(online, loading, info, err_msg).await;
                             check_email();
-                            // Check for pending deep link (chronx://claim?code=...)
-                            if let Ok(Some(code)) = call::<Option<String>>("get_pending_deep_link", no_args()).await {
-                                deep_link_code.set(code);
-                                active_tab.set(1); // Navigate to Promises Made tab
+                            // Initial poke count fetch
+                            {
+                                let blocked = call::<Vec<String>>("get_blocked_senders", no_args()).await.unwrap_or_default();
+                                if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+                                    let mut total = 0usize;
+                                    for em in &emails {
+                                        let pa = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
+                                        if let Ok(pokes) = call::<Vec<PendingPoke>>("get_pending_pokes", pa).await {
+                                            total += pokes.iter().filter(|p| {
+                                                let sender = p.from_email.as_deref().unwrap_or("").to_lowercase();
+                                                sender.is_empty() || !blocked.iter().any(|b| b.to_lowercase() == sender)
+                                            }).count();
+                                        }
+                                    }
+                                    poke_count.set(total);
+                                }
+                            }
+                            // Check for cold-start deep link (managed state)
+                            if let Ok(Some(url)) = call::<Option<String>>("get_launch_deep_link", no_args()).await {
+                                route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
                             }
                         }
                         Ok(false) | Err(_) => {
@@ -1080,6 +1316,14 @@ fn App() -> impl IntoView {
                         <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
                             on:click=move |_| active_tab.set(1)>
                             {move || t(&lang.get(), "tab_send")}
+                            {move || {
+                                let count = poke_count.get();
+                                if count > 0 {
+                                    view! { <span class="notice-badge" style="background:#ef4444;margin-left:4px">{count}</span> }.into_any()
+                                } else {
+                                    view! { <span></span> }.into_any()
+                                }
+                            }}
                         </button>
                         <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
                             on:click=move |_| active_tab.set(2)>
@@ -1155,7 +1399,7 @@ fn App() -> impl IntoView {
                                         view! { <span></span> }.into_any()
                                     }}
                                     {move || if send_cascade_mode.get() == 0 {
-                                        view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
+                                        view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id /> }.into_any()
                                     } else {
                                         view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
                                     }}
@@ -1276,6 +1520,77 @@ fn App() -> impl IntoView {
                                             });
                                             bug_modal_open.set(false);
                                         }>"Send Report"</button>
+                                    </div>
+                                </div>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }}
+
+                    // Poke decline modal
+                    {move || if decline_modal_open.get() {
+                        let sender = decline_sender_email.get();
+                        view! {
+                            <div class="modal-overlay" on:click=move |ev| {
+                                use wasm_bindgen::JsCast;
+                                if let Some(target) = ev.target() {
+                                    if target.dyn_into::<web_sys::HtmlElement>().ok()
+                                        .and_then(|el| el.class_list().contains("modal-overlay").then_some(()))
+                                        .is_some()
+                                    {
+                                        decline_modal_open.set(false);
+                                    }
+                                }
+                            }>
+                                <div class="modal-box">
+                                    <p class="modal-title" style="color:#ef4444">"Request Declined"</p>
+                                    <p style="font-size:14px;margin:12px 0">
+                                        "Payment request from "
+                                        <strong style="color:#e8e9eb">{sender.clone()}</strong>
+                                        " has been declined."
+                                    </p>
+                                    <label style="display:flex;align-items:center;gap:8px;margin:16px 0;cursor:pointer;font-size:13px;color:#9ca3af">
+                                        <input type="checkbox"
+                                            prop:checked=move || decline_block_checked.get()
+                                            on:change=move |ev| {
+                                                use wasm_bindgen::JsCast;
+                                                let checked = ev.target()
+                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                    .map(|i| i.checked())
+                                                    .unwrap_or(false);
+                                                decline_block_checked.set(checked);
+                                            }
+                                        />
+                                        "Block this sender (future requests will be silently ignored)"
+                                    </label>
+                                    <div class="modal-actions">
+                                        <button class="primary" style="background:#ef4444;border-color:#ef4444"
+                                            disabled=move || decline_busy.get()
+                                            on:click=move |_| {
+                                                decline_busy.set(true);
+                                                let rid = decline_request_id.get_untracked();
+                                                let should_block = decline_block_checked.get_untracked();
+                                                let sender_em = decline_sender_email.get_untracked();
+                                                spawn_local(async move {
+                                                    // Call decline API
+                                                    let args = serde_wasm_bindgen::to_value(
+                                                        &serde_json::json!({ "requestId": rid })
+                                                    ).unwrap_or(no_args());
+                                                    let _ = call::<()>("decline_poke", args).await;
+                                                    // Block sender if checked
+                                                    if should_block && !sender_em.is_empty() {
+                                                        let args = serde_wasm_bindgen::to_value(
+                                                            &serde_json::json!({ "email": sender_em })
+                                                        ).unwrap_or(no_args());
+                                                        let _ = call::<()>("add_blocked_sender", args).await;
+                                                    }
+                                                    decline_busy.set(false);
+                                                    decline_modal_open.set(false);
+                                                });
+                                            }>
+                                            {move || if decline_busy.get() { "Declining..." } else { "OK" }}
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -1677,12 +1992,15 @@ fn AccountPanel(
     let qr_svg       = RwSignal::new(String::new());
     let qr_visible   = RwSignal::new(false);
 
-    // Claim code on Receive tab (pre-fill from deep link)
-    let dl_code = deep_link_code.get_untracked();
-    let home_claim_code = RwSignal::new(dl_code.clone());
-    if !dl_code.is_empty() {
-        deep_link_code.set(String::new()); // consume it
-    }
+    // Claim code on Receive tab (pre-fill from deep link — reactive Effect)
+    let home_claim_code = RwSignal::new(String::new());
+    Effect::new(move |_| {
+        let code = deep_link_code.get();
+        if !code.is_empty() {
+            home_claim_code.set(code);
+            deep_link_code.set(String::new()); // consume it
+        }
+    });
     let home_claim_msg  = RwSignal::new(String::new());
     let home_claim_busy = RwSignal::new(false);
 
@@ -1968,7 +2286,15 @@ fn linkify_body(text: String) -> Vec<(bool, String)> {
 // ── SendPanel (unified: KX Address + Email Address × Send Now + Send Later) ───
 
 #[component]
-fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSignal<u64>, lang: RwSignal<String>) -> impl IntoView {
+fn SendPanel(
+    info: RwSignal<Option<AccountInfo>>,
+    pending_email_chronos: RwSignal<u64>,
+    lang: RwSignal<String>,
+    poke_prefill_email: RwSignal<String>,
+    poke_prefill_amount: RwSignal<String>,
+    poke_prefill_memo: RwSignal<String>,
+    poke_prefill_id: RwSignal<String>,
+) -> impl IntoView {
     let send_sub  = RwSignal::new(0u8); // 0=KX Address, 1=Email Address
     let send_mode = RwSignal::new(0u8); // 0=Send Now,   1=Send Later
 
@@ -1991,6 +2317,15 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
     // Series entries for Email + Send Later (additional payments beyond the first)
     let series_entries: RwSignal<Vec<(RwSignal<String>, RwSignal<String>, RwSignal<String>)>> = RwSignal::new(Vec::new()); // (amount, date, memo)
 
+    // Email send confirmation modal
+    let email_confirm_open = RwSignal::new(false);
+    let email_confirm_add_trusted = RwSignal::new(false);
+    let email_confirm_already_trusted = RwSignal::new(false);
+    let email_confirm_email = RwSignal::new(String::new());
+    let email_confirm_amt = RwSignal::new(String::new());
+    let email_confirm_memo = RwSignal::new(String::new());
+    let email_send_confirmed = RwSignal::new(false);
+
     let utc_clock = RwSignal::new(String::new());
     Effect::new(move |_| { start_utc_clock_tick(utc_clock); });
 
@@ -2008,6 +2343,23 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
     Effect::new(move |_| {
         send_sub.get(); send_mode.get();
         msg.set(String::new()); scan_msg.set(String::new()); spam_warn.set(false);
+    });
+
+    // Poke pre-fill: when poke_prefill_email changes, populate Email + Send Now form
+    let poke_applied = RwSignal::new(false);
+    Effect::new(move |_| {
+        let prefill_email = poke_prefill_email.get();
+        if !prefill_email.is_empty() && !poke_applied.get_untracked() {
+            poke_applied.set(true);
+            send_sub.set(1);  // Email Address tab
+            send_mode.set(0); // Send Now
+            email.set(prefill_email);
+            amount.set(poke_prefill_amount.get_untracked());
+            memo.set(poke_prefill_memo.get_untracked());
+            msg.set(String::new());
+        } else if prefill_email.is_empty() {
+            poke_applied.set(false);
+        }
     });
 
     let set_date = move |date: String| lock_date.set(date);
@@ -2129,6 +2481,24 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
             if !is_valid_email(&email_str) {
                 msg.set("Error: Please enter a valid email address.".into()); return;
             }
+            // Confirmation gate (desktop only)
+            if !email_send_confirmed.get_untracked() {
+                email_confirm_email.set(email_str.clone());
+                email_confirm_amt.set(amount.get_untracked());
+                email_confirm_memo.set(memo.get_untracked());
+                email_confirm_add_trusted.set(false);
+                email_confirm_already_trusted.set(false);
+                // Check if already trusted (async, then open modal)
+                let em = email_str.clone();
+                spawn_local(async move {
+                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
+                    let trusted = call::<bool>("is_trusted_contact", args).await.unwrap_or(false);
+                    email_confirm_already_trusted.set(trusted);
+                    email_confirm_open.set(true);
+                });
+                return;
+            }
+            email_send_confirmed.set(false);
             let unlock_unix: i64 = 0; // 0 = Send Now — backend uses its own timestamp
             spawn_local(async move {
                 sending.set(true);
@@ -2151,6 +2521,13 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         let _ = call::<()>("save_email_send", save_args).await;
+                        // Add as trusted contact if checkbox was checked
+                        if email_confirm_add_trusted.get_untracked() {
+                            let tc_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                "email": email_str.clone(),
+                            })).unwrap_or(no_args());
+                            let _ = call::<()>("add_trusted_contact", tc_args).await;
+                        }
                         email.set(String::new());
                         amount.set(String::new());
                         memo.set(String::new());
@@ -2164,6 +2541,15 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                         match call::<()>("notify_email_recipient", notify_args).await {
                             Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
                             Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
+                        }
+                        // If this send was triggered by a poke PAY NOW, confirm payment
+                        let poke_id = poke_prefill_id.get_untracked();
+                        if !poke_id.is_empty() {
+                            let args = serde_wasm_bindgen::to_value(
+                                &serde_json::json!({ "requestId": poke_id })
+                            ).unwrap_or(no_args());
+                            let _ = call::<()>("confirm_poke_paid", args).await;
+                            poke_prefill_id.set(String::new());
                         }
                         let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                         // Check immediately (transaction is already on-chain), then poll as fallback
@@ -2198,6 +2584,23 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
             }
             let date_str = lock_date.get_untracked();
             if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
+            // Confirmation gate (desktop only)
+            if !email_send_confirmed.get_untracked() {
+                email_confirm_email.set(email_str.clone());
+                email_confirm_amt.set(amount.get_untracked());
+                email_confirm_memo.set(memo.get_untracked());
+                email_confirm_add_trusted.set(false);
+                email_confirm_already_trusted.set(false);
+                let em = email_str.clone();
+                spawn_local(async move {
+                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
+                    let trusted = call::<bool>("is_trusted_contact", args).await.unwrap_or(false);
+                    email_confirm_already_trusted.set(trusted);
+                    email_confirm_open.set(true);
+                });
+                return;
+            }
+            email_send_confirmed.set(false);
             let unlock_unix = match date_str_to_unix(&date_str) {
                 Some(t) => t,
                 None => { msg.set("Error: invalid date.".into()); return; }
@@ -2249,6 +2652,13 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                                     "lockId": txid, "email": email_str.clone(), "claimCode": claim_code.clone(),
                                 })).unwrap_or(no_args());
                                 let _ = call::<()>("save_email_send", save_args).await;
+                            }
+                            // Add as trusted contact if checkbox was checked
+                            if email_confirm_add_trusted.get_untracked() {
+                                let tc_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                    "email": email_str.clone(),
+                                })).unwrap_or(no_args());
+                                let _ = call::<()>("add_trusted_contact", tc_args).await;
                             }
                             email.set(String::new());
                             amount.set(String::new());
@@ -2309,6 +2719,13 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                                 "claimCode": claim_code.clone(),
                             })).unwrap_or(no_args());
                             let _ = call::<()>("save_email_send", save_args).await;
+                            // Add as trusted contact if checkbox was checked
+                            if email_confirm_add_trusted.get_untracked() {
+                                let tc_args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                    "email": email_str.clone(),
+                                })).unwrap_or(no_args());
+                                let _ = call::<()>("add_trusted_contact", tc_args).await;
+                            }
                             email.set(String::new());
                             amount.set(String::new());
                             lock_date.set(String::new());
@@ -2545,6 +2962,7 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                             prop:value=move || memo.get()
                             on:input=move |ev| memo.set(event_target_value(&ev))
                             disabled=move || sending.get()></textarea>
+                        <p style="font-size:0.75rem;color:#888;font-style:italic;margin:4px 0 0">"Note: memos are stored on the blockchain and are publicly visible."</p>
                     </div>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
@@ -2659,6 +3077,53 @@ fn SendPanel(info: RwSignal<Option<AccountInfo>>, pending_email_chronos: RwSigna
                 } else { view! { <span></span> }.into_any() }
             }}
         </div>
+        // Email send confirmation modal
+        {move || if email_confirm_open.get() {
+            let disp_email = email_confirm_email.get();
+            let disp_amt = email_confirm_amt.get();
+            let disp_memo = email_confirm_memo.get();
+            view! {
+                <div class="cascade-confirm-modal">
+                    <div class="cascade-confirm-box" style="max-width:400px">
+                        <h3 style="margin:0 0 12px;color:#e5e7eb">{format!("Send {disp_amt} KX to {disp_email}?")}</h3>
+                        {if !disp_memo.is_empty() {
+                            view! { <p style="color:#9ca3af;font-size:13px;margin:0 0 12px">{format!("Memo: {disp_memo}")}</p> }.into_any()
+                        } else { view! { <span></span> }.into_any() }}
+                        {move || if !email_confirm_already_trusted.get() {
+                            view! {
+                                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin:12px 0 16px;font-size:13px;color:#e5e7eb">
+                                    <input type="checkbox" style="margin-top:2px;accent-color:#d4a84b"
+                                        prop:checked=move || email_confirm_add_trusted.get()
+                                        on:change=move |ev| {
+                                            use wasm_bindgen::JsCast;
+                                            let checked = ev.target()
+                                                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                .map(|i| i.checked()).unwrap_or(false);
+                                            email_confirm_add_trusted.set(checked);
+                                        } />
+                                    <span>
+                                        <span style="font-weight:600">"Add as Trusted Contact"</span>
+                                        <br/>
+                                        <span style="color:#9ca3af;font-size:12px">"They'll be able to request KX from you"</span>
+                                    </span>
+                                </label>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
+                        <div class="btn-row">
+                            <button class="btn-confirm" on:click=move |_| {
+                                email_confirm_open.set(false);
+                                email_send_confirmed.set(true);
+                                // Re-trigger on_send — it will now pass the confirmation gate
+                                on_send(web_sys::MouseEvent::new("click").unwrap());
+                            }>"Confirm Send"</button>
+                            <button class="btn-cancel" on:click=move |_| email_confirm_open.set(false)>"Cancel"</button>
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
     }
 }
 
@@ -2886,6 +3351,7 @@ fn CascadeSendPanel(
                             prop:value=move || memo.get()
                             on:input=move |ev| memo.set(event_target_value(&ev))
                             disabled=move || sending.get() />
+                        <p style="font-size:0.75rem;color:#888;font-style:italic;margin:4px 0 0">"Note: memos are stored on the blockchain and are publicly visible."</p>
                     </div>
                     // Stage builder
                     <div style="margin-bottom:8px">
@@ -2960,31 +3426,8 @@ fn CascadeSendPanel(
                             "\u{2728} Use Standard Friend Template"
                         </button>
                     </div>
-                    // Send button
-                    <button class="primary" style="width:100%"
-                        on:click=on_send disabled=move || sending.get()>
-                        {move || if sending.get() { "Sending\u{2026}" } else { "Send Cascade" }}
-                    </button>
-                    <p class="fee-free-line">{"\u{2713} No transaction fees. The recipient receives exactly what you send."}</p>
-                    {move || {
-                        let s = msg.get();
-                        if s.is_empty() { view! { <span></span> }.into_any() }
-                        else {
-                            let cls = if s.starts_with("Error") { "msg error" }
-                                      else if s.starts_with("Mining") { "msg mining" }
-                                      else { "msg success" };
-                            view! { <p class=cls>{s}</p> }.into_any()
-                        }
-                    }}
-                    {move || if spam_warn.get() {
-                        view! {
-                            <p class="msg success" style="font-weight:800;margin-top:6px;font-size:13px">
-                                "Ask your recipient to check their spam folder."
-                            </p>
-                        }.into_any()
-                    } else { view! { <span></span> }.into_any() }}
                 </div>
-                // Live preview
+                // Live preview + send button
                 <div class="cascade-preview">
                     <h4>"Preview"</h4>
                     <div class="preview-row">
@@ -2999,7 +3442,7 @@ fn CascadeSendPanel(
                         <span class="val">{move || {
                             let st = stages.get();
                             let sum: f64 = st.iter().map(|s| s.amount.get().parse::<f64>().unwrap_or(0.0)).sum();
-                            format!("{sum:.6} KX")
+                            format!("{} KX", format_kx_display(sum))
                         }}</span>
                     </div>
                     <div class="preview-row">
@@ -3022,6 +3465,29 @@ fn CascadeSendPanel(
                             }).collect_view()
                         }}
                     </div>
+                    // Send button (inside preview column)
+                    <button class="primary cascade-send-btn"
+                        on:click=on_send disabled=move || sending.get()>
+                        {move || if sending.get() { "Sending\u{2026}" } else { "Send Cascade" }}
+                    </button>
+                    <p class="fee-free-line">{"\u{2713} No transaction fees"}</p>
+                    {move || {
+                        let s = msg.get();
+                        if s.is_empty() { view! { <span></span> }.into_any() }
+                        else {
+                            let cls = if s.starts_with("Error") { "msg error" }
+                                      else if s.starts_with("Mining") { "msg mining" }
+                                      else { "msg success" };
+                            view! { <p class=cls>{s}</p> }.into_any()
+                        }
+                    }}
+                    {move || if spam_warn.get() {
+                        view! {
+                            <p class="msg success" style="font-weight:800;margin-top:6px;font-size:13px">
+                                "Check spam folder for notification email."
+                            </p>
+                        }.into_any()
+                    } else { view! { <span></span> }.into_any() }}
                 </div>
             </div>
         </div>
@@ -3035,7 +3501,7 @@ fn CascadeSendPanel(
                 <div class="cascade-confirm-modal">
                     <div class="cascade-confirm-box">
                         <h3>{move || t(&lang.get(), "send_confirm_title")}</h3>
-                        <p>{format!("Send {total:.6} KX to {em} in {count} stages?")}</p>
+                        <p>{format!("Send {} KX to {em} in {count} stages?", format_kx_display(total))}</p>
                         <div class="btn-row">
                             <button class="btn-confirm" on:click=on_confirm>{move || t(&lang.get(), "confirm")}</button>
                             <button class="btn-cancel" on:click=move |_| confirm_open.set(false)>{move || t(&lang.get(), "cancel")}</button>
@@ -3160,6 +3626,7 @@ fn RequestPanel(
     lang: RwSignal<String>,
 ) -> impl IntoView {
     let contacts = RwSignal::new(Vec::<TrustedContact>::new());
+    let sender_email = RwSignal::new(String::new());
     let req_email = RwSignal::new(String::new());
     let req_amount = RwSignal::new(String::new());
     let req_note = RwSignal::new(String::new());
@@ -3170,6 +3637,12 @@ fn RequestPanel(
         spawn_local(async move {
             if let Ok(c) = call::<Vec<TrustedContact>>("get_trusted_contacts", no_args()).await {
                 contacts.set(c);
+            }
+            // Load sender's claim email for poke requests
+            if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+                if let Some(first) = emails.first() {
+                    sender_email.set(first.clone());
+                }
             }
         });
     });
@@ -3189,11 +3662,23 @@ fn RequestPanel(
         let wallet = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
         req_busy.set(true);
         req_msg.set(String::new());
+        let email_c = email.clone();
         spawn_local(async move {
+            // Trust gate: only allow requests to trusted contacts
+            let args_check = serde_wasm_bindgen::to_value(&serde_json::json!({
+                "email": email_c,
+            })).unwrap_or(no_args());
+            let is_trusted = call::<bool>("is_trusted_contact", args_check).await.unwrap_or(false);
+            if !is_trusted {
+                req_msg.set("You can only request money from Trusted Contacts. Send them KX first to add them as a contact.".to_string());
+                req_busy.set(false);
+                return;
+            }
+            let from_em = sender_email.get_untracked();
             let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                 "fromWallet": wallet,
-                "fromEmail": "",
-                "toEmail": email,
+                "fromEmail": from_em,
+                "toEmail": email_c,
                 "amountKx": amount,
                 "note": note,
             })).unwrap_or(no_args());
@@ -3253,7 +3738,9 @@ fn RequestPanel(
                 let s = req_msg.get();
                 if s.is_empty() { view! { <span></span> }.into_any() }
                 else {
-                    let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
+                    let cls = if s.starts_with("Error") { "msg error" }
+                              else if s.starts_with("You can only") { "msg warning" }
+                              else { "msg success" };
                     view! { <p class=cls>{s}</p> }.into_any()
                 }
             }}
@@ -4225,9 +4712,16 @@ fn SettingsPanel(
     let show_updates = RwSignal::new(false);
     let show_change_pin = RwSignal::new(false);
 
-    // Multi claim emails (up to 3, local only, never sent to server)
+    // Multi claim emails (up to 3) + verification state
     let claim_emails = RwSignal::new(Vec::<String>::new());
     let claim_email_msg = RwSignal::new(String::new());
+    let verified_emails = RwSignal::new(Vec::<String>::new());
+    // New email being added (verification flow)
+    let new_email_input = RwSignal::new(String::new());
+    let verify_phase = RwSignal::new(0u8); // 0=idle, 1=sending code, 2=code sent (enter code), 3=verifying
+    let verify_code_input = RwSignal::new(String::new());
+    let verify_msg = RwSignal::new(String::new());
+    let verify_email_addr = RwSignal::new(String::new()); // email being verified
 
     // Change PIN state
     let cp_phase    = RwSignal::new(0u8); // 0=verify current, 1=enter new, 2=confirm new
@@ -4242,6 +4736,8 @@ fn SettingsPanel(
             node_url.set(url);
             let emails = call::<Vec<String>>("get_claim_emails", no_args()).await.unwrap_or_default();
             claim_emails.set(emails);
+            let verified = call::<Vec<String>>("get_verified_emails", no_args()).await.unwrap_or_default();
+            verified_emails.set(verified);
         });
     });
 
@@ -4275,19 +4771,6 @@ fn SettingsPanel(
                 Err(e) => pubkey_hex.set(format!("Error: {e}")),
             }
             pk_loading.set(false);
-        });
-    };
-
-    let on_save_emails = move |_: web_sys::MouseEvent| {
-        let emails = claim_emails.get_untracked();
-        spawn_local(async move {
-            let args = serde_wasm_bindgen::to_value(
-                &serde_json::json!({ "emails": emails })
-            ).unwrap_or(no_args());
-            match call::<()>("set_claim_emails", args).await {
-                Ok(_) => claim_email_msg.set(t(&lang.get(), "settings_emails_saved")),
-                Err(e) => claim_email_msg.set(format!("Error: {e}")),
-            }
         });
     };
 
@@ -4489,24 +4972,52 @@ fn SettingsPanel(
                 view! { <span></span> }.into_any()
             }}
 
-            // Node URL (desktop only)
+            // Node URL (desktop only, collapsed Advanced)
             {if desktop {
+                let advanced_open = RwSignal::new(false);
+                let node_editing = RwSignal::new(false);
                 view! {
-                    <div class="field">
-                        <label>{move || t(&lang.get(), "settings_node_url")}</label>
-                        <input type="text" placeholder="http://127.0.0.1:8545"
-                            prop:value=move || node_url.get()
-                            on:input=move |ev| node_url.set(event_target_value(&ev)) />
+                    <div class="settings-section" style="margin-top:12px;border-top:1px solid #2d3748;padding-top:12px">
+                        <div style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px"
+                            on:click=move |_| advanced_open.update(|v| *v = !*v)>
+                            <span style="font-size:12px;color:#9ca3af">{move || if advanced_open.get() { "\u{25BC}" } else { "\u{25B6}" }}</span>
+                            <span style="font-size:13px;color:#9ca3af;font-weight:600">"Advanced Settings"</span>
+                        </div>
+                        {move || if advanced_open.get() {
+                            view! {
+                                <div style="margin-top:10px">
+                                    <div class="field">
+                                        <label>{move || t(&lang.get(), "settings_node_url")}</label>
+                                        <p class="muted" style="font-size:11px;margin-bottom:4px">"Only change this if you know what you're doing."</p>
+                                        <input type="text" placeholder="http://127.0.0.1:8545"
+                                            prop:value=move || node_url.get()
+                                            on:input=move |ev| node_url.set(event_target_value(&ev))
+                                            readonly=move || !node_editing.get() />
+                                    </div>
+                                    {move || if node_editing.get() {
+                                        view! {
+                                            <button class="primary" on:click=on_save>{move || t(&lang.get(), "settings_save_reconnect")}</button>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <button style="font-size:12px;padding:4px 12px"
+                                                on:click=move |_| node_editing.set(true)>"Edit"</button>
+                                        }.into_any()
+                                    }}
+                                    {move || {
+                                        let s = save_msg.get();
+                                        if s.is_empty() { view! { <span></span> }.into_any() }
+                                        else {
+                                            let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
+                                            view! { <p class=cls>{s}</p> }.into_any()
+                                        }
+                                    }}
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
                     </div>
-                    <button class="primary" on:click=on_save>{move || t(&lang.get(), "settings_save_reconnect")}</button>
-                    {move || {
-                        let s = save_msg.get();
-                        if s.is_empty() { view! { <span></span> }.into_any() }
-                        else {
-                            let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
-                            view! { <p class=cls>{s}</p> }.into_any()
-                        }
-                    }}
                 }.into_any()
             } else {
                 view! { <span></span> }.into_any()
@@ -4734,62 +5245,240 @@ fn SettingsPanel(
                 view! { <span></span> }.into_any()
             }}
 
-            // My Emails for KX Claims (up to 3)
+            // My Emails for KX Claims (with verification)
             <div class="settings-section">
                 <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    {move || t(&lang.get(), "settings_claim_emails_sub")}
+                    {move || t(&lang.get(), "settings_claim_emails_sub_v2")}
                 </p>
+                // List of existing emails with verified/unverified badges
                 <div class="claim-emails-list">
                     {move || {
                         let emails = claim_emails.get();
-                        let rows: Vec<_> = emails.iter().enumerate().map(|(i, email)| {
-                            let email_clone = email.clone();
-                            let idx = i;
-                            view! {
-                                <div class="claim-email-row">
-                                    <input type="email" placeholder="you@example.com"
-                                        prop:value=email_clone
-                                        on:input=move |ev| {
-                                            let val = event_target_value(&ev);
-                                            claim_emails.update(|list| {
-                                                if idx < list.len() { list[idx] = val; }
-                                            });
-                                            claim_email_msg.set(String::new());
-                                        } />
-                                    <button style="font-size:12px;padding:4px 8px;color:#f87171;background:transparent;border:1px solid #f87171;border-radius:4px"
-                                        on:click=move |_| {
-                                            claim_emails.update(|list| { if idx < list.len() { list.remove(idx); } });
-                                            claim_email_msg.set(String::new());
-                                        }
-                                    >"\u{2716}"</button>
-                                </div>
-                            }
-                        }).collect();
-                        view! { <div>{rows}</div> }.into_any()
-                    }}
-                </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    {move || {
-                        if claim_emails.get().len() < 3 {
-                            view! {
-                                <button on:click=move |_| {
-                                    claim_emails.update(|list| list.push(String::new()));
-                                    claim_email_msg.set(String::new());
-                                }>{move || t(&lang.get(), "settings_add_email")}</button>
-                            }.into_any()
-                        } else {
+                        let verified = verified_emails.get();
+                        if emails.is_empty() {
                             view! { <span></span> }.into_any()
+                        } else {
+                            let rows: Vec<_> = emails.iter().enumerate().map(|(i, email)| {
+                                let email_display = email.clone();
+                                let is_verified = verified.contains(email);
+                                let idx = i;
+                                let email_for_reverify = email.clone();
+                                view! {
+                                    <div class="claim-email-row" dir="ltr" style="display:flex;align-items:center;gap:8px;padding:6px 0;direction:ltr">
+                                        <span dir="ltr" style="flex:1;font-size:13px;word-break:break-all;text-align:left;unicode-bidi:embed;direction:ltr">{email_display}</span>
+                                        {if is_verified {
+                                            view! {
+                                                <span style="font-size:11px;color:#4ade80;white-space:nowrap">
+                                                    {format!("\u{2713} {}", t(&lang.get(), "verified"))}
+                                                </span>
+                                            }.into_any()
+                                        } else {
+                                            view! {
+                                                <span style="font-size:11px;white-space:nowrap">
+                                                    <span style="color:#f59e0b" title="Unverified">"\u{26a0} "</span>
+                                                    <a href="#" style="color:#d4a84b;text-decoration:underline;font-size:11px" on:click=move |ev| {
+                                                        ev.prevent_default();
+                                                        let e = email_for_reverify.clone();
+                                                        verify_email_addr.set(e.clone());
+                                                        new_email_input.set(e);
+                                                        verify_phase.set(1);
+                                                        verify_msg.set(String::new());
+                                                        verify_code_input.set(String::new());
+                                                        // Send verification code
+                                                        spawn_local(async move {
+                                                            let addr = verify_email_addr.get_untracked();
+                                                            let wid = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
+                                                            let args = serde_wasm_bindgen::to_value(
+                                                                &serde_json::json!({ "email": addr, "walletId": wid })
+                                                            ).unwrap_or(no_args());
+                                                            match call::<String>("send_verify_email", args).await {
+                                                                Ok(_) => {
+                                                                    verify_phase.set(2);
+                                                                    verify_msg.set(t(&lang.get(), "verify_code_sent"));
+                                                                }
+                                                                Err(e) => {
+                                                                    verify_phase.set(0);
+                                                                    verify_msg.set(format!("Error: {e}"));
+                                                                }
+                                                            }
+                                                        });
+                                                    }>{move || t(&lang.get(), "verify_send_code")}</a>
+                                                </span>
+                                            }.into_any()
+                                        }}
+                                        <button style="font-size:12px;padding:4px 8px;color:#f87171;background:transparent;border:1px solid #f87171;border-radius:4px"
+                                            on:click=move |_| {
+                                                claim_emails.update(|list| { if idx < list.len() { list.remove(idx); } });
+                                                let remaining = claim_emails.get_untracked();
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(
+                                                        &serde_json::json!({ "emails": remaining })
+                                                    ).unwrap_or(no_args());
+                                                    let _ = call::<()>("set_claim_emails", args).await;
+                                                });
+                                            }
+                                        >"\u{2716}"</button>
+                                    </div>
+                                }
+                            }).collect();
+                            view! { <div>{rows}</div> }.into_any()
                         }
                     }}
-                    <button class="primary" on:click=on_save_emails>{move || t(&lang.get(), "settings_save_emails")}</button>
                 </div>
+
+                // Verification code entry (visible when verify_phase == 2)
+                {move || if verify_phase.get() == 2 {
+                    view! {
+                        <div style="border:1px solid rgba(212,168,75,0.3);border-radius:8px;padding:12px;margin:8px 0">
+                            <p dir="ltr" style="font-size:13px;color:#d4a84b;font-weight:600;margin-bottom:6px;text-align:left;unicode-bidi:embed">
+                                {move || verify_email_addr.get()}
+                            </p>
+                            <p class="muted" style="font-size:12px;margin-bottom:8px">
+                                {move || t(&lang.get(), "verify_enter_code")}
+                            </p>
+                            <div style="display:flex;gap:8px;align-items:center">
+                                <input type="text" maxlength="6"
+                                    placeholder="ABC123"
+                                    style="font-family:monospace;font-size:16px;letter-spacing:3px;text-align:center;text-transform:uppercase;width:140px"
+                                    prop:value=move || verify_code_input.get()
+                                    on:input=move |ev| verify_code_input.set(event_target_value(&ev)) />
+                                <button class="primary" style="padding:8px 16px"
+                                    disabled=move || verify_phase.get() == 3
+                                    on:click=move |_| {
+                                        let code = verify_code_input.get_untracked().trim().to_string();
+                                        if code.len() < 6 { return; }
+                                        verify_phase.set(3);
+                                        verify_msg.set(t(&lang.get(), "verify_checking"));
+                                        spawn_local(async move {
+                                            let addr = verify_email_addr.get_untracked();
+                                            let wid = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "email": addr, "code": code, "walletId": wid })
+                                            ).unwrap_or(no_args());
+                                            match call::<bool>("confirm_verify_email", args).await {
+                                                Ok(true) => {
+                                                    verify_msg.set(t(&lang.get(), "verify_success"));
+                                                    verify_phase.set(0);
+                                                    verify_code_input.set(String::new());
+                                                    // Reload verified + claim emails
+                                                    let v = call::<Vec<String>>("get_verified_emails", no_args()).await.unwrap_or_default();
+                                                    verified_emails.set(v);
+                                                    let c = call::<Vec<String>>("get_claim_emails", no_args()).await.unwrap_or_default();
+                                                    claim_emails.set(c);
+                                                }
+                                                Ok(false) => {
+                                                    verify_msg.set(t(&lang.get(), "verify_failed"));
+                                                    verify_phase.set(2);
+                                                    verify_code_input.set(String::new());
+                                                }
+                                                Err(e) => {
+                                                    verify_msg.set(format!("Error: {e}"));
+                                                    verify_phase.set(2);
+                                                }
+                                            }
+                                        });
+                                    }>
+                                    {move || if verify_phase.get() == 3 {
+                                        t(&lang.get(), "verify_checking")
+                                    } else {
+                                        t(&lang.get(), "verify_confirm")
+                                    }}
+                                </button>
+                                <button style="padding:8px 12px;background:transparent;border:1px solid #555;color:#9ca3af;border-radius:6px;cursor:pointer"
+                                    on:click=move |_| {
+                                        verify_phase.set(0);
+                                        verify_code_input.set(String::new());
+                                        verify_msg.set(String::new());
+                                    }>{move || t(&lang.get(), "cancel")}</button>
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }}
+
+                // Add new email button + verification flow
                 {move || {
-                    let s = claim_email_msg.get();
-                    if s.is_empty() { view! { <span></span> }.into_any() }
+                    let phase = verify_phase.get();
+                    if phase == 0 && claim_emails.get().len() < 3 {
+                        view! {
+                            <div style="margin-top:8px" dir="ltr">
+                                <div style="direction:ltr">
+                                    <input type="email" placeholder="you@example.com"
+                                        dir="ltr"
+                                        style="width:100%;box-sizing:border-box;direction:ltr;text-align:left;margin-bottom:8px"
+                                        prop:value=move || new_email_input.get()
+                                        on:input=move |ev| new_email_input.set(event_target_value(&ev)) />
+                                    <button class="primary" style="white-space:nowrap;padding:8px 14px;width:100%"
+                                        on:click=move |_| {
+                                            let addr = new_email_input.get_untracked().trim().to_lowercase();
+                                            if addr.is_empty() {
+                                                verify_msg.set("Please enter an email address".to_string());
+                                                return;
+                                            }
+                                            if !addr.contains('@') {
+                                                verify_msg.set("Please enter a valid email address".to_string());
+                                                return;
+                                            }
+                                            verify_email_addr.set(addr.clone());
+                                            verify_phase.set(1);
+                                            verify_msg.set(t(&lang.get(), "verify_sending"));
+                                            verify_code_input.set(String::new());
+                                            // Also immediately save so it shows in the list (unverified)
+                                            claim_emails.update(|list| {
+                                                if !list.contains(&addr) && list.len() < 3 {
+                                                    list.push(addr.clone());
+                                                }
+                                            });
+                                            let save_emails = claim_emails.get_untracked();
+                                            spawn_local(async move {
+                                                let save_args = serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "emails": save_emails })
+                                                ).unwrap_or(no_args());
+                                                let _ = call::<()>("set_claim_emails", save_args).await;
+                                                let wid = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
+                                                let args = serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "email": addr, "walletId": wid })
+                                                ).unwrap_or(no_args());
+                                                match call::<String>("send_verify_email", args).await {
+                                                    Ok(_) => {
+                                                        verify_phase.set(2);
+                                                        verify_msg.set(t(&lang.get(), "verify_code_sent"));
+                                                    }
+                                                    Err(e) => {
+                                                        verify_phase.set(0);
+                                                        verify_msg.set(format!("Error: {e}"));
+                                                    }
+                                                }
+                                            });
+                                            new_email_input.set(String::new());
+                                        }>
+                                        {move || t(&lang.get(), "verify_send_code")}
+                                    </button>
+                                </div>
+                            </div>
+                        }.into_any()
+                    } else if phase == 1 {
+                        view! {
+                            <p class="muted" style="margin-top:8px;font-size:12px">{move || t(&lang.get(), "verify_sending")}</p>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }
+                }}
+
+                // Status message
+                {move || {
+                    let s = verify_msg.get();
+                    let s2 = claim_email_msg.get();
+                    let msg = if !s.is_empty() { s } else { s2 };
+                    if msg.is_empty() { view! { <span></span> }.into_any() }
                     else {
-                        let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
-                        view! { <p class=cls>{s}</p> }.into_any()
+                        let cls = if msg.starts_with("Error") { "msg error" }
+                                  else if msg.contains("Invalid") || msg.contains("expired") { "msg error" }
+                                  else { "msg success" };
+                        view! { <p class=cls>{msg}</p> }.into_any()
                     }
                 }}
             </div>
@@ -4877,7 +5566,7 @@ fn SettingsPanel(
                                                             ).unwrap_or(no_args());
                                                             let _ = call::<()>("open_url", args).await;
                                                         });
-                                                    }>"\u{2b07} Download Update"</button>
+                                                    }>{if is_desktop() { "\u{2b07} Download Update" } else { "\u{25b6} Update on Google Play" }}</button>
                                             </div>
                                         }.into_any()
                                     }

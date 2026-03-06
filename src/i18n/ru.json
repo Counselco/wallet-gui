@@ -102,5 +102,16 @@
   "settings_confirm_new_pin": "Подтвердите новый PIN",
   "settings_pin_changed": "PIN успешно изменен!",
   "settings_pins_no_match": "PIN не совпадают — попробуйте снова",
-  "settings_incorrect_pin": "Неверный PIN"
+  "settings_incorrect_pin": "Неверный PIN",
+  "verify_send_code": "Отправить код подтверждения",
+  "verify_enter_code": "Введите 6-символьный код, отправленный на ваш email",
+  "verify_confirm": "Подтвердить",
+  "verify_sending": "Отправка…",
+  "verify_checking": "Проверка…",
+  "verify_success": "Email подтвержден!",
+  "verify_failed": "Неверный или просроченный код. Попробуйте снова.",
+  "verify_code_sent": "Код отправлен! Проверьте почту.",
+  "verified": "Подтвержден",
+  "unverified": "Не подтвержден",
+  "settings_claim_emails_sub_v2": "Подтвердите email для получения KX. Подтвержденные email отслеживаются автоматически."
 }

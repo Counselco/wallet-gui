@@ -102,5 +102,16 @@
   "settings_confirm_new_pin": "نیا PIN تصدیق کریں",
   "settings_pin_changed": "PIN کامیابی سا تبدیل ہو گیا!",
   "settings_pins_no_match": "PIN مل نہیں کھاتا — دوبارہ کوشش کریں",
-  "settings_incorrect_pin": "غلط PIN"
+  "settings_incorrect_pin": "غلط PIN",
+  "verify_send_code": "تصدیقی کوڈ بھیجیں",
+  "verify_enter_code": "اپنا ایمیل پر بھیجا گیا 6 حرفی کوڈ درج کریں",
+  "verify_confirm": "تصدیق",
+  "verify_sending": "بھیج رہا ہوگیا…",
+  "verify_checking": "تصدیق ہو رہی ہوگیا…",
+  "verify_success": "ایمیل تصدیق ہو گئی!",
+  "verify_failed": "غلط یا میعاد ختم کوڈ۔ دوبارہ کوشش کریں۔",
+  "verify_code_sent": "تصدیقی کوڈ بھیجا گیا! اپنا ان باکس چیک کریں۔",
+  "verified": "تصدیق شدہ",
+  "unverified": "غیر تصدیق شدہ",
+  "settings_claim_emails_sub_v2": "اپنا ایمیل تصدیق کریں تاکہ اس پر بھیجا گیا KX مل سکا۔ تصدیق شدہ ایمیلز خودکار نگرانی میں رہتا ہوگیا۔"
 }

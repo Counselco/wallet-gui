@@ -102,5 +102,16 @@
   "settings_confirm_new_pin": "تأكيد PIN الجديد",
   "settings_pin_changed": "تم تغيير PIN بنجاح!",
   "settings_pins_no_match": "أرقام PIN غير متطابقة — حاول مرة أخرى",
-  "settings_incorrect_pin": "PIN غير صحيح"
+  "settings_incorrect_pin": "PIN غير صحيح",
+  "verify_send_code": "إرسال رمز التحقق",
+  "verify_enter_code": "أدخل الرمز المكون من 6 أحرف المرسل إلى بريدك",
+  "verify_confirm": "تحقق",
+  "verify_sending": "جاري الإرسال…",
+  "verify_checking": "جاري التحقق…",
+  "verify_success": "تم التحقق من البريد!",
+  "verify_failed": "رمز غير صالح أو منتهي الصلاحية. حاول مرة أخرى.",
+  "verify_code_sent": "تم إرسال الرمز! تحقق من بريدك.",
+  "verified": "موثق",
+  "unverified": "غير موثق",
+  "settings_claim_emails_sub_v2": "تحقق من بريدك لاستلام KX المرسل إليه. يتم مراقبة البريد الموثق تلقائياً."
 }
