@@ -74,6 +74,15 @@ fn is_desktop() -> bool {
     }
 }
 
+fn is_ios() -> bool {
+    if let Some(win) = web_sys::window() {
+        let ua = win.navigator().user_agent().unwrap_or_default().to_lowercase();
+        ua.contains("iphone") || ua.contains("ipad")
+    } else {
+        false
+    }
+}
+
 // ── Trusted contact type (frontend) ──────────────────────────────────────────
 
 #[derive(Clone, Deserialize, Default)]
@@ -5542,6 +5551,21 @@ fn SettingsPanel(
                                                 "\u{2705} You are running the latest version ("
                                                 {info.current.clone()} ")"
                                             </p>
+                                        }.into_any()
+                                    } else if is_ios() {
+                                        view! {
+                                            <div class="update-info">
+                                                <p class="update-available">
+                                                    "A new version (" {info.latest.clone()} ") is available. Update via the App Store when available."
+                                                </p>
+                                                {if !info.release_notes.is_empty() {
+                                                    view! {
+                                                        <p class="muted" style="font-size:12px;margin-top:4px">
+                                                            "What\u{2019}s new: " {info.release_notes.clone()}
+                                                        </p>
+                                                    }.into_any()
+                                                } else { view! { <span></span> }.into_any() }}
+                                            </div>
                                         }.into_any()
                                     } else {
                                         let dl_url = info.download_url.clone();

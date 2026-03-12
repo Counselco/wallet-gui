@@ -1,0 +1,464 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1E5E4FF59867B5F52C461F74 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FDBBCAD4FC93B93DBF546624 /* Security.framework */; };
+		29EDFDB40FB2EA3F8B4DDDAA /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B811BAAC644FC57AAC0DF791 /* Metal.framework */; };
+		36E7F6CB4EA22820AC7B2ACA /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B9605C595645BCA8882C3CE9 /* WebKit.framework */; };
+		3B96D3E356BE5147E08E4010 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2693CEB5067A86936FFB552A /* Assets.xcassets */; };
+		5D17E88517061A9E262804C4 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 7050BF75189F70DDF31777D6 /* main.mm */; };
+		9A57BFA7B0043C70BB7DB692 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B13948E5D951201914929D5C /* UIKit.framework */; };
+		A6211C209CA7E1C8E90F10F2 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 69405874112E86116F7C2420 /* libapp.a */; };
+		B2EA00F14B840E4DEBA4528E /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = D55787E3956DCA150B9E3338 /* LaunchScreen.storyboard */; };
+		BB56765FA7D71ABC07435550 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = FD715650AB021536B66B9500 /* assets */; };
+		C5E7F6BDCCF84F80BC7F1DC6 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EAFE0896C60C2D0B10DBB78C /* CoreGraphics.framework */; };
+		CD4ACEE1B3D87BA08C39CF87 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 475F786999D0629517E384A5 /* QuartzCore.framework */; };
+		F3A64D29915D9538A6B9194B /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 986BB528BE3B205457ABC57F /* MetalKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0D0B77135D3445739F6C621B /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		2693CEB5067A86936FFB552A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		407D2C7A702A9C47A102F59D /* chronx-wallet-gui_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "chronx-wallet-gui_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		475F786999D0629517E384A5 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		69405874112E86116F7C2420 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		7050BF75189F70DDF31777D6 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		986BB528BE3B205457ABC57F /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		9D9FD877EA7C1B1072B1E38F /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		A61202400CC892207503579F /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
+		A7FDC04282F8ADB8C01FDEFC /* chronx-wallet-gui_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "chronx-wallet-gui_iOS.entitlements"; sourceTree = "<group>"; };
+		B13948E5D951201914929D5C /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		B811BAAC644FC57AAC0DF791 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		B9605C595645BCA8882C3CE9 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		BEB74F216913ADADAA1C248B /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		D2888E6B65B74A66EF613DAD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		D55787E3956DCA150B9E3338 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		EAFE0896C60C2D0B10DBB78C /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		FD715650AB021536B66B9500 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		FDBBCAD4FC93B93DBF546624 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B081F3DCAEF379685BEF44A9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A6211C209CA7E1C8E90F10F2 /* libapp.a in Frameworks */,
+				C5E7F6BDCCF84F80BC7F1DC6 /* CoreGraphics.framework in Frameworks */,
+				29EDFDB40FB2EA3F8B4DDDAA /* Metal.framework in Frameworks */,
+				F3A64D29915D9538A6B9194B /* MetalKit.framework in Frameworks */,
+				CD4ACEE1B3D87BA08C39CF87 /* QuartzCore.framework in Frameworks */,
+				1E5E4FF59867B5F52C461F74 /* Security.framework in Frameworks */,
+				9A57BFA7B0043C70BB7DB692 /* UIKit.framework in Frameworks */,
+				36E7F6CB4EA22820AC7B2ACA /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		14392571B3D4C7AAB58FB471 = {
+			isa = PBXGroup;
+			children = (
+				FD715650AB021536B66B9500 /* assets */,
+				2693CEB5067A86936FFB552A /* Assets.xcassets */,
+				D55787E3956DCA150B9E3338 /* LaunchScreen.storyboard */,
+				7C306002D493480EDFDF4E9F /* chronx-wallet-gui_iOS */,
+				A9ED2C9914C321CA299B0C58 /* Externals */,
+				DE3E6D877470848DD919ECCE /* Sources */,
+				D3215012DBE44D1C163CD7E3 /* src */,
+				BBD535FC423FE290A7F65E4C /* Frameworks */,
+				A2AD9A22A85C56D2B147538F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		7C306002D493480EDFDF4E9F /* chronx-wallet-gui_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				A7FDC04282F8ADB8C01FDEFC /* chronx-wallet-gui_iOS.entitlements */,
+				D2888E6B65B74A66EF613DAD /* Info.plist */,
+			);
+			path = "chronx-wallet-gui_iOS";
+			sourceTree = "<group>";
+		};
+		A2AD9A22A85C56D2B147538F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				407D2C7A702A9C47A102F59D /* chronx-wallet-gui_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A9ED2C9914C321CA299B0C58 /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		BA31224896DD0548083AF688 /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				BEB74F216913ADADAA1C248B /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		BB1407E572B96D0DFC9A360A /* chronx-wallet-gui */ = {
+			isa = PBXGroup;
+			children = (
+				7050BF75189F70DDF31777D6 /* main.mm */,
+				BA31224896DD0548083AF688 /* bindings */,
+			);
+			path = "chronx-wallet-gui";
+			sourceTree = "<group>";
+		};
+		BBD535FC423FE290A7F65E4C /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				EAFE0896C60C2D0B10DBB78C /* CoreGraphics.framework */,
+				69405874112E86116F7C2420 /* libapp.a */,
+				B811BAAC644FC57AAC0DF791 /* Metal.framework */,
+				986BB528BE3B205457ABC57F /* MetalKit.framework */,
+				475F786999D0629517E384A5 /* QuartzCore.framework */,
+				FDBBCAD4FC93B93DBF546624 /* Security.framework */,
+				B13948E5D951201914929D5C /* UIKit.framework */,
+				B9605C595645BCA8882C3CE9 /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		D3215012DBE44D1C163CD7E3 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				A61202400CC892207503579F /* commands.rs */,
+				9D9FD877EA7C1B1072B1E38F /* lib.rs */,
+				0D0B77135D3445739F6C621B /* main.rs */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+		DE3E6D877470848DD919ECCE /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				BB1407E572B96D0DFC9A360A /* chronx-wallet-gui */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8F8D3FB5797037CBC88773FD /* chronx-wallet-gui_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DE6DF5C71DD54F0589EAE9ED /* Build configuration list for PBXNativeTarget "chronx-wallet-gui_iOS" */;
+			buildPhases = (
+				F868A1047460BD87261A0F00 /* Build Rust Code */,
+				239C5652C79FF06A75F70A58 /* Sources */,
+				142DA47921BC7D62790B8536 /* Resources */,
+				B081F3DCAEF379685BEF44A9 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "chronx-wallet-gui_iOS";
+			packageProductDependencies = (
+			);
+			productName = "chronx-wallet-gui_iOS";
+			productReference = 407D2C7A702A9C47A102F59D /* chronx-wallet-gui_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E9DDBEAC982AD99450A53641 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = B39E3F8F6E2283B487489C4C /* Build configuration list for PBXProject "chronx-wallet-gui" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 14392571B3D4C7AAB58FB471;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A2AD9A22A85C56D2B147538F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8F8D3FB5797037CBC88773FD /* chronx-wallet-gui_iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		142DA47921BC7D62790B8536 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3B96D3E356BE5147E08E4010 /* Assets.xcassets in Resources */,
+				B2EA00F14B840E4DEBA4528E /* LaunchScreen.storyboard in Resources */,
+				BB56765FA7D71ABC07435550 /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		F868A1047460BD87261A0F00 /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		239C5652C79FF06A75F70A58 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5D17E88517061A9E262804C4 /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0B424324F00F58C6806B9E75 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
+				CODE_SIGN_ENTITLEMENTS = "chronx-wallet-gui_iOS/chronx-wallet-gui_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "chronx-wallet-gui_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.chronx.wallet;
+				PRODUCT_NAME = "ChronX Wallet";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		4DA5783AA089112A841F05CF /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
+				CODE_SIGN_ENTITLEMENTS = "chronx-wallet-gui_iOS/chronx-wallet-gui_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "chronx-wallet-gui_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.chronx.wallet;
+				PRODUCT_NAME = "ChronX Wallet";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+		7D5A1271F1A2504756972B26 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		DC7AD6C08110C2FF746034AD /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B39E3F8F6E2283B487489C4C /* Build configuration list for PBXProject "chronx-wallet-gui" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DC7AD6C08110C2FF746034AD /* debug */,
+				7D5A1271F1A2504756972B26 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		DE6DF5C71DD54F0589EAE9ED /* Build configuration list for PBXNativeTarget "chronx-wallet-gui_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4DA5783AA089112A841F05CF /* debug */,
+				0B424324F00F58C6806B9E75 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E9DDBEAC982AD99450A53641 /* Project object */;
+}

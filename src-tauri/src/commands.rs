@@ -496,6 +496,14 @@ pub async fn create_timelock(
         recipient_email_hash: None,
         claim_window_secs: None,
         unclaimed_action: None,
+        lock_type: None,
+        lock_metadata: None,
+        agent_managed: None,
+        grantor_axiom_consent_hash: None,
+        investable_fraction: None,
+        risk_level: None,
+        investment_exclusions: None,
+        grantor_intent: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -592,6 +600,14 @@ pub async fn create_email_timelock(
         recipient_email_hash: Some(email_hash),
         claim_window_secs: Some(259_200), // 72 hours
         unclaimed_action: Some(UnclaimedAction::RevertToSender),
+        lock_type: None,
+        lock_metadata: None,
+        agent_managed: None,
+        grantor_axiom_consent_hash: None,
+        investable_fraction: None,
+        risk_level: None,
+        investment_exclusions: None,
+        grantor_intent: None,
     }];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -1403,8 +1419,14 @@ pub async fn check_for_updates() -> UpdateInfo {
         Ok(j) => j,
         Err(_) => return silent_ok,
     };
-    // Use android_version on Android, version (Windows) otherwise
-    let latest = if cfg!(target_os = "android") {
+    // Use ios_version on iOS (missing/null = no listing yet → silent no-update),
+    // android_version on Android, version on Windows/Linux.
+    let latest = if cfg!(target_os = "ios") {
+        match json["ios_version"].as_str() {
+            Some(v) => v.to_string(),
+            None => return silent_ok, // no iOS App Store listing yet
+        }
+    } else if cfg!(target_os = "android") {
         json["android_version"].as_str()
             .or_else(|| json["version"].as_str())
             .unwrap_or("")
@@ -1430,7 +1452,9 @@ pub async fn check_for_updates() -> UpdateInfo {
         is_newer_or_equal
     };
     // Platform-appropriate download URL
-    let download_url = if cfg!(target_os = "android") {
+    let download_url = if cfg!(target_os = "ios") {
+        String::new() // no App Store URL yet
+    } else if cfg!(target_os = "android") {
         "https://play.google.com/store/apps/details?id=com.chronx.wallet".to_string()
     } else {
         "https://chronx.io/dl/chronx-wallet-setup.exe".to_string()
@@ -1880,6 +1904,14 @@ pub async fn create_email_timelock_series(
                 recipient_email_hash: Some(email_hash),
                 claim_window_secs: Some(259_200),
                 unclaimed_action: Some(UnclaimedAction::RevertToSender),
+                lock_type: None,
+                lock_metadata: None,
+                agent_managed: None,
+                grantor_axiom_consent_hash: None,
+                investable_fraction: None,
+                risk_level: None,
+                investment_exclusions: None,
+                grantor_intent: None,
             }
         })
         .collect();
