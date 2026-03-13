@@ -6059,7 +6059,7 @@ fn HistoryPanel(
                                                 _               => "email-badge expired",
                                             };
                                             let badge_text = if entry_status == "Pending Claim" {
-                                                "Pending".to_string()
+                                                "Promise".to_string()
                                             } else {
                                                 entry_status.clone()
                                             };
