@@ -2230,6 +2230,12 @@ fn AccountPanel(
     let wl_busy    = RwSignal::new(false);
     let wl_msg     = RwSignal::new(String::new());
 
+    // Email registration prompt after claim code (mobile)
+    let claim_reg_show  = RwSignal::new(false);
+    let claim_reg_email = RwSignal::new(String::new());
+    let claim_reg_msg   = RwSignal::new(String::new());
+    let claim_reg_busy  = RwSignal::new(false);
+
     // Convert block state
     let convert_visible   = RwSignal::new(false);
     let convert_amount    = RwSignal::new(String::new());
@@ -2238,6 +2244,16 @@ fn AccountPanel(
     let convert_error     = RwSignal::new(String::new());
     let convert_countdown = RwSignal::new(0u32);
     let convert_debounce  = RwSignal::new(0u32);
+    // Base address for KX↔USDC conversion
+    let convert_base_addr = RwSignal::new(String::new());
+    let convert_base_err  = RwSignal::new(String::new());
+    let convert_save_base = RwSignal::new(false);
+    // Pre-fill saved base address
+    spawn_local(async move {
+        if let Ok(Some(addr)) = call::<Option<String>>("get_base_address", no_args()).await {
+            convert_base_addr.set(addr);
+        }
+    });
 
     // Quote countdown timer (runs once, loops forever)
     spawn_local(async move {
@@ -2444,6 +2460,46 @@ fn AccountPanel(
                                             }.into_any()
                                         } else { view! { <span></span> }.into_any() }
                                     }}
+                                    // Base wallet address input
+                                    <div style="margin-top:10px">
+                                        <label style="font-size:12px;color:#9ca3af;display:block;margin-bottom:4px">"Your Base wallet address (to receive USDC)"</label>
+                                        <input type="text" class="convert-input" placeholder="0x..."
+                                            style="font-family:monospace;font-size:13px"
+                                            prop:value=move || convert_base_addr.get()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                convert_base_addr.set(val.clone());
+                                                let v = val.trim();
+                                                if v.is_empty() {
+                                                    convert_base_err.set(String::new());
+                                                } else if !v.starts_with("0x") || v.len() != 42
+                                                    || !v[2..].chars().all(|c| c.is_ascii_hexdigit())
+                                                {
+                                                    convert_base_err.set("Must be a valid Base address (0x + 40 hex chars)".into());
+                                                } else {
+                                                    convert_base_err.set(String::new());
+                                                }
+                                            }
+                                        />
+                                        {move || {
+                                            let e = convert_base_err.get();
+                                            if e.is_empty() { view! { <span></span> }.into_any() }
+                                            else { view! { <p style="color:#ef4444;font-size:11px;margin:4px 0 0">{e}</p> }.into_any() }
+                                        }}
+                                        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:#9ca3af;cursor:pointer">
+                                            <input type="checkbox"
+                                                style="accent-color:#d4a84b"
+                                                prop:checked=move || convert_save_base.get()
+                                                on:change=move |ev| {
+                                                    use wasm_bindgen::JsCast;
+                                                    let checked = ev.target()
+                                                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                        .map(|i| i.checked()).unwrap_or(false);
+                                                    convert_save_base.set(checked);
+                                                } />
+                                            "Save for next time"
+                                        </label>
+                                    </div>
                                     {move || {
                                         let q = convert_quote.get();
                                         let cd = convert_countdown.get();
@@ -2452,11 +2508,27 @@ fn AccountPanel(
                                         let expired = cd == 0 && q.is_some();
                                         let has_fallback = !convert_error.get().is_empty();
                                         let can_convert = (q.is_some() && !blocked && !expired) || has_fallback;
-                                        let disabled = is_loading || !can_convert;
+                                        // Also require valid base address
+                                        let addr = convert_base_addr.get();
+                                        let addr_valid = {
+                                            let v = addr.trim();
+                                            v.starts_with("0x") && v.len() == 42 && v[2..].chars().all(|c| c.is_ascii_hexdigit())
+                                        };
+                                        let disabled = is_loading || !can_convert || !addr_valid;
                                         let btn_class = if blocked { "convert-btn convert-btn-blocked" } else { "convert-btn" };
                                         view! {
                                             <button class={btn_class} disabled=disabled
                                                 on:click=move |_| {
+                                                    // Save base address if checkbox is checked
+                                                    if convert_save_base.get_untracked() {
+                                                        let addr_to_save = convert_base_addr.get_untracked();
+                                                        spawn_local(async move {
+                                                            let args = serde_wasm_bindgen::to_value(
+                                                                &serde_json::json!({ "address": addr_to_save })
+                                                            ).unwrap_or(no_args());
+                                                            let _ = call::<()>("set_base_address", args).await;
+                                                        });
+                                                    }
                                                     spawn_local(async move {
                                                         let args = serde_wasm_bindgen::to_value(
                                                             &serde_json::json!({ "url": "https://chronx.io/exchange.html" })
@@ -2601,6 +2673,16 @@ fn AccountPanel(
                                                 }
                                             }
                                         }
+                                        // ── Email registration prompt after claim ──
+                                        // Check if user has any claim emails registered; if not, prompt
+                                        if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+                                            if emails.is_empty() {
+                                                claim_reg_email.set(String::new());
+                                                claim_reg_msg.set(String::new());
+                                                claim_reg_busy.set(false);
+                                                claim_reg_show.set(true);
+                                            }
+                                        }
                                     }
                                     Err(e) => home_claim_msg.set(format!("Error: {e}")),
                                 }
@@ -2621,6 +2703,102 @@ fn AccountPanel(
                         }
                     }}
                 </div>
+
+                // ── Email registration prompt after claim ────────────────────
+                {move || {
+                    if !claim_reg_show.get() { return view! { <span></span> }.into_any(); }
+                    let reg_msg = claim_reg_msg.get();
+                    view! {
+                        <div style="border:1px solid rgba(212,168,75,0.3);border-radius:8px;padding:12px;margin-top:10px">
+                            {if reg_msg.is_empty() {
+                                view! {
+                                    <div>
+                                        <p style="font-size:13px;font-weight:600;color:#e5e7eb;margin:0 0 6px">
+                                            "Would you like to register your email address to receive future payments?"
+                                        </p>
+                                        <input type="email" class="input-field" placeholder="your@email.com"
+                                            style="font-size:13px;margin-bottom:8px"
+                                            prop:value=move || claim_reg_email.get()
+                                            on:input=move |ev| claim_reg_email.set(event_target_value(&ev))
+                                        />
+                                        <div style="display:flex;gap:8px">
+                                            <button class="btn-primary"
+                                                style="flex:1;background:#d4a84b;color:#0a0a0a;font-weight:700;padding:8px;border:none;border-radius:6px;cursor:pointer;font-size:13px"
+                                                disabled=move || claim_reg_busy.get()
+                                                on:click=move |_| {
+                                                    let em = claim_reg_email.get_untracked().trim().to_string();
+                                                    if em.is_empty() || !em.contains('@') {
+                                                        claim_reg_msg.set("Please enter a valid email.".into());
+                                                        return;
+                                                    }
+                                                    claim_reg_busy.set(true);
+                                                    spawn_local(async move {
+                                                        // Check if already registered to another wallet
+                                                        let check_url = format!("https://api.chronx.io/check-email?email={}", em);
+                                                        let window = web_sys::window().unwrap();
+                                                        let check_result = JsFuture::from(window.fetch_with_str(&check_url)).await;
+                                                        if let Ok(resp_val) = check_result {
+                                                            use wasm_bindgen::JsCast;
+                                                            let resp: web_sys::Response = resp_val.unchecked_into();
+                                                            if resp.ok() {
+                                                                if let Ok(text_val) = JsFuture::from(resp.text().unwrap()).await {
+                                                                    if let Some(text) = text_val.as_string() {
+                                                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                                                                            if json.get("registered").and_then(|v| v.as_bool()) == Some(true) {
+                                                                                // Check if same wallet
+                                                                                let same_wallet = json.get("same_wallet").and_then(|v| v.as_bool()).unwrap_or(false);
+                                                                                if same_wallet {
+                                                                                    claim_reg_msg.set("Already registered!".into());
+                                                                                    claim_reg_busy.set(false);
+                                                                                    return;
+                                                                                } else {
+                                                                                    claim_reg_msg.set("This email is already linked to a different wallet. Each email can only be linked to one wallet.".into());
+                                                                                    claim_reg_busy.set(false);
+                                                                                    return;
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        // Not registered — save locally
+                                                        let args = serde_wasm_bindgen::to_value(
+                                                            &serde_json::json!({ "emails": vec![em.clone()] })
+                                                        ).unwrap_or(no_args());
+                                                        match call::<()>("set_claim_emails", args).await {
+                                                            Ok(_) => claim_reg_msg.set("Email registered successfully!".into()),
+                                                            Err(e) => claim_reg_msg.set(format!("Error: {e}")),
+                                                        }
+                                                        claim_reg_busy.set(false);
+                                                    });
+                                                }
+                                            >
+                                                {move || if claim_reg_busy.get() { "Registering\u{2026}" } else { "Register" }}
+                                            </button>
+                                            <button style="flex:1;padding:8px;background:transparent;border:1px solid #374151;color:#9ca3af;border-radius:6px;cursor:pointer;font-size:13px"
+                                                on:click=move |_| claim_reg_show.set(false)>
+                                                "Skip"
+                                            </button>
+                                        </div>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                let is_err = reg_msg.starts_with("This email") || reg_msg.starts_with("Error") || reg_msg.starts_with("Please");
+                                let color = if is_err { "#ef4444" } else { "#4ade80" };
+                                view! {
+                                    <div>
+                                        <p style=format!("color:{color};font-size:13px;margin:0 0 8px")>{reg_msg}</p>
+                                        <button style="padding:6px 16px;background:transparent;border:1px solid #374151;color:#9ca3af;border-radius:6px;cursor:pointer;font-size:12px"
+                                            on:click=move |_| { claim_reg_show.set(false); claim_reg_msg.set(String::new()); }>
+                                            "Close"
+                                        </button>
+                                    </div>
+                                }.into_any()
+                            }}
+                        </div>
+                    }.into_any()
+                }}
 
                 // ── Incoming promise link at bottom ──────────────────────────
                 {move || {
@@ -2770,7 +2948,9 @@ fn SendPanel(
     poke_prefill_id: RwSignal<String>,
     email_prefill_from_contact: RwSignal<String>,
 ) -> impl IntoView {
-    let send_sub  = RwSignal::new(0u8); // 0=KX Address, 1=Email Address
+    // Mobile defaults to Email mode (no KX address entry)
+    let mobile_send = !is_desktop();
+    let send_sub  = RwSignal::new(if mobile_send { 1u8 } else { 0u8 }); // 0=KX Address, 1=Email Address
     let send_mode = RwSignal::new(0u8); // 0=Send Now,   1=Send Later
 
     // KX Address fields
@@ -2816,7 +2996,7 @@ fn SendPanel(
 
     // ── Recipient mode (3-way) ────────────────────────────────────────────────
     // 0 = KX Address, 1 = Email, 2 = Freeform (name/org/description)
-    let recipient_mode = RwSignal::new(0u8);
+    let recipient_mode = RwSignal::new(if mobile_send { 1u8 } else { 0u8 });
     let freeform_recip = RwSignal::new(String::new());
 
     // ── Long Promise / AI management signals ────────────────────────────────────
@@ -3119,7 +3299,7 @@ fn SendPanel(
                             Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                         }
                         // Show "Save as contact?" banner if not already a contact
-                        if is_desktop() {
+                        {
                             let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": email_str.clone(), "kxAddress": Option::<String>::None })).unwrap_or(no_args());
                             if let Ok(None) = call::<Option<Contact>>("check_if_contact", chk).await {
                                 save_contact_email.set(email_str.clone());
@@ -3346,7 +3526,7 @@ fn SendPanel(
                                 Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
                             // Show "Save as contact?" banner if not already a contact
-                            if is_desktop() {
+                            {
                                 let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": lp_email_for_confirm.clone(), "kxAddress": Option::<String>::None })).unwrap_or(no_args());
                                 if let Ok(None) = call::<Option<Contact>>("check_if_contact", chk).await {
                                     save_contact_email.set(lp_email_for_confirm.clone());
@@ -3445,27 +3625,28 @@ fn SendPanel(
                 view! { <span></span> }.into_any()
             }}
 
-            // Recipient mode: KX Address | Email | Freeform (Freeform desktop-only)
-            <div class="recipient-mode-group">
-                <button type="button"
-                    class=move || if recipient_mode.get()==0 { "recipient-mode-btn active-kx" } else { "recipient-mode-btn" }
-                    on:click=move |_| { recipient_mode.set(0); send_sub.set(0); lock_date.set(String::new()); }
-                    disabled=move || sending.get()>"KX Address"</button>
-                <button type="button"
-                    class=move || if recipient_mode.get()==1 { "recipient-mode-btn active-email" } else { "recipient-mode-btn" }
-                    on:click=move |_| { recipient_mode.set(1); send_sub.set(1); lock_date.set(String::new()); }
-                    disabled=move || sending.get()>"Email"</button>
-                {if is_desktop() {
-                    view! {
+            // Recipient mode: KX Address | Email | Freeform
+            // Mobile: email only (no KX Address button). Desktop: all three.
+            {if is_desktop() {
+                view! {
+                    <div class="recipient-mode-group">
+                        <button type="button"
+                            class=move || if recipient_mode.get()==0 { "recipient-mode-btn active-kx" } else { "recipient-mode-btn" }
+                            on:click=move |_| { recipient_mode.set(0); send_sub.set(0); lock_date.set(String::new()); }
+                            disabled=move || sending.get()>"KX Address"</button>
+                        <button type="button"
+                            class=move || if recipient_mode.get()==1 { "recipient-mode-btn active-email" } else { "recipient-mode-btn" }
+                            on:click=move |_| { recipient_mode.set(1); send_sub.set(1); lock_date.set(String::new()); }
+                            disabled=move || sending.get()>"Email"</button>
                         <button type="button"
                             class=move || if recipient_mode.get()==2 { "recipient-mode-btn active-free" } else { "recipient-mode-btn" }
                             on:click=move |_| { recipient_mode.set(2); send_sub.set(0); send_mode.set(1); lock_date.set(String::new()); }
                             disabled=move || sending.get()>"Freeform"</button>
-                    }.into_any()
-                } else {
-                    view! { <span></span> }.into_any()
-                }}
-            </div>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
             // Freeform warning
             {move || if recipient_mode.get() == 2 {
                 view! {
@@ -3618,6 +3799,22 @@ fn SendPanel(
                                         <p class="msg mining" style="margin-top:6px;font-size:13px">
                                             "\u{26a0} This is your registered claim email. "
                                             "The KX will be sent to your own wallet automatically when you click Claim in your email."
+                                        </p>
+                                    }.into_any()
+                                } else { view! { <span></span> }.into_any() }
+                            }}
+                            // Mobile: warn if user pastes a KX address instead of email
+                            {move || {
+                                if is_desktop() { return view! { <span></span> }.into_any(); }
+                                let val = email.get();
+                                let v = val.trim();
+                                // Detect base58 KX address: no @, length 32-50, alphanumeric (no 0OIl in base58 but close enough)
+                                if !v.is_empty() && !v.contains('@') && v.len() >= 32 && v.len() <= 50
+                                    && v.chars().all(|c| c.is_ascii_alphanumeric())
+                                {
+                                    view! {
+                                        <p class="msg error" style="margin-top:6px;font-size:12px">
+                                            "On mobile, please send via email address. Use the desktop wallet to send directly to a KX address."
                                         </p>
                                     }.into_any()
                                 } else { view! { <span></span> }.into_any() }
@@ -4259,10 +4456,14 @@ fn SendPanel(
                                 {move || t(&lang.get(), "cancel")}
                             </button>
                             <button class="primary" style="flex:1;padding:10px;font-size:14px"
+                                disabled=move || sending.get()
                                 on:click=move |ev: web_sys::MouseEvent| {
+                                    // Bypass the desktop email confirmation gate
+                                    email_send_confirmed.set(true);
+                                    mobile_confirm_open.set(false);
                                     on_send(ev);
                                 }>
-                                {move || t(&lang.get(), "confirm_send")}
+                                {move || if sending.get() { "Sending\u{2026}".to_string() } else { t(&lang.get(), "confirm_send") }}
                             </button>
                         </div>
                     </div>

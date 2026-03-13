@@ -108,6 +108,8 @@ pub fn run() {
             commands::add_blocked_sender,
             commands::is_sender_blocked,
             commands::get_poke_by_id,
+            commands::get_base_address,
+            commands::set_base_address,
             commands::get_axiom_consent_hash,
             commands::create_freeform_timelock,
             commands::get_claim_info,

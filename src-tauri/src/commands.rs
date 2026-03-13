@@ -114,6 +114,9 @@ struct WalletConfig {
     /// sibling locks (e.g. 30d/60d faucet stages) even without email registration.
     #[serde(default)]
     claimed_hashes: Option<Vec<String>>,
+    /// Base (Ethereum L2) wallet address for KX↔USDC conversions.
+    #[serde(default)]
+    base_address: Option<String>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -131,6 +134,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             verified_emails: None,
             blocked_senders: None,
             claimed_hashes: None,
+            base_address: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -2605,6 +2609,21 @@ pub async fn is_sender_blocked(app: AppHandle, email: String) -> bool {
     let blocked = read_config(&app).blocked_senders.unwrap_or_default();
     let email_lower = email.trim().to_lowercase();
     blocked.iter().any(|e| e.to_lowercase() == email_lower)
+}
+
+// ── Base (L2) wallet address for KX↔USDC conversions ────────────────────────
+
+#[tauri::command]
+pub async fn get_base_address(app: AppHandle) -> Option<String> {
+    read_config(&app).base_address
+}
+
+#[tauri::command]
+pub async fn set_base_address(app: AppHandle, address: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let addr = address.trim().to_string();
+    cfg.base_address = if addr.is_empty() { None } else { Some(addr) };
+    write_config(&app, &cfg)
 }
 
 // ── Poke detail by request_id ───────────────────────────────────────────────
