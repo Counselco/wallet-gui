@@ -110,6 +110,8 @@ pub fn run() {
             commands::get_poke_by_id,
             commands::get_base_address,
             commands::set_base_address,
+            commands::get_base_address_nickname,
+            commands::convert_kx_to_usdc,
             commands::get_axiom_consent_hash,
             commands::create_freeform_timelock,
             commands::get_claim_info,

@@ -117,6 +117,9 @@ struct WalletConfig {
     /// Base (Ethereum L2) wallet address for KX↔USDC conversions.
     #[serde(default)]
     base_address: Option<String>,
+    /// Nickname for saved Base address (e.g. "My Trust Wallet").
+    #[serde(default)]
+    base_address_nickname: Option<String>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -135,6 +138,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             blocked_senders: None,
             claimed_hashes: None,
             base_address: None,
+            base_address_nickname: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -2619,11 +2623,83 @@ pub async fn get_base_address(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn set_base_address(app: AppHandle, address: String) -> Result<(), String> {
+pub async fn set_base_address(app: AppHandle, address: String, nickname: Option<String>) -> Result<(), String> {
     let mut cfg = read_config(&app);
     let addr = address.trim().to_string();
     cfg.base_address = if addr.is_empty() { None } else { Some(addr) };
+    cfg.base_address_nickname = nickname.and_then(|n| {
+        let n = n.trim().to_string();
+        if n.is_empty() { None } else { Some(n) }
+    });
     write_config(&app, &cfg)
+}
+
+#[tauri::command]
+pub async fn get_base_address_nickname(app: AppHandle) -> Option<String> {
+    read_config(&app).base_address_nickname
+}
+
+// ── KX → USDC conversion via XChan bridge ────────────────────────────────────
+
+const XCHAN_BRIDGE_WALLET: &str = "FGSemyJdkCU85D4qQNWFd158J44MANAHTAF5Qx974WRR";
+
+#[tauri::command]
+pub async fn convert_kx_to_usdc(
+    app: AppHandle,
+    amount_kx: f64,
+    base_address: String,
+) -> Result<String, String> {
+    let addr = base_address.trim().to_string();
+    if !addr.starts_with("0x") || addr.len() != 42 {
+        return Err("Invalid Base address".to_string());
+    }
+    if amount_kx <= 0.0 {
+        return Err("Amount must be greater than 0".to_string());
+    }
+
+    let kp = load_keypair(&app)?;
+    let url = rpc_url(&app);
+
+    let bridge_id = AccountId::from_b58(XCHAN_BRIDGE_WALLET)
+        .map_err(|e| format!("Invalid bridge wallet: {e}"))?;
+
+    let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u128;
+    let actions = vec![Action::Transfer { to: bridge_id, amount: chronos }];
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+
+    // Notify the XChan bridge daemon of the Base destination address
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let sender_kx = kp.account_id.to_b58();
+    let _ = client
+        .post("https://api.chronx.io/xchan/convert")
+        .json(&serde_json::json!({
+            "tx_id": txid,
+            "kx_address": sender_kx,
+            "base_address": addr,
+            "amount_kx": amount_kx,
+        }))
+        .send()
+        .await;
+
+    let now = chrono::Utc::now().timestamp();
+    append_transfer_history(&app, &TxHistoryEntry {
+        tx_id: txid.clone(),
+        tx_type: "XChan Convert".to_string(),
+        amount_chronos: Some(format!("{}", chronos)),
+        counterparty: Some(format!("XChan Bridge → {}", addr)),
+        timestamp: now,
+        status: "Converting".to_string(),
+        unlock_date: None,
+        cancellation_window_secs: None,
+        created_at: Some(now),
+        claim_code: None,
+        claim_secret_hash: None,
+    });
+
+    Ok(txid)
 }
 
 // ── Poke detail by request_id ───────────────────────────────────────────────

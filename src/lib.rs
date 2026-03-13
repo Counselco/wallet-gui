@@ -2248,10 +2248,21 @@ fn AccountPanel(
     let convert_base_addr = RwSignal::new(String::new());
     let convert_base_err  = RwSignal::new(String::new());
     let convert_save_base = RwSignal::new(false);
-    // Pre-fill saved base address
+    let convert_busy      = RwSignal::new(false);
+    let convert_msg       = RwSignal::new(String::new());
+    let convert_nickname  = RwSignal::new(String::new());
+    let convert_saved_nick = RwSignal::new(String::new()); // loaded from config
+    // Address check: unknown address warning
+    let convert_addr_unknown = RwSignal::new(false);
+    let convert_addr_checked = RwSignal::new(false); // true = check completed
+    let convert_addr_override = RwSignal::new(false); // user checked "I've verified"
+    // Pre-fill saved base address + nickname
     spawn_local(async move {
         if let Ok(Some(addr)) = call::<Option<String>>("get_base_address", no_args()).await {
             convert_base_addr.set(addr);
+        }
+        if let Ok(Some(nick)) = call::<Option<String>>("get_base_address_nickname", no_args()).await {
+            convert_saved_nick.set(nick);
         }
     });
 
@@ -2462,6 +2473,16 @@ fn AccountPanel(
                                     }}
                                     // Base wallet address input
                                     <div style="margin-top:10px">
+                                        // "Saved: nickname" label if pre-filled
+                                        {move || {
+                                            let nick = convert_saved_nick.get();
+                                            let addr = convert_base_addr.get();
+                                            if !addr.is_empty() && !nick.is_empty() {
+                                                view! { <p style="font-size:11px;color:#d4a84b;margin:0 0 4px">{format!("Saved: {nick}")}</p> }.into_any()
+                                            } else if !addr.is_empty() {
+                                                view! { <p style="font-size:11px;color:#d4a84b;margin:0 0 4px">"Saved address"</p> }.into_any()
+                                            } else { view! { <span></span> }.into_any() }
+                                        }}
                                         <label style="font-size:12px;color:#9ca3af;display:block;margin-bottom:4px">"Your Base wallet address (to receive USDC)"</label>
                                         <input type="text" class="convert-input" placeholder="0x..."
                                             style="font-family:monospace;font-size:13px"
@@ -2469,7 +2490,10 @@ fn AccountPanel(
                                             on:input=move |ev| {
                                                 let val = event_target_value(&ev);
                                                 convert_base_addr.set(val.clone());
-                                                let v = val.trim();
+                                                convert_addr_checked.set(false);
+                                                convert_addr_unknown.set(false);
+                                                convert_addr_override.set(false);
+                                                let v = val.trim().to_string();
                                                 if v.is_empty() {
                                                     convert_base_err.set(String::new());
                                                 } else if !v.starts_with("0x") || v.len() != 42
@@ -2478,6 +2502,44 @@ fn AccountPanel(
                                                     convert_base_err.set("Must be a valid Base address (0x + 40 hex chars)".into());
                                                 } else {
                                                     convert_base_err.set(String::new());
+                                                    // Soft address check via XChan API
+                                                    let addr_for_check = v.clone();
+                                                    spawn_local(async move {
+                                                        use wasm_bindgen::JsCast;
+                                                        let url = format!("https://api.chronx.io/xchan/check-address?address={}", addr_for_check);
+                                                        let window = match web_sys::window() { Some(w) => w, None => return };
+                                                        // 2s timeout via AbortController
+                                                        let controller = web_sys::AbortController::new().ok();
+                                                        let signal = controller.as_ref().map(|c| c.signal());
+                                                        if let Some(ref ctrl) = controller {
+                                                            let ctrl_clone = ctrl.clone();
+                                                            let cb = wasm_bindgen::closure::Closure::once(move || ctrl_clone.abort());
+                                                            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                                                                cb.as_ref().unchecked_ref(), 2000
+                                                            );
+                                                            cb.forget();
+                                                        }
+                                                        let mut opts = web_sys::RequestInit::new();
+                                                        opts.method("GET");
+                                                        if let Some(ref sig) = signal { opts.signal(Some(sig)); }
+                                                        let req = match web_sys::Request::new_with_str_and_init(&url, &opts) {
+                                                            Ok(r) => r, Err(_) => return
+                                                        };
+                                                        let resp_val = match JsFuture::from(window.fetch_with_request(&req)).await {
+                                                            Ok(v) => v, Err(_) => return // timeout or network error — skip silently
+                                                        };
+                                                        let resp: web_sys::Response = resp_val.unchecked_into();
+                                                        if !resp.ok() { return; }
+                                                        if let Ok(text_val) = JsFuture::from(resp.text().unwrap()).await {
+                                                            if let Some(text) = text_val.as_string() {
+                                                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                                                                    let known = json.get("known").and_then(|v| v.as_bool()).unwrap_or(true);
+                                                                    convert_addr_checked.set(true);
+                                                                    convert_addr_unknown.set(!known);
+                                                                }
+                                                            }
+                                                        }
+                                                    });
                                                 }
                                             }
                                         />
@@ -2485,6 +2547,32 @@ fn AccountPanel(
                                             let e = convert_base_err.get();
                                             if e.is_empty() { view! { <span></span> }.into_any() }
                                             else { view! { <p style="color:#ef4444;font-size:11px;margin:4px 0 0">{e}</p> }.into_any() }
+                                        }}
+                                        // Unknown address warning
+                                        {move || {
+                                            if !convert_addr_checked.get() || !convert_addr_unknown.get() {
+                                                return view! { <span></span> }.into_any();
+                                            }
+                                            view! {
+                                                <div style="background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.4);border-radius:6px;padding:8px 10px;margin-top:6px">
+                                                    <p style="color:#eab308;font-size:12px;margin:0 0 6px">
+                                                        "\u{26a0}\u{fe0f} This address has no transaction history on Base network. Double-check it\u{2019}s correct before converting."
+                                                    </p>
+                                                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e5e7eb;cursor:pointer">
+                                                        <input type="checkbox"
+                                                            style="accent-color:#d4a84b"
+                                                            prop:checked=move || convert_addr_override.get()
+                                                            on:change=move |ev| {
+                                                                use wasm_bindgen::JsCast;
+                                                                let checked = ev.target()
+                                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                                    .map(|i| i.checked()).unwrap_or(false);
+                                                                convert_addr_override.set(checked);
+                                                            } />
+                                                        "I\u{2019}ve verified this address is correct \u{2014} proceed anyway"
+                                                    </label>
+                                                </div>
+                                            }.into_any()
                                         }}
                                         <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:#9ca3af;cursor:pointer">
                                             <input type="checkbox"
@@ -2499,7 +2587,29 @@ fn AccountPanel(
                                                 } />
                                             "Save for next time"
                                         </label>
+                                        // Nickname input (shown when "Save" is checked)
+                                        {move || {
+                                            if !convert_save_base.get() { return view! { <span></span> }.into_any(); }
+                                            view! {
+                                                <div style="margin-top:6px">
+                                                    <label style="font-size:11px;color:#9ca3af;display:block;margin-bottom:2px">"Nickname for this address (optional)"</label>
+                                                    <input type="text" class="convert-input" placeholder="e.g. My Trust Wallet, Coinbase, MetaMask"
+                                                        style="font-size:12px"
+                                                        prop:value=move || convert_nickname.get()
+                                                        on:input=move |ev| convert_nickname.set(event_target_value(&ev))
+                                                    />
+                                                </div>
+                                            }.into_any()
+                                        }}
                                     </div>
+                                    // Convert result message
+                                    {move || {
+                                        let m = convert_msg.get();
+                                        if m.is_empty() { return view! { <span></span> }.into_any(); }
+                                        let is_err = m.starts_with("Error");
+                                        let cls = if is_err { "msg error" } else { "msg success" };
+                                        view! { <p class=cls style="margin-top:6px">{m}</p> }.into_any()
+                                    }}
                                     {move || {
                                         let q = convert_quote.get();
                                         let cd = convert_countdown.get();
@@ -2508,35 +2618,55 @@ fn AccountPanel(
                                         let expired = cd == 0 && q.is_some();
                                         let has_fallback = !convert_error.get().is_empty();
                                         let can_convert = (q.is_some() && !blocked && !expired) || has_fallback;
-                                        // Also require valid base address
+                                        // Require valid base address
                                         let addr = convert_base_addr.get();
                                         let addr_valid = {
                                             let v = addr.trim();
                                             v.starts_with("0x") && v.len() == 42 && v[2..].chars().all(|c| c.is_ascii_hexdigit())
                                         };
-                                        let disabled = is_loading || !can_convert || !addr_valid;
+                                        // If address is unknown and user hasn't overridden, block
+                                        let addr_blocked = convert_addr_checked.get() && convert_addr_unknown.get() && !convert_addr_override.get();
+                                        let busy = convert_busy.get();
+                                        let disabled = is_loading || !can_convert || !addr_valid || addr_blocked || busy;
                                         let btn_class = if blocked { "convert-btn convert-btn-blocked" } else { "convert-btn" };
                                         view! {
                                             <button class={btn_class} disabled=disabled
                                                 on:click=move |_| {
+                                                    let amt_str = convert_amount.get_untracked();
+                                                    let amt: f64 = amt_str.parse().unwrap_or(0.0);
+                                                    let addr_val = convert_base_addr.get_untracked().trim().to_string();
+                                                    if amt <= 0.0 || addr_val.len() != 42 { return; }
                                                     // Save base address if checkbox is checked
                                                     if convert_save_base.get_untracked() {
-                                                        let addr_to_save = convert_base_addr.get_untracked();
+                                                        let a = addr_val.clone();
+                                                        let n = convert_nickname.get_untracked();
+                                                        let nick_opt: Option<String> = if n.trim().is_empty() { None } else { Some(n) };
                                                         spawn_local(async move {
                                                             let args = serde_wasm_bindgen::to_value(
-                                                                &serde_json::json!({ "address": addr_to_save })
+                                                                &serde_json::json!({ "address": a, "nickname": nick_opt })
                                                             ).unwrap_or(no_args());
                                                             let _ = call::<()>("set_base_address", args).await;
                                                         });
                                                     }
+                                                    convert_busy.set(true);
+                                                    convert_msg.set(String::new());
                                                     spawn_local(async move {
                                                         let args = serde_wasm_bindgen::to_value(
-                                                            &serde_json::json!({ "url": "https://chronx.io/exchange.html" })
+                                                            &serde_json::json!({ "amountKx": amt, "baseAddress": addr_val })
                                                         ).unwrap_or(no_args());
-                                                        let _ = call::<()>("open_url", args).await;
+                                                        match call::<String>("convert_kx_to_usdc", args).await {
+                                                            Ok(txid) => {
+                                                                convert_msg.set(format!("\u{2705} Conversion initiated! USDC will arrive in your Base wallet within a few minutes. TxId: {}", &txid[..16.min(txid.len())]));
+                                                                convert_amount.set(String::new());
+                                                                convert_quote.set(None);
+                                                                poll_balance_update(info).await;
+                                                            }
+                                                            Err(e) => convert_msg.set(format!("Error: {e}")),
+                                                        }
+                                                        convert_busy.set(false);
                                                     });
                                                 }>
-                                                "Convert via XChan"
+                                                {move || if convert_busy.get() { "Converting\u{2026}" } else { "Convert via XChan" }}
                                             </button>
                                         }
                                     }}
@@ -4315,35 +4445,37 @@ fn SendPanel(
                     }.into_any()
                 } else { view! { <span></span> }.into_any() }
             }}
-            // "Save as contact?" banner after successful email send
+            // "Save as contact?" banner after successful email send — two-button card, auto-dismiss 10s
             {move || {
                 if !save_contact_banner.get() { return view! { <span></span> }.into_any(); }
-                let _em = save_contact_email.get();
                 let banner_msg = save_contact_msg.get();
+                // Auto-dismiss after 10 seconds
+                {
+                    let save_contact_banner = save_contact_banner.clone();
+                    let save_contact_msg = save_contact_msg.clone();
+                    set_timeout(move || {
+                        save_contact_banner.set(false);
+                        save_contact_msg.set(String::new());
+                    }, std::time::Duration::from_secs(10));
+                }
                 view! {
                     <div class="save-contact-banner">
                         {if banner_msg.is_empty() {
                             view! {
                                 <div>
-                                    <p style="font-weight:600;color:#e5e7eb;margin:0 0 4px">
-                                        {move || t(&lang.get(), "contacts_save_prompt")}
+                                    <p style="font-weight:600;color:#e5e7eb;margin:0 0 2px;font-size:14px">
+                                        {move || format!("Save {} to contacts?", save_contact_email.get())}
                                     </p>
-                                    <p style="font-size:12px;color:#9ca3af;margin:0 0 8px">
-                                        {move || t(&lang.get(), "contacts_save_prompt_sub")}
+                                    <p style="font-size:12px;color:#9ca3af;margin:0 0 10px">
+                                        "Quick access next time you send to this person"
                                     </p>
-                                    <div style="display:flex;gap:8px;align-items:center">
-                                        <input type="text" class="input" placeholder="Name"
-                                            style="flex:1;padding:6px 8px;font-size:13px"
-                                            prop:value=move || save_contact_name.get()
-                                            on:input=move |ev| save_contact_name.set(event_target_value(&ev)) />
-                                        <button class="primary" style="padding:6px 14px;font-size:13px"
+                                    <div style="display:flex;gap:10px">
+                                        <button style="padding:8px 18px;font-size:13px;font-weight:600;background:#d4a017;color:#000;border:none;border-radius:6px;cursor:pointer"
                                             on:click=move |_| {
-                                                let name = save_contact_name.get_untracked();
                                                 let em2 = save_contact_email.get_untracked();
-                                                if name.trim().is_empty() { return; }
                                                 spawn_local(async move {
                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                                                        "name": name, "email": em2, "kxAddress": Option::<String>::None, "notes": Option::<String>::None
+                                                        "name": em2.clone(), "email": em2, "kxAddress": Option::<String>::None, "notes": Option::<String>::None
                                                     })).unwrap_or(no_args());
                                                     match call::<Contact>("add_contact", args).await {
                                                         Ok(_) => save_contact_msg.set(t(&lang.get_untracked(), "contacts_saved")),
@@ -4353,9 +4485,9 @@ fn SendPanel(
                                             }>
                                             {move || t(&lang.get(), "contacts_save")}
                                         </button>
-                                        <button style="padding:6px 10px;font-size:13px;background:transparent;border:1px solid #374151;color:#9ca3af;border-radius:6px;cursor:pointer"
+                                        <button style="padding:8px 18px;font-size:13px;font-weight:600;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer"
                                             on:click=move |_| { save_contact_banner.set(false); save_contact_msg.set(String::new()); }>
-                                            "\u{2715}"
+                                            {move || t(&lang.get(), "cancel")}
                                         </button>
                                     </div>
                                 </div>
@@ -4960,14 +5092,20 @@ fn PromisesPanel(
         locks
     };
     let incoming_promises = move || {
+        let now_secs = (js_sys::Date::now() / 1000.0) as i64;
         let locks: Vec<TimeLockInfo> = all_promises.get().into_iter()
-            .filter(|l| l.direction.as_deref() == Some("incoming"))
+            .filter(|l| l.direction.as_deref() == Some("incoming")
+                && l.status == "Pending"
+                && l.unlock_at > now_secs + 60)
             .collect();
         sort_locks(locks)
     };
     let outgoing_promises = move || {
+        let now_secs = (js_sys::Date::now() / 1000.0) as i64;
         let locks: Vec<TimeLockInfo> = all_promises.get().into_iter()
-            .filter(|l| l.direction.as_deref() == Some("outgoing"))
+            .filter(|l| l.direction.as_deref() == Some("outgoing")
+                && l.status == "Pending"
+                && l.unlock_at > now_secs + 60)
             .collect();
         sort_locks(locks)
     };
@@ -5826,8 +5964,10 @@ fn HistoryPanel(
                                         .unwrap_or_default();
                                     if let Some(unlock_ts) = entry.unlock_date {
                                         let now = (js_sys::Date::now() / 1000.0) as i64;
-                                        if unlock_ts <= now {
-                                            format!("{} \u{b7} Ready to claim", from)
+                                        if unlock_ts <= now && entry.claim_secret_hash.is_none() {
+                                            format!("{} \u{b7} Arriving shortly\u{2026}", from)
+                                        } else if unlock_ts <= now {
+                                            format!("{} \u{b7} Enter claim code to receive", from)
                                         } else {
                                             format!("{} \u{b7} Unlocks {}", from, unix_to_date_str(unlock_ts))
                                         }
@@ -5847,6 +5987,9 @@ fn HistoryPanel(
                                 let date_display = format_utc_ts(entry.timestamp);
                                 let tx_id_short = shorten_addr(&entry.tx_id);
                                 let entry_status = entry.status.clone();
+
+                                // Is this an email lock? (has claim_secret_hash)
+                                let is_email_lock = entry.claim_secret_hash.is_some();
 
                                 // Cascade awareness
                                 let is_cascade = entry.claim_secret_hash.as_ref()
@@ -5973,40 +6116,23 @@ fn HistoryPanel(
                                         } else if is_incoming_promise {
                                             let now = (js_sys::Date::now() / 1000.0) as i64;
                                             let matured = entry.unlock_date.map_or(false, |u| u <= now) && entry_status == "Pending";
-                                            let lid_claim = entry.tx_id.clone();
-                                            if matured {
+                                            if matured && !is_email_lock {
+                                                // Wallet-to-wallet matured: node auto-delivers, no user action needed
                                                 view! {
-                                                    <div style="margin-top:4px">
-                                                        <button class="claim-btn"
-                                                            style="background:#d4a84b;color:#0a0a0a;padding:4px 12px;border-radius:4px;border:none;cursor:pointer;font-weight:600;font-size:12px"
-                                                            on:click=move |ev: web_sys::MouseEvent| {
-                                                                ev.stop_propagation();
-                                                                let lid = lid_claim.clone();
-                                                                spawn_local(async move {
-                                                                    inc_claim_msg.set("Mining PoW\u{2026}".into());
-                                                                    let args = serde_wasm_bindgen::to_value(
-                                                                        &serde_json::json!({ "lockIdHex": lid })
-                                                                    ).unwrap_or(no_args());
-                                                                    match call::<String>("claim_timelock", args).await {
-                                                                        Ok(txid) => {
-                                                                            inc_claim_msg.set(format!("Claimed! TxId: {}", &txid[..16.min(txid.len())]));
-                                                                            // Poll until node confirms
-                                                                            poll_balance_update(info).await;
-                                                                            if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
-                                                                                incoming.set(locks);
-                                                                            }
-                                                                        }
-                                                                        Err(e) => inc_claim_msg.set(format!("Error: {e}")),
-                                                                    }
-                                                                });
-                                                            }>
-                                                            "Claim Now"
-                                                        </button>
-                                                    </div>
+                                                    <span class="badge received" style="margin-top:4px;display:inline-block;color:#4ade80;font-weight:600;font-size:11px">
+                                                        "Arriving shortly\u{2026}"
+                                                    </span>
                                                 }.into_any()
-                                            } else {
+                                            } else if !matured {
                                                 view! {
                                                     <span class="badge pending" style="margin-top:4px;display:inline-block">{entry_status.clone()}</span>
+                                                }.into_any()
+                                            } else {
+                                                // Email lock matured: prompt to enter claim code on Receive tab
+                                                view! {
+                                                    <span class="badge pending" style="margin-top:4px;display:inline-block;color:#d4a84b;font-weight:600;font-size:11px">
+                                                        "Enter claim code to receive"
+                                                    </span>
                                                 }.into_any()
                                             }
                                         } else { view! { <span></span> }.into_any() }}
