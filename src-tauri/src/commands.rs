@@ -120,6 +120,15 @@ struct WalletConfig {
     /// Nickname for saved Base address (e.g. "My Trust Wallet").
     #[serde(default)]
     base_address_nickname: Option<String>,
+    /// Multiple saved Base addresses (max 5) with nicknames.
+    #[serde(default)]
+    base_addresses: Option<Vec<SavedBaseAddress>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedBaseAddress {
+    pub address: String,
+    pub nickname: String,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -139,6 +148,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             claimed_hashes: None,
             base_address: None,
             base_address_nickname: None,
+            base_addresses: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -2637,6 +2647,67 @@ pub async fn set_base_address(app: AppHandle, address: String, nickname: Option<
 #[tauri::command]
 pub async fn get_base_address_nickname(app: AppHandle) -> Option<String> {
     read_config(&app).base_address_nickname
+}
+
+#[tauri::command]
+pub async fn get_base_addresses(app: AppHandle) -> Vec<SavedBaseAddress> {
+    let cfg = read_config(&app);
+    let mut addrs = cfg.base_addresses.unwrap_or_default();
+    // Auto-migrate legacy single address if base_addresses is empty
+    if addrs.is_empty() {
+        if let Some(addr) = cfg.base_address {
+            if !addr.trim().is_empty() {
+                let nick = cfg.base_address_nickname.unwrap_or_default();
+                let nick = if nick.trim().is_empty() { "Saved".to_string() } else { nick };
+                addrs.push(SavedBaseAddress { address: addr, nickname: nick });
+            }
+        }
+    }
+    addrs
+}
+
+#[tauri::command]
+pub async fn add_base_address(app: AppHandle, address: String, nickname: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut addrs = cfg.base_addresses.clone().unwrap_or_default();
+    // Auto-migrate legacy
+    if addrs.is_empty() {
+        if let Some(ref addr) = cfg.base_address {
+            if !addr.trim().is_empty() {
+                let nick = cfg.base_address_nickname.clone().unwrap_or_default();
+                let nick = if nick.trim().is_empty() { "Saved".to_string() } else { nick };
+                addrs.push(SavedBaseAddress { address: addr.clone(), nickname: nick });
+            }
+        }
+    }
+    if addrs.len() >= 5 {
+        return Err("Maximum 5 saved addresses".into());
+    }
+    let addr = address.trim().to_string();
+    let nick = nickname.trim().to_string();
+    let nick = if nick.is_empty() { "Saved".to_string() } else { nick };
+    // Deduplicate by address
+    addrs.retain(|a| a.address.to_lowercase() != addr.to_lowercase());
+    addrs.push(SavedBaseAddress { address: addr, nickname: nick });
+    cfg.base_addresses = Some(addrs);
+    write_config(&app, &cfg)
+}
+
+#[tauri::command]
+pub async fn delete_base_address(app: AppHandle, address: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut addrs = cfg.base_addresses.clone().unwrap_or_default();
+    let addr = address.trim().to_lowercase();
+    addrs.retain(|a| a.address.to_lowercase() != addr);
+    cfg.base_addresses = Some(addrs);
+    // Also clear legacy if it matches
+    if let Some(ref old) = cfg.base_address {
+        if old.trim().to_lowercase() == addr {
+            cfg.base_address = None;
+            cfg.base_address_nickname = None;
+        }
+    }
+    write_config(&app, &cfg)
 }
 
 // ── KX → USDC conversion via XChan bridge ────────────────────────────────────

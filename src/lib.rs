@@ -2247,23 +2247,24 @@ fn AccountPanel(
     // Base address for KX↔USDC conversion
     let convert_base_addr = RwSignal::new(String::new());
     let convert_base_err  = RwSignal::new(String::new());
-    let convert_save_base = RwSignal::new(false);
     let convert_busy      = RwSignal::new(false);
     let convert_msg       = RwSignal::new(String::new());
     let convert_nickname  = RwSignal::new(String::new());
-    let convert_saved_nick = RwSignal::new(String::new()); // loaded from config
-    // Address check: unknown address warning
+    // Saved base addresses (chips)
+    let convert_saved_addrs = RwSignal::new(Vec::<(String, String)>::new()); // (address, nickname)
     let convert_nick_saved = RwSignal::new(false); // brief "Saved!" confirmation
     let convert_addr_unknown = RwSignal::new(false);
     let convert_addr_checked = RwSignal::new(false); // true = check completed
     let convert_addr_override = RwSignal::new(false); // user checked "I've verified"
-    // Pre-fill saved base address + nickname
+    // Load saved base addresses
     spawn_local(async move {
-        if let Ok(Some(addr)) = call::<Option<String>>("get_base_address", no_args()).await {
-            convert_base_addr.set(addr);
-        }
-        if let Ok(Some(nick)) = call::<Option<String>>("get_base_address_nickname", no_args()).await {
-            convert_saved_nick.set(nick);
+        if let Ok(addrs) = call::<Vec<serde_json::Value>>("get_base_addresses", no_args()).await {
+            let parsed: Vec<(String, String)> = addrs.into_iter().filter_map(|v| {
+                let addr = v.get("address")?.as_str()?.to_string();
+                let nick = v.get("nickname")?.as_str()?.to_string();
+                Some((addr, nick))
+            }).collect();
+            convert_saved_addrs.set(parsed);
         }
     });
 
@@ -2474,15 +2475,52 @@ fn AccountPanel(
                                     }}
                                     // Base wallet address input
                                     <div style="margin-top:10px">
-                                        // "Saved: nickname" label if pre-filled
+                                        // Saved address chips
                                         {move || {
-                                            let nick = convert_saved_nick.get();
-                                            let addr = convert_base_addr.get();
-                                            if !addr.is_empty() && !nick.is_empty() {
-                                                view! { <p style="font-size:11px;color:#d4a84b;margin:0 0 4px">{format!("Saved: {nick}")}</p> }.into_any()
-                                            } else if !addr.is_empty() {
-                                                view! { <p style="font-size:11px;color:#d4a84b;margin:0 0 4px">"Saved address"</p> }.into_any()
-                                            } else { view! { <span></span> }.into_any() }
+                                            let addrs = convert_saved_addrs.get();
+                                            if addrs.is_empty() { return view! { <span></span> }.into_any(); }
+                                            view! {
+                                                <div style="margin-bottom:8px">
+                                                    <p style="font-size:11px;color:#9ca3af;margin:0 0 4px">"Saved addresses:"</p>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                                                        {addrs.into_iter().map(|(addr, nick)| {
+                                                            let addr_click = addr.clone();
+                                                            let addr_del = addr.clone();
+                                                            view! {
+                                                                <span style="display:inline-flex;align-items:center;gap:4px;background:#1a1a2e;border:1px solid #d4a84b;border-radius:6px;padding:3px 8px;font-size:13px;color:#d4a84b;cursor:pointer"
+                                                                    on:click=move |_| {
+                                                                        convert_base_addr.set(addr_click.clone());
+                                                                        convert_addr_checked.set(false);
+                                                                        convert_addr_unknown.set(false);
+                                                                        convert_addr_override.set(false);
+                                                                        convert_base_err.set(String::new());
+                                                                    }>
+                                                                    {nick}
+                                                                    <span style="color:#ef4444;cursor:pointer;font-size:14px;margin-left:2px;font-weight:700"
+                                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                                            ev.stop_propagation();
+                                                                            let a = addr_del.clone();
+                                                                            spawn_local(async move {
+                                                                                let args = serde_wasm_bindgen::to_value(
+                                                                                    &serde_json::json!({ "address": a })
+                                                                                ).unwrap_or(no_args());
+                                                                                let _ = call::<()>("delete_base_address", args).await;
+                                                                                if let Ok(addrs) = call::<Vec<serde_json::Value>>("get_base_addresses", no_args()).await {
+                                                                                    let parsed: Vec<(String, String)> = addrs.into_iter().filter_map(|v| {
+                                                                                        let addr = v.get("address")?.as_str()?.to_string();
+                                                                                        let nick = v.get("nickname")?.as_str()?.to_string();
+                                                                                        Some((addr, nick))
+                                                                                    }).collect();
+                                                                                    convert_saved_addrs.set(parsed);
+                                                                                }
+                                                                            });
+                                                                        }>{"\u{00d7}"}</span>
+                                                                </span>
+                                                            }
+                                                        }).collect::<Vec<_>>()}
+                                                    </div>
+                                                </div>
+                                            }.into_any()
                                         }}
                                         <p style="color:#ff4444;font-size:13px;font-weight:700;margin:0 0 6px">{"\u{26a0} Please enter ONLY a receiving USDC address on the Base network. Sending to any other address risks permanent loss of funds."}</p>
                                         <label style="font-size:12px;color:#9ca3af;display:block;margin-bottom:4px">"Your Base wallet address (to receive USDC)"</label>
@@ -2576,53 +2614,59 @@ fn AccountPanel(
                                                 </div>
                                             }.into_any()
                                         }}
-                                        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:#9ca3af;cursor:pointer">
-                                            <input type="checkbox"
-                                                style="accent-color:#d4a84b"
-                                                prop:checked=move || convert_save_base.get()
-                                                on:change=move |ev| {
-                                                    use wasm_bindgen::JsCast;
-                                                    let checked = ev.target()
-                                                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                                        .map(|i| i.checked()).unwrap_or(false);
-                                                    convert_save_base.set(checked);
-                                                } />
-                                            "Save for next time"
-                                        </label>
-                                        // Nickname input (shown when "Save" is checked)
+                                        // Nickname + Save row (visible when valid address AND < 5 saved)
                                         {move || {
-                                            if !convert_save_base.get() { return view! { <span></span> }.into_any(); }
-                                            let save_nick = move || {
+                                            let addr = convert_base_addr.get();
+                                            let addr_valid = {
+                                                let v = addr.trim();
+                                                v.starts_with("0x") && v.len() == 42 && v[2..].chars().all(|c| c.is_ascii_hexdigit())
+                                            };
+                                            let count = convert_saved_addrs.get().len();
+                                            if !addr_valid { return view! { <span></span> }.into_any(); }
+                                            if count >= 5 {
+                                                return view! { <p style="color:#ef4444;font-size:11px;margin:6px 0 0">"Delete a saved address to add another"</p> }.into_any();
+                                            }
+                                            let save_addr = move || {
                                                 let a = convert_base_addr.get_untracked().trim().to_string();
-                                                let n = convert_nickname.get_untracked();
-                                                let nick_opt: Option<String> = if n.trim().is_empty() { None } else { Some(n) };
+                                                let n = convert_nickname.get_untracked().trim().to_string();
+                                                let nick = if n.is_empty() { "Saved".to_string() } else { n };
                                                 spawn_local(async move {
                                                     let args = serde_wasm_bindgen::to_value(
-                                                        &serde_json::json!({ "address": a, "nickname": nick_opt })
+                                                        &serde_json::json!({ "address": a, "nickname": nick })
                                                     ).unwrap_or(no_args());
-                                                    let _ = call::<()>("set_base_address", args).await;
+                                                    let _ = call::<()>("add_base_address", args).await;
+                                                    convert_nickname.set(String::new());
                                                     convert_nick_saved.set(true);
                                                     set_timeout(move || convert_nick_saved.set(false), std::time::Duration::from_secs(2));
+                                                    // Reload chips
+                                                    if let Ok(addrs) = call::<Vec<serde_json::Value>>("get_base_addresses", no_args()).await {
+                                                        let parsed: Vec<(String, String)> = addrs.into_iter().filter_map(|v| {
+                                                            let addr = v.get("address")?.as_str()?.to_string();
+                                                            let nick = v.get("nickname")?.as_str()?.to_string();
+                                                            Some((addr, nick))
+                                                        }).collect();
+                                                        convert_saved_addrs.set(parsed);
+                                                    }
                                                 });
                                             };
-                                            let save_nick_enter = save_nick.clone();
+                                            let save_enter = save_addr.clone();
                                             view! {
                                                 <div style="margin-top:6px">
-                                                    <label style="font-size:11px;color:#9ca3af;display:block;margin-bottom:2px">"Nickname for this address (optional)"</label>
+                                                    <label style="font-size:11px;color:#9ca3af;display:block;margin-bottom:2px">"Nickname (optional)"</label>
                                                     <div style="display:flex;align-items:center;gap:6px">
-                                                        <input type="text" class="convert-input" placeholder="e.g. My Trust Wallet, Coinbase, MetaMask"
+                                                        <input type="text" class="convert-input" placeholder="e.g. Coinbase, MetaMask"
                                                             style="font-size:12px;flex:1"
                                                             prop:value=move || convert_nickname.get()
                                                             on:input=move |ev| convert_nickname.set(event_target_value(&ev))
                                                             on:keydown=move |ev: web_sys::KeyboardEvent| {
                                                                 if ev.key() == "Enter" {
                                                                     ev.prevent_default();
-                                                                    save_nick_enter();
+                                                                    save_enter();
                                                                 }
                                                             }
                                                         />
                                                         <button style="background:#d4a84b;color:#0a0a0a;border:none;border-radius:4px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap"
-                                                            on:click=move |_| save_nick()
+                                                            on:click=move |_| save_addr()
                                                         >"Save"</button>
                                                     </div>
                                                     {move || if convert_nick_saved.get() {
@@ -2666,18 +2710,6 @@ fn AccountPanel(
                                                     let amt: f64 = amt_str.parse().unwrap_or(0.0);
                                                     let addr_val = convert_base_addr.get_untracked().trim().to_string();
                                                     if amt <= 0.0 || addr_val.len() != 42 { return; }
-                                                    // Save base address if checkbox is checked
-                                                    if convert_save_base.get_untracked() {
-                                                        let a = addr_val.clone();
-                                                        let n = convert_nickname.get_untracked();
-                                                        let nick_opt: Option<String> = if n.trim().is_empty() { None } else { Some(n) };
-                                                        spawn_local(async move {
-                                                            let args = serde_wasm_bindgen::to_value(
-                                                                &serde_json::json!({ "address": a, "nickname": nick_opt })
-                                                            ).unwrap_or(no_args());
-                                                            let _ = call::<()>("set_base_address", args).await;
-                                                        });
-                                                    }
                                                     convert_busy.set(true);
                                                     convert_msg.set(String::new());
                                                     spawn_local(async move {
