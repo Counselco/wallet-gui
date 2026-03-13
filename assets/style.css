@@ -982,6 +982,43 @@ input[type="datetime-local"] { color-scheme: dark; }
 .exchange-link { color: #556677; font-size: 12px; text-decoration: none; }
 .exchange-link:hover { color: #d4a84b; text-decoration: underline; }
 
+/* ── Convert block ─────────────────────────────────────────────────────────── */
+.convert-block { margin-top: 10px; }
+.convert-input {
+    width: 100%; box-sizing: border-box;
+    padding: 8px 12px; font-size: 14px;
+    background: #0f111a; border: 1px solid #2a2d3a; border-radius: 6px;
+    color: #e2e8f0; outline: none; margin-bottom: 8px;
+}
+.convert-input:focus { border-color: #d4a84b; }
+.convert-loading { color: #6b7280; font-size: 12px; font-style: italic; margin: 4px 0; }
+.quote-panel {
+    border: 1px solid #2a2d3a; border-radius: 8px;
+    padding: 10px 12px; margin: 8px 0;
+    background: #0d0f18; font-size: 12px;
+}
+.quote-panel.quote-green  { border-color: #22c55e; }
+.quote-panel.quote-yellow { border-color: #eab308; }
+.quote-panel.quote-orange { border-color: #BA7517; }
+.quote-panel.quote-red    { border-color: #ef4444; }
+.quote-panel.quote-expired { opacity: 0.5; }
+.quote-main { font-size: 14px; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }
+.quote-detail { color: #9ca3af; margin: 2px 0; }
+.quote-warning { margin-top: 4px; font-weight: 500; }
+.quote-green  .quote-warning { color: #22c55e; }
+.quote-yellow .quote-warning { color: #eab308; }
+.quote-orange .quote-warning { color: #f59e0b; }
+.quote-red    .quote-warning { color: #ef4444; }
+.quote-countdown { color: #6b7280; font-size: 11px; margin-top: 6px; }
+.convert-blocked { color: #ef4444; font-size: 12px; margin-top: 6px; font-weight: 500; }
+.convert-btn {
+    width: 100%; padding: 10px; margin-top: 8px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    background: #d4a84b; color: #0a0c14; border: none; border-radius: 6px;
+}
+.convert-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.convert-btn-blocked { border: 2px solid #ef4444; background: transparent; color: #ef4444; }
+
 /* ── Pin keypad (on-screen keypad for mobile — replaces on:input + set_value) ── */
 .pin-input-wrap { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; }
 .pin-keypad {

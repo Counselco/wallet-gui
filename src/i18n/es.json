@@ -128,5 +128,10 @@
   "promises_incoming_header": "KX prometidos para usted",
   "promises_incoming_empty": "No hay promesas entrantes en este momento.",
   "promises_outgoing_header": "Promesas que ha hecho",
-  "promises_outgoing_empty": "No hay promesas salientes en este momento."
+  "promises_outgoing_empty": "No hay promesas salientes en este momento.",
+  "convert_quote_loading": "Obteniendo cotizaci\u00f3n\u2026",
+  "convert_quote_expired": "Cotizaci\u00f3n expirada \u2014 actualizando\u2026",
+  "convert_quote_error": "Cotizaci\u00f3n en vivo no disponible \u2014 usando tasa estimada",
+  "convert_blocked_slippage": "Deslizamiento demasiado alto. Reduzca el monto o intente m\u00e1s tarde.",
+  "convert_quote_valid_for": "Cotizaci\u00f3n v\u00e1lida por"
 }

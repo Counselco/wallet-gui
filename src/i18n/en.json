@@ -128,5 +128,10 @@
   "promises_incoming_header": "KX Promised To You",
   "promises_incoming_empty": "No incoming promises right now.",
   "promises_outgoing_header": "Promises You've Made",
-  "promises_outgoing_empty": "No outgoing promises right now."
+  "promises_outgoing_empty": "No outgoing promises right now.",
+  "convert_quote_loading": "Getting quote...",
+  "convert_quote_expired": "Quote expired \u2014 updating...",
+  "convert_quote_error": "Live quote unavailable \u2014 using estimated rate",
+  "convert_blocked_slippage": "Slippage too high. Reduce amount or try later.",
+  "convert_quote_valid_for": "Quote valid for"
 }

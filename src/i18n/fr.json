@@ -128,5 +128,10 @@
   "promises_incoming_header": "KX qui vous sont promis",
   "promises_incoming_empty": "Aucune promesse entrante pour le moment.",
   "promises_outgoing_header": "Promesses que vous avez faites",
-  "promises_outgoing_empty": "Aucune promesse sortante pour le moment."
+  "promises_outgoing_empty": "Aucune promesse sortante pour le moment.",
+  "convert_quote_loading": "Obtention du devis\u2026",
+  "convert_quote_expired": "Devis expir\u00e9 \u2014 mise \u00e0 jour\u2026",
+  "convert_quote_error": "Devis en direct indisponible \u2014 taux estim\u00e9 utilis\u00e9",
+  "convert_blocked_slippage": "Glissement trop \u00e9lev\u00e9. R\u00e9duisez le montant ou r\u00e9essayez plus tard.",
+  "convert_quote_valid_for": "Devis valide pendant"
 }

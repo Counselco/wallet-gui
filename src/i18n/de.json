@@ -128,5 +128,10 @@
   "promises_incoming_header": "Ihnen versprochene KX",
   "promises_incoming_empty": "Momentan keine eingehenden Versprechen.",
   "promises_outgoing_header": "Versprechen, die Sie gemacht haben",
-  "promises_outgoing_empty": "Momentan keine ausgehenden Versprechen."
+  "promises_outgoing_empty": "Momentan keine ausgehenden Versprechen.",
+  "convert_quote_loading": "Angebot wird geladen\u2026",
+  "convert_quote_expired": "Angebot abgelaufen \u2014 wird aktualisiert\u2026",
+  "convert_quote_error": "Live-Angebot nicht verf\u00fcgbar \u2014 gesch\u00e4tzter Kurs",
+  "convert_blocked_slippage": "Slippage zu hoch. Betrag reduzieren oder sp\u00e4ter versuchen.",
+  "convert_quote_valid_for": "Angebot g\u00fcltig f\u00fcr"
 }

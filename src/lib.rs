@@ -320,6 +320,25 @@ struct UpdateInfo {
     release_notes: String,
 }
 
+#[derive(Clone, serde::Deserialize, Default)]
+struct ConvertQuote {
+    kx_in: f64,
+    usdc_out: f64,
+    #[allow(dead_code)]
+    spot_rate: f64,
+    trade_rate: f64,
+    slippage_pct: f64,
+    fee_pct: f64,
+    total_cost_pct: f64,
+    warning: Option<String>,
+    warning_level: String,
+    requires_confirmation: bool,
+    #[allow(dead_code)]
+    quoted_at: String,
+    #[allow(dead_code)]
+    valid_for_seconds: u32,
+}
+
 // ── App phase state machine ───────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
@@ -639,6 +658,28 @@ async fn delay_ms(ms: u32) {
         }
     });
     let _ = JsFuture::from(promise).await;
+}
+
+async fn fetch_convert_quote(amount_kx: f64) -> Result<ConvertQuote, String> {
+    use wasm_bindgen::JsCast;
+    let url = format!("https://api.chronx.io/api/xchan/quote?amount_kx={}", amount_kx);
+    let window = web_sys::window().ok_or("No window")?;
+    let resp_val = JsFuture::from(window.fetch_with_str(&url))
+        .await.map_err(|_| "Network error".to_string())?;
+    let resp: web_sys::Response = resp_val.unchecked_into();
+    let text_val = JsFuture::from(resp.text().map_err(|_| "Read error".to_string())?)
+        .await.map_err(|_| "Text error".to_string())?;
+    let text = text_val.as_string().ok_or("Not a string")?;
+    if resp.ok() {
+        serde_json::from_str::<ConvertQuote>(&text).map_err(|e| e.to_string())
+    } else {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(rate) = val.get("fallback_rate").and_then(|v| v.as_f64()) {
+                return Err(format!("FALLBACK:{}", rate));
+            }
+        }
+        Err(format!("HTTP {}", resp.status()))
+    }
 }
 
 /// Poll until balance or nonce changes (node confirmed the tx), up to ~15 seconds.
@@ -2164,6 +2205,48 @@ fn AccountPanel(
     let wl_busy    = RwSignal::new(false);
     let wl_msg     = RwSignal::new(String::new());
 
+    // Convert block state
+    let convert_visible   = RwSignal::new(false);
+    let convert_amount    = RwSignal::new(String::new());
+    let convert_quote     = RwSignal::new(Option::<ConvertQuote>::None);
+    let convert_loading   = RwSignal::new(false);
+    let convert_error     = RwSignal::new(String::new());
+    let convert_countdown = RwSignal::new(0u32);
+    let convert_debounce  = RwSignal::new(0u32);
+
+    // Quote countdown timer (runs once, loops forever)
+    spawn_local(async move {
+        loop {
+            delay_ms(1000).await;
+            let c = convert_countdown.get_untracked();
+            if c > 1 {
+                convert_countdown.set(c - 1);
+            } else if c == 1 {
+                convert_countdown.set(0);
+                // Auto-refetch if amount is valid
+                let amt_str = convert_amount.get_untracked();
+                if let Ok(amt) = amt_str.parse::<f64>() {
+                    if amt > 0.0 {
+                        convert_loading.set(true);
+                        convert_error.set(String::new());
+                        match fetch_convert_quote(amt).await {
+                            Ok(q) => {
+                                convert_quote.set(Some(q));
+                                convert_countdown.set(30);
+                                convert_loading.set(false);
+                            }
+                            Err(e) => {
+                                convert_loading.set(false);
+                                convert_error.set(e);
+                                convert_quote.set(None);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     // Load incoming promises on mount
     Effect::new(move |_| {
         spawn_local(async move {
@@ -2241,14 +2324,128 @@ fn AccountPanel(
                         <p style="margin-top:8px;font-size:12px">
                             <a class="exchange-link" href="#" on:click=move |ev| {
                                 ev.prevent_default();
-                                spawn_local(async move {
-                                    let args = serde_wasm_bindgen::to_value(
-                                        &serde_json::json!({ "url": "https://chronx.io/exchange.html" })
-                                    ).unwrap_or(no_args());
-                                    let _ = call::<()>("open_url", args).await;
-                                });
-                            }>"Convert KX \u{2194} USDC"</a>
+                                convert_visible.set(!convert_visible.get_untracked());
+                            }>{move || if convert_visible.get() { "\u{25BC} Convert KX \u{2194} USDC" } else { "\u{25B6} Convert KX \u{2194} USDC" }}</a>
                         </p>
+                        {move || {
+                            if !convert_visible.get() { return view! { <span></span> }.into_any(); }
+                            let l = lang.get();
+                            view! {
+                                <div class="convert-block">
+                                    <input type="number" class="convert-input" placeholder="Amount in KX" min="0"
+                                        prop:value=move || convert_amount.get()
+                                        on:input=move |ev| {
+                                            let val = event_target_value(&ev);
+                                            convert_amount.set(val.clone());
+                                            let counter = convert_debounce.get_untracked() + 1;
+                                            convert_debounce.set(counter);
+                                            convert_quote.set(None);
+                                            convert_error.set(String::new());
+                                            convert_countdown.set(0);
+                                            let amount: f64 = val.parse().unwrap_or(0.0);
+                                            if amount <= 0.0 { convert_loading.set(false); return; }
+                                            convert_loading.set(true);
+                                            spawn_local(async move {
+                                                delay_ms(600).await;
+                                                if convert_debounce.get_untracked() != counter { return; }
+                                                match fetch_convert_quote(amount).await {
+                                                    Ok(q) => {
+                                                        if convert_debounce.get_untracked() == counter {
+                                                            convert_quote.set(Some(q));
+                                                            convert_countdown.set(30);
+                                                            convert_loading.set(false);
+                                                            convert_error.set(String::new());
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        if convert_debounce.get_untracked() == counter {
+                                                            convert_loading.set(false);
+                                                            convert_error.set(e);
+                                                            convert_quote.set(None);
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    />
+                                    {move || {
+                                        if convert_loading.get() {
+                                            view! { <p class="convert-loading">{t(&lang.get(), "convert_quote_loading")}</p> }.into_any()
+                                        } else { view! { <span></span> }.into_any() }
+                                    }}
+                                    {move || {
+                                        let l = lang.get();
+                                        if let Some(q) = convert_quote.get() {
+                                            let cd = convert_countdown.get();
+                                            let expired = cd == 0;
+                                            let level_cls = format!("quote-panel quote-{}", q.warning_level);
+                                            let cls = if expired { format!("{} quote-expired", level_cls) } else { level_cls };
+                                            view! {
+                                                <div class={cls}>
+                                                    <p class="quote-main">
+                                                        {format!("{} KX  \u{2192}  {} USDC", q.kx_in, q.usdc_out)}
+                                                    </p>
+                                                    <p class="quote-detail">
+                                                        {format!("Rate: ${:.6}/KX  \u{00b7}  Fee: {}%", q.trade_rate, q.fee_pct)}
+                                                    </p>
+                                                    <p class="quote-detail">
+                                                        {format!("Slippage: {}%  \u{00b7}  Total cost: {}%", q.slippage_pct, q.total_cost_pct)}
+                                                    </p>
+                                                    {match q.warning.as_deref() {
+                                                        Some(w) => view! { <p class="quote-warning">{format!("\u{26a0} {}", w)}</p> }.into_any(),
+                                                        None => view! { <span></span> }.into_any(),
+                                                    }}
+                                                    <p class="quote-countdown">
+                                                        {if expired { t(&l, "convert_quote_expired") }
+                                                         else { format!("{} {}s", t(&l, "convert_quote_valid_for"), cd) }}
+                                                    </p>
+                                                    {if q.requires_confirmation {
+                                                        view! { <p class="convert-blocked">{t(&l, "convert_blocked_slippage")}</p> }.into_any()
+                                                    } else { view! { <span></span> }.into_any() }}
+                                                </div>
+                                            }.into_any()
+                                        } else if !convert_error.get().is_empty() {
+                                            let err = convert_error.get();
+                                            let amt: f64 = convert_amount.get().parse().unwrap_or(0.0);
+                                            let rate = if err.starts_with("FALLBACK:") {
+                                                err[9..].parse().unwrap_or(0.00319)
+                                            } else { 0.00319 };
+                                            let est = amt * rate;
+                                            view! {
+                                                <div class="quote-panel quote-yellow">
+                                                    <p class="quote-detail">{t(&l, "convert_quote_error")}</p>
+                                                    <p class="quote-main">{format!("\u{2248} {:.2} KX \u{2192} {:.4} USDC @ ${:.5}/KX", amt, est, rate)}</p>
+                                                </div>
+                                            }.into_any()
+                                        } else { view! { <span></span> }.into_any() }
+                                    }}
+                                    {move || {
+                                        let q = convert_quote.get();
+                                        let cd = convert_countdown.get();
+                                        let is_loading = convert_loading.get();
+                                        let blocked = q.as_ref().map(|q| q.requires_confirmation).unwrap_or(false);
+                                        let expired = cd == 0 && q.is_some();
+                                        let has_fallback = !convert_error.get().is_empty();
+                                        let can_convert = (q.is_some() && !blocked && !expired) || has_fallback;
+                                        let disabled = is_loading || !can_convert;
+                                        let btn_class = if blocked { "convert-btn convert-btn-blocked" } else { "convert-btn" };
+                                        view! {
+                                            <button class={btn_class} disabled=disabled
+                                                on:click=move |_| {
+                                                    spawn_local(async move {
+                                                        let args = serde_wasm_bindgen::to_value(
+                                                            &serde_json::json!({ "url": "https://chronx.io/exchange.html" })
+                                                        ).unwrap_or(no_args());
+                                                        let _ = call::<()>("open_url", args).await;
+                                                    });
+                                                }>
+                                                "Convert via XChan"
+                                            </button>
+                                        }
+                                    }}
+                                </div>
+                            }.into_any()
+                        }}
                     </div>
                     <button on:click=on_refresh disabled=move || loading.get()>
                         {move || if loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
