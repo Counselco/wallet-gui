@@ -54,6 +54,7 @@
   "view_promises": "查看承诺",
   "promises_empty_title": "暂无承诺",
   "promises_empty_sub": "当有人向您发送时间锁定付款时，它将显示在这里。",
+  "promises_coming_to_me": "给我的承诺",
   "lang_ur": "اردو",
   "settings_node_url": "节点URL",
   "settings_save_reconnect": "保存并重新连接",
@@ -113,5 +114,19 @@
   "verify_code_sent": "验证码已发送！请检查您的收件箱。",
   "verified": "已验证",
   "unverified": "未验证",
-  "settings_claim_emails_sub_v2": "验证您的邮箱以接收发送给它的KX。已验证的邮箱会自动监控。"
+  "settings_claim_emails_sub_v2": "验证您的邮箱以接收发送给它的KX。已验证的邮箱会自动监控。",
+  "promises_header_all": "承诺",
+  "filter_all": "全部",
+  "filter_incoming": "收到的",
+  "filter_outgoing": "发出的",
+  "sort_date": "到期日期",
+  "sort_amount": "金额",
+  "incoming": "收到的",
+  "outgoing": "发出的",
+  "from": "来自",
+  "to": "发给",
+  "promises_incoming_header": "承诺给您的 KX",
+  "promises_incoming_empty": "目前没有收到的承诺。",
+  "promises_outgoing_header": "您做出的承诺",
+  "promises_outgoing_empty": "目前没有发出的承诺。"
 }

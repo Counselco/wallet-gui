@@ -3,7 +3,7 @@
 
 [package]
 name = "chronx-wallet-gui"
-version = "1.4.79"
+version = "1.4.80"
 edition = "2021"
 
 [features]
@@ -37,5 +37,9 @@ blake3      = { version = "1" }
 rand        = { version = "0.8" }
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-opener = "2"
+x25519-dalek       = { version = "2", features = ["static_secrets"] }
+chacha20poly1305   = "0.10"
+hkdf               = "0.12"
 chronx-core   = { path = "../../crates/chronx-core" }
 chronx-crypto = { path = "../../crates/chronx-crypto" }

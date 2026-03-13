@@ -54,6 +54,7 @@
   "view_promises": "Versprechen anzeigen",
   "promises_empty_title": "Noch keine Versprechen",
   "promises_empty_sub": "Wenn Ihnen jemand eine zeitgesperrte Zahlung sendet, erscheint sie hier.",
+  "promises_coming_to_me": "Versprechen an mich",
   "lang_ur": "اردو",
   "settings_node_url": "Node-URL",
   "settings_save_reconnect": "Speichern & Neu verbinden",
@@ -113,5 +114,19 @@
   "verify_code_sent": "Verifizierungscode gesendet! Prüfen Sie Ihren Posteingang.",
   "verified": "Verifiziert",
   "unverified": "Nicht verifiziert",
-  "settings_claim_emails_sub_v2": "Verifizieren Sie Ihre E-Mail, um KX zu empfangen. Verifizierte E-Mails werden automatisch überwacht."
+  "settings_claim_emails_sub_v2": "Verifizieren Sie Ihre E-Mail, um KX zu empfangen. Verifizierte E-Mails werden automatisch überwacht.",
+  "promises_header_all": "Versprechen",
+  "filter_all": "Alle",
+  "filter_incoming": "Eingehend",
+  "filter_outgoing": "Ausgehend",
+  "sort_date": "Fälligkeitsdatum",
+  "sort_amount": "Betrag",
+  "incoming": "Eingehend",
+  "outgoing": "Ausgehend",
+  "from": "Von",
+  "to": "An",
+  "promises_incoming_header": "Ihnen versprochene KX",
+  "promises_incoming_empty": "Momentan keine eingehenden Versprechen.",
+  "promises_outgoing_header": "Versprechen, die Sie gemacht haben",
+  "promises_outgoing_empty": "Momentan keine ausgehenden Versprechen."
 }

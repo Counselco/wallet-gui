@@ -54,6 +54,7 @@
   "view_promises": "عرض الوعود",
   "promises_empty_title": "لا توجد وعود بعد",
   "promises_empty_sub": "عندما يرسل لك شخص ما دفعة مقفلة زمنياً، ستظهر هنا.",
+  "promises_coming_to_me": "وعود قادمة إليّ",
   "lang_ur": "اردو",
   "settings_node_url": "عنوان العقدة",
   "settings_save_reconnect": "حفظ وإعادة الاتصال",
@@ -113,5 +114,19 @@
   "verify_code_sent": "تم إرسال الرمز! تحقق من بريدك.",
   "verified": "موثق",
   "unverified": "غير موثق",
-  "settings_claim_emails_sub_v2": "تحقق من بريدك لاستلام KX المرسل إليه. يتم مراقبة البريد الموثق تلقائياً."
+  "settings_claim_emails_sub_v2": "تحقق من بريدك لاستلام KX المرسل إليه. يتم مراقبة البريد الموثق تلقائياً.",
+  "promises_header_all": "الوعود",
+  "filter_all": "الكل",
+  "filter_incoming": "واردة",
+  "filter_outgoing": "صادرة",
+  "sort_date": "تاريخ الاستحقاق",
+  "sort_amount": "المبلغ",
+  "incoming": "واردة",
+  "outgoing": "صادرة",
+  "from": "من",
+  "to": "إلى",
+  "promises_incoming_header": "KX الموعودة لك",
+  "promises_incoming_empty": "لا توجد وعود واردة حالياً.",
+  "promises_outgoing_header": "الوعود التي قدمتها",
+  "promises_outgoing_empty": "لا توجد وعود صادرة حالياً."
 }

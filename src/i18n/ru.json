@@ -54,6 +54,7 @@
   "view_promises": "Просмотр обещаний",
   "promises_empty_title": "Пока нет обещаний",
   "promises_empty_sub": "Когда кто-то отправит вам платеж с временной блокировкой, он появится здесь.",
+  "promises_coming_to_me": "Обещания для меня",
   "lang_ur": "اردو",
   "settings_node_url": "URL узла",
   "settings_save_reconnect": "Сохранить и переподключить",
@@ -113,5 +114,19 @@
   "verify_code_sent": "Код отправлен! Проверьте почту.",
   "verified": "Подтвержден",
   "unverified": "Не подтвержден",
-  "settings_claim_emails_sub_v2": "Подтвердите email для получения KX. Подтвержденные email отслеживаются автоматически."
+  "settings_claim_emails_sub_v2": "Подтвердите email для получения KX. Подтвержденные email отслеживаются автоматически.",
+  "promises_header_all": "Обещания",
+  "filter_all": "Все",
+  "filter_incoming": "Входящие",
+  "filter_outgoing": "Исходящие",
+  "sort_date": "Дата разблокировки",
+  "sort_amount": "Сумма",
+  "incoming": "Входящее",
+  "outgoing": "Исходящее",
+  "from": "От",
+  "to": "Кому",
+  "promises_incoming_header": "KX, обещанные вам",
+  "promises_incoming_empty": "Сейчас нет входящих обещаний.",
+  "promises_outgoing_header": "Обещания, которые вы дали",
+  "promises_outgoing_empty": "Сейчас нет исходящих обещаний."
 }

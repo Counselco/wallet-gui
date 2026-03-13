@@ -24,6 +24,7 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(PendingDeepLink(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             commands::check_node,
@@ -39,6 +40,7 @@ pub fn run() {
             commands::set_node_url,
             commands::generate_wallet,
             commands::get_pending_incoming,
+            commands::get_all_promises,
             commands::check_pin_set,
             commands::set_pin,
             commands::verify_pin,
@@ -90,6 +92,10 @@ pub fn run() {
             commands::add_blocked_sender,
             commands::is_sender_blocked,
             commands::get_poke_by_id,
+            commands::get_axiom_consent_hash,
+            commands::create_freeform_timelock,
+            commands::get_claim_info,
+            commands::whitelist_email,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

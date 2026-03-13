@@ -54,6 +54,7 @@
   "view_promises": "Ver promesas",
   "promises_empty_title": "Sin promesas aún",
   "promises_empty_sub": "Cuando alguien te envíe un pago con bloqueo temporal, aparecerá aquí.",
+  "promises_coming_to_me": "Promesas para mí",
   "lang_ur": "اردو",
   "settings_node_url": "URL del nodo",
   "settings_save_reconnect": "Guardar y reconectar",
@@ -113,5 +114,19 @@
   "verify_code_sent": "¡Código enviado! Revisa tu bandeja de entrada.",
   "verified": "Verificado",
   "unverified": "No verificado",
-  "settings_claim_emails_sub_v2": "Verifica tu email para recibir KX enviados a él. Los emails verificados se monitorean automáticamente."
+  "settings_claim_emails_sub_v2": "Verifica tu email para recibir KX enviados a él. Los emails verificados se monitorean automáticamente.",
+  "promises_header_all": "Promesas",
+  "filter_all": "Todas",
+  "filter_incoming": "Entrantes",
+  "filter_outgoing": "Salientes",
+  "sort_date": "Fecha de vencimiento",
+  "sort_amount": "Monto",
+  "incoming": "Entrante",
+  "outgoing": "Saliente",
+  "from": "De",
+  "to": "Para",
+  "promises_incoming_header": "KX prometidos para usted",
+  "promises_incoming_empty": "No hay promesas entrantes en este momento.",
+  "promises_outgoing_header": "Promesas que ha hecho",
+  "promises_outgoing_empty": "No hay promesas salientes en este momento."
 }

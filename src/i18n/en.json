@@ -54,6 +54,7 @@
   "view_promises": "View Promises",
   "promises_empty_title": "No Promises Yet",
   "promises_empty_sub": "When someone sends you a time-locked payment, it will appear here.",
+  "promises_coming_to_me": "Promises Coming To Me",
   "lang_ur": "اردو",
   "settings_node_url": "Node URL",
   "settings_save_reconnect": "Save & Reconnect",
@@ -113,5 +114,19 @@
   "verify_code_sent": "Verification code sent! Check your inbox.",
   "verified": "Verified",
   "unverified": "Unverified",
-  "settings_claim_emails_sub_v2": "Verify your email to receive KX sent to it. Verified emails are monitored automatically."
+  "settings_claim_emails_sub_v2": "Verify your email to receive KX sent to it. Verified emails are monitored automatically.",
+  "promises_header_all": "Promises",
+  "filter_all": "All",
+  "filter_incoming": "Incoming",
+  "filter_outgoing": "Outgoing",
+  "sort_date": "Date Maturing",
+  "sort_amount": "Amount",
+  "incoming": "Incoming",
+  "outgoing": "Outgoing",
+  "from": "From",
+  "to": "To",
+  "promises_incoming_header": "KX Promised To You",
+  "promises_incoming_empty": "No incoming promises right now.",
+  "promises_outgoing_header": "Promises You've Made",
+  "promises_outgoing_empty": "No outgoing promises right now."
 }

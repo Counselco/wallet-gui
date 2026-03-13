@@ -174,6 +174,9 @@ struct TimeLockInfo {
     claim_secret_hash: Option<String>,
     #[serde(default)]
     cancellation_window_secs: Option<u32>,
+    /// Direction: "incoming" or "outgoing". Set by get_all_promises.
+    #[serde(default)]
+    direction: Option<String>,
 }
 
 /// Returned by `create_email_timelock_series`.
@@ -197,6 +200,16 @@ struct ClaimByCodeResult {
     claimed_count: usize,
     total_chronos: String,
     lock_ids: Vec<String>,
+}
+
+/// Returned by `get_claim_info` (whitelist popup).
+#[derive(Clone, Deserialize, Default)]
+struct ClaimInfoResult {
+    found: bool,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    amount_kx: Option<f64>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -306,6 +319,29 @@ fn format_kx(chronos_str: &str) -> String {
             format!("{}.{:02}", format_int_with_commas(whole), d2)
         }
     }
+}
+
+/// Format a raw numeric string (e.g. "10000000.343566") with thousands separators.
+/// Returns e.g. "10,000,000.343566". Works on the integer part only.
+fn format_amount_display(raw: &str) -> String {
+    if raw.is_empty() { return String::new(); }
+    let (int_part, dec_part) = match raw.find('.') {
+        Some(pos) => (&raw[..pos], Some(&raw[pos..])), // ".343566" including dot
+        None => (raw, None),
+    };
+    // Format integer part with commas
+    let digits: Vec<u8> = int_part.bytes().filter(|b| b.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return dec_part.map_or_else(String::new, |d| format!("0{d}"));
+    }
+    let mut formatted = String::new();
+    let len = digits.len();
+    for (i, &b) in digits.iter().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 { formatted.push(','); }
+        formatted.push(b as char);
+    }
+    if let Some(d) = dec_part { formatted.push_str(d); }
+    formatted
 }
 
 /// Format a f64 KX amount without trailing zeros: 100.0 → "100", 1.50 → "1.5"
@@ -539,6 +575,18 @@ fn save_text_file(filename: &str, content: &str) {
 }
 
 // ── Delay ─────────────────────────────────────────────────────────────────────
+
+/// Fire-and-forget POST with JSON body. Returns a JS Promise. Errors are silently ignored.
+fn post_json_fire_and_forget(url: &str, json_body: &str) -> Promise {
+    let opts = web_sys::RequestInit::new();
+    opts.set_method("POST");
+    opts.set_body(&JsValue::from_str(json_body));
+    let headers = web_sys::Headers::new().unwrap();
+    let _ = headers.set("Content-Type", "application/json");
+    opts.set_headers(&headers.into());
+    let request = web_sys::Request::new_with_str_and_init(url, &opts).unwrap();
+    web_sys::window().unwrap().fetch_with_request(&request)
+}
 
 async fn delay_ms(ms: u32) {
     let promise = Promise::new(&mut |resolve, _| {
@@ -1250,8 +1298,9 @@ fn App() -> impl IntoView {
                         spawn_local(async move {
                             restore_busy.set(true);
                             restore_msg.set(String::new());
+                            let trimmed = key.trim().to_string();
                             let args = serde_wasm_bindgen::to_value(
-                                &serde_json::json!({ "backupKey": key.trim() })
+                                &serde_json::json!({ "backupKey": trimmed, "force": true })
                             ).unwrap_or(no_args());
                             match call::<String>("restore_wallet", args).await {
                                 Ok(_account_id) => {
@@ -1280,7 +1329,7 @@ fn App() -> impl IntoView {
             }.into_any(),
 
             AppPhase::Wallet => view! {
-                <div class="app">
+                <div class=if desktop { "desktop-shell" } else { "app" }>
                     // Urgent notices banner (red, non-dismissible)
                     {move || {
                         let urgents: Vec<Notice> = notices.get().into_iter()
@@ -1304,81 +1353,131 @@ fn App() -> impl IntoView {
                         }
                     }}
 
-                    // Header
-                    <header>
-                        <a href="https://www.chronx.io" target="_blank" rel="noopener" class="logo-link">
-                            <img src=logo_src() alt="ChronX Logo" style="height:40px;width:auto;display:block;" />
-                        </a>
-                        <div class="header-right">
-                            <span class="node-status">
-                                <span class=move || if online.get() { "dot online" } else { "dot offline" }></span>
-                                {move || if online.get() { "Online" } else { "Offline" }}
-                            </span>
-                        </div>
-                    </header>
-                    // Tab bar — mobile: 3 tabs + settings; desktop: 5 tabs + settings
-                    <nav class="tab-bar">
-                        <button class=move || if active_tab.get()==0 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(0)>
-                            {move || t(&lang.get(), "tab_receive")}
-                        </button>
-                        <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(1)>
-                            {move || t(&lang.get(), "tab_send")}
-                            {move || {
-                                let count = poke_count.get();
-                                if count > 0 {
-                                    view! { <span class="notice-badge" style="background:#ef4444;margin-left:4px">{count}</span> }.into_any()
-                                } else {
-                                    view! { <span></span> }.into_any()
+                    // Desktop sidebar
+                    {if desktop {
+                        view! {
+                            <aside class="sidebar">
+                                <div class="sidebar-logo">
+                                    <a href="https://www.chronx.io" target="_blank" rel="noopener" class="logo-link">
+                                        <img src=logo_src() alt="ChronX Logo" style="height:36px;width:auto;display:block;" />
+                                    </a>
+                                </div>
+                                <nav class="sidebar-nav">
+                                    <button class=move || if active_tab.get()==0 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(0)>
+                                        {move || t(&lang.get(), "tab_receive")}
+                                    </button>
+                                    <button class=move || if active_tab.get()==1 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(1)>
+                                        {move || t(&lang.get(), "tab_send")}
+                                        {move || {
+                                            let count = poke_count.get();
+                                            if count > 0 {
+                                                view! { <span class="notice-badge" style="background:#ef4444;margin-left:4px">{count}</span> }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }
+                                        }}
+                                    </button>
+                                    <button class=move || if active_tab.get()==2 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(2)>
+                                        {move || t(&lang.get(), "tab_promises")}
+                                    </button>
+                                    <button class=move || if active_tab.get()==3 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(3)>
+                                        {move || t(&lang.get(), "tab_request")}
+                                    </button>
+                                    <button class=move || if active_tab.get()==4 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(4)>
+                                        {move || t(&lang.get(), "tab_history")}
+                                    </button>
+                                </nav>
+                                <div class="sidebar-bottom">
+                                    <button class=move || if active_tab.get()==5 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(5)>
+                                        {move || t(&lang.get(), "tab_settings")}
+                                        {move || {
+                                            let unread = notices.get().iter()
+                                                .filter(|n| n.severity != "urgent" && !seen_ids.get().contains(&n.id))
+                                                .count();
+                                            let has_update = update_available.get();
+                                            if has_update {
+                                                view! { <span class="update-badge" title="Update available">"\u{1f514}"</span> }.into_any()
+                                            } else if unread > 0 {
+                                                view! { <span class="notice-badge">{unread}</span> }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }
+                                        }}
+                                    </button>
+                                    <span class="node-status" style="padding:8px 16px;font-size:12px">
+                                        <span class=move || if online.get() { "dot online" } else { "dot offline" }></span>
+                                        {move || if online.get() { "Online" } else { "Offline" }}
+                                    </span>
+                                </div>
+                            </aside>
+                        }.into_any()
+                    } else {
+                        view! {
+                            // Mobile header + tab bar
+                            <header>
+                                <a href="https://www.chronx.io" target="_blank" rel="noopener" class="logo-link">
+                                    <img src=logo_src() alt="ChronX Logo" style="height:40px;width:auto;display:block;" />
+                                </a>
+                                <div class="header-right">
+                                    <span class="node-status">
+                                        <span class=move || if online.get() { "dot online" } else { "dot offline" }></span>
+                                        {move || if online.get() { "Online" } else { "Offline" }}
+                                    </span>
+                                </div>
+                            </header>
+                            <nav class="tab-bar">
+                                <button class=move || if active_tab.get()==0 {"tab active"} else {"tab"}
+                                    on:click=move |_| active_tab.set(0)>
+                                    {move || t(&lang.get(), "tab_receive")}
+                                </button>
+                                <button class=move || if active_tab.get()==1 {"tab active"} else {"tab"}
+                                    on:click=move |_| active_tab.set(1)>
+                                    {move || t(&lang.get(), "tab_send")}
+                                    {move || {
+                                        let count = poke_count.get();
+                                        if count > 0 {
+                                            view! { <span class="notice-badge" style="background:#ef4444;margin-left:4px">{count}</span> }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }
+                                    }}
+                                </button>
+                                <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
+                                    on:click=move |_| active_tab.set(2)>
+                                    {move || t(&lang.get(), "tab_promises")}
+                                </button>
+                                <button class=move || {
+                                    if active_tab.get()==3 {"tab active"} else {"tab"}
                                 }
-                            }}
-                        </button>
-                        <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
-                            on:click=move |_| active_tab.set(2)>
-                            {move || t(&lang.get(), "tab_promises")}
-                        </button>
-                        {if desktop {
-                            view! {
-                                <button class=move || if active_tab.get()==3 {"tab active"} else {"tab"}
                                     on:click=move |_| active_tab.set(3)>
-                                    {move || t(&lang.get(), "tab_request")}
+                                    {move || t(&lang.get(), "tab_settings")}
+                                    {move || {
+                                        let unread = notices.get().iter()
+                                            .filter(|n| n.severity != "urgent" && !seen_ids.get().contains(&n.id))
+                                            .count();
+                                        let has_update = update_available.get();
+                                        if has_update {
+                                            view! { <span class="update-badge" title="Update available">"\u{1f514}"</span> }.into_any()
+                                        } else if unread > 0 {
+                                            view! { <span class="notice-badge">{unread}</span> }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }
+                                    }}
                                 </button>
-                                <button class=move || if active_tab.get()==4 {"tab active"} else {"tab"}
-                                    on:click=move |_| active_tab.set(4)>
-                                    {move || t(&lang.get(), "tab_history")}
-                                </button>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
-                        }}
-                        <button class=move || {
-                            let settings_tab = if desktop { 5 } else { 3 };
-                            if active_tab.get()==settings_tab {"tab active"} else {"tab"}
-                        }
-                            on:click=move |_| {
-                                let settings_tab = if desktop { 5 } else { 3 };
-                                active_tab.set(settings_tab);
-                            }>
-                            {move || t(&lang.get(), "tab_settings")}
-                            {move || {
-                                let unread = notices.get().iter()
-                                    .filter(|n| n.severity != "urgent" && !seen_ids.get().contains(&n.id))
-                                    .count();
-                                let has_update = update_available.get();
-                                if has_update {
-                                    view! { <span class="update-badge" title="Update available">"\u{1f514}"</span> }.into_any()
-                                } else if unread > 0 {
-                                    view! { <span class="notice-badge">{unread}</span> }.into_any()
-                                } else {
-                                    view! { <span></span> }.into_any()
-                                }
-                            }}
-                        </button>
-                    </nav>
+                            </nav>
+                        }.into_any()
+                    }}
 
-                    // Main content routing
-                    <div>
+                    // Main content area
+                    <div class=if desktop { "main-content" } else { "" }>
+                    <div class=if desktop { "main-body" } else { "" }>
                         {move || {
                             let tab = active_tab.get();
                             let settings_tab: u8 = if desktop { 5 } else { 3 };
@@ -1475,6 +1574,7 @@ fn App() -> impl IntoView {
                             bug_modal_open.set(true);
                         }>"🐞 Report a Bug"</button>
                     </div>
+                    </div> // close main-content
 
                     // Bug report modal
                     {move || if bug_modal_open.get() {
@@ -2013,6 +2113,13 @@ fn AccountPanel(
     let home_claim_msg  = RwSignal::new(String::new());
     let home_claim_busy = RwSignal::new(false);
 
+    // Whitelist popup state (shown after successful claim)
+    let wl_show    = RwSignal::new(false);
+    let wl_email   = RwSignal::new(String::new());
+    let wl_amount  = RwSignal::new(String::new());
+    let wl_busy    = RwSignal::new(false);
+    let wl_msg     = RwSignal::new(String::new());
+
     // Load incoming promises on mount
     Effect::new(move |_| {
         spawn_local(async move {
@@ -2193,10 +2300,11 @@ fn AccountPanel(
                                 return;
                             }
                             home_claim_busy.set(true);
+                            let claimed_code = code.clone();
                             spawn_local(async move {
                                 home_claim_msg.set("Searching for matching locks\u{2026}".into());
                                 let args = serde_wasm_bindgen::to_value(
-                                    &serde_json::json!({ "claimCode": code })
+                                    &serde_json::json!({ "claimCode": claimed_code })
                                 ).unwrap_or(no_args());
                                 match call::<ClaimByCodeResult>("claim_by_code", args).await {
                                     Ok(result) => {
@@ -2211,6 +2319,21 @@ fn AccountPanel(
                                         poll_balance_update(info).await;
                                         if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
                                             incoming.set(locks);
+                                        }
+                                        // ── Whitelist popup: check if sender email is known ──
+                                        let ci_args = serde_wasm_bindgen::to_value(
+                                            &serde_json::json!({ "claimCode": claimed_code })
+                                        ).unwrap_or(no_args());
+                                        if let Ok(ci) = call::<ClaimInfoResult>("get_claim_info", ci_args).await {
+                                            if ci.found {
+                                                if let Some(email) = ci.email {
+                                                    wl_email.set(email);
+                                                    wl_amount.set(ci.amount_kx.map(|a| format!("{a}")).unwrap_or_default());
+                                                    wl_msg.set(String::new());
+                                                    wl_busy.set(false);
+                                                    wl_show.set(true);
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => home_claim_msg.set(format!("Error: {e}")),
@@ -2256,6 +2379,82 @@ fn AccountPanel(
         </div>
 
         // Send is now a standalone tab — removed from AccountPanel
+
+        // ── Whitelist popup (shown after successful claim) ───────────────────
+        {move || if wl_show.get() {
+            let email = wl_email.get();
+            let amt = wl_amount.get();
+            view! {
+                <div class="modal-overlay" on:click=move |_| wl_show.set(false)>
+                    <div class="modal-card" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                        <p class="modal-title" style="color:#d4a84b">"Instant Delivery"</p>
+                        <div class="modal-body" style="text-align:center">
+                            <p style="font-size:14px;margin-bottom:8px">
+                                "You just claimed "
+                                {if !amt.is_empty() { format!("{amt} KX") } else { "KX".to_string() }}
+                                " from:"
+                            </p>
+                            <p style="font-size:15px;font-weight:700;color:#d4a84b;word-break:break-all;margin-bottom:12px">
+                                {email.clone()}
+                            </p>
+                            <p style="font-size:13px;color:#9ca3af;margin-bottom:4px">
+                                "Would you like to whitelist this sender so future sends arrive instantly \u{2014} no claim code needed?"
+                            </p>
+                        </div>
+                        {move || {
+                            let m = wl_msg.get();
+                            if m.is_empty() { view! { <span></span> }.into_any() }
+                            else {
+                                let cls = if m.starts_with("Error") { "msg error" } else { "msg success" };
+                                view! { <p class=cls style="margin-top:6px;text-align:center">{m}</p> }.into_any()
+                            }
+                        }}
+                        <div style="display:flex;gap:8px;margin-top:12px">
+                            <button
+                                style="flex:1;background:transparent;border:1px solid #333;color:#9ca3af;cursor:pointer;padding:10px;border-radius:6px"
+                                on:click=move |_| wl_show.set(false)
+                            >"No thanks"</button>
+                            <button
+                                class="btn-primary"
+                                style="flex:1;background:#d4a84b;color:#0a0a0a;font-weight:700;padding:10px;border:none;border-radius:6px;cursor:pointer"
+                                disabled=move || wl_busy.get()
+                                on:click=move |_| {
+                                    let sender = wl_email.get_untracked();
+                                    let wallet = info.get_untracked().map(|i| i.account_id.clone()).unwrap_or_default();
+                                    if wallet.is_empty() || sender.is_empty() {
+                                        wl_msg.set("Error: wallet not loaded".into());
+                                        return;
+                                    }
+                                    wl_busy.set(true);
+                                    spawn_local(async move {
+                                        let args = serde_wasm_bindgen::to_value(
+                                            &serde_json::json!({
+                                                "email": sender,
+                                                "walletAddress": wallet
+                                            })
+                                        ).unwrap_or(no_args());
+                                        match call::<bool>("whitelist_email", args).await {
+                                            Ok(true) => {
+                                                wl_msg.set("Whitelisted! Future sends will arrive instantly.".into());
+                                                spawn_local(async move {
+                                                    delay_ms(2000).await;
+                                                    wl_show.set(false);
+                                                });
+                                            }
+                                            Ok(false) => wl_msg.set("Error: whitelist failed".into()),
+                                            Err(e) => wl_msg.set(format!("Error: {e}")),
+                                        }
+                                        wl_busy.set(false);
+                                    });
+                                }
+                            >
+                                {move || if wl_busy.get() { "Saving\u{2026}" } else { "Yes, whitelist" }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
     }
 }
 
@@ -2346,6 +2545,35 @@ fn SendPanel(
                 claim_email.set(e);
             }
         });
+    });
+
+    // ── Recipient mode (3-way) ────────────────────────────────────────────────
+    // 0 = KX Address, 1 = Email, 2 = Freeform (name/org/description)
+    let recipient_mode = RwSignal::new(0u8);
+    let freeform_recip = RwSignal::new(String::new());
+
+    // ── Long Promise / AI management signals ────────────────────────────────────
+    let is_long_promise = RwSignal::new(false);
+    let grantor_intent = RwSignal::new(String::new());
+    let ai_managed = RwSignal::new(false);
+    let ai_percentage = RwSignal::new(1u32); // default 1%
+    let risk_level = RwSignal::new(50u32);
+    let axiom_modal_open = RwSignal::new(false);
+    let axiom_consented = RwSignal::new(false);
+    let axiom_consent_hash = RwSignal::new(String::new());
+
+    let warning_dismissed = RwSignal::new(false);
+
+    // Recompute is_long_promise whenever lock_date changes
+    Effect::new(move |_| {
+        let date_str = lock_date.get();
+        if date_str.is_empty() {
+            is_long_promise.set(false);
+            return;
+        }
+        let unix = date_str_to_unix(&date_str).unwrap_or(0);
+        let now_secs = (js_sys::Date::now() / 1000.0) as i64;
+        is_long_promise.set(unix > now_secs + (365 * 86400));
     });
 
     // Clear messages on tab/mode switch
@@ -2443,47 +2671,89 @@ fn SendPanel(
                 sending.set(false);
             });
         } else if sub == 0 && mode == 1 {
-            // KX + Send Later
+            // KX + Send Later (or Freeform)
+            let rm = recipient_mode.get_untracked();
             let date_str = lock_date.get_untracked();
             if date_str.is_empty() { msg.set("Error: choose an unlock date.".into()); return; }
             let unlock_unix = match date_str_to_unix(&date_str) {
                 Some(t) => t,
                 None => { msg.set("Error: invalid date.".into()); return; }
             };
-            let pubkey = to_pubkey.get_untracked();
-            let to_pubkey_hex: Option<String> = if pubkey.is_empty() { None } else { Some(pubkey) };
-            spawn_local(async move {
-                sending.set(true);
-                msg.set("Mining PoW\u{2026} (~10s)".into());
-                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                    "amountKx": amt,
-                    "unlockAtUnix": unlock_unix,
-                    "memo": memo_opt,
-                    "toPubkeyHex": to_pubkey_hex,
-                })).unwrap_or(no_args());
-                match call::<String>("create_timelock", args).await {
-                    Ok(txid) => {
-                        msg.set(format!("Promise made! ID: {}", &txid[..16.min(txid.len())]));
-                        amount.set(String::new());
-                        lock_date.set(String::new());
-                        memo.set(String::new());
-                        to_pubkey.set(String::new());
-                        let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
-                        for _ in 0..15u8 {
-                            delay_ms(1000).await;
-                            if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                if a.nonce > prev_nonce { info.set(Some(a)); break; }
-                            }
+            // Capture long promise / AI fields before spawn_local
+            let lp_note: Option<String> = { let n = grantor_intent.get_untracked(); if n.is_empty() { None } else { Some(n) } };
+            let lp_risk: Option<u32> = if ai_managed.get_untracked() { Some(risk_level.get_untracked()) } else { None };
+            let lp_ai_pct: Option<u32> = if ai_managed.get_untracked() { Some(ai_percentage.get_untracked()) } else { None };
+            let lp_hash: Option<String> = { let h = axiom_consent_hash.get_untracked(); if h.is_empty() { None } else { Some(h) } };
+
+            if rm == 2 {
+                // Freeform recipient
+                let fr = freeform_recip.get_untracked();
+                if fr.trim().is_empty() { msg.set("Error: enter a freeform recipient.".into()); return; }
+                spawn_local(async move {
+                    sending.set(true);
+                    msg.set("Mining PoW\u{2026} (~10s)".into());
+                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                        "freeformRecipient": fr,
+                        "amountKx": amt,
+                        "unlockAtUnix": unlock_unix,
+                        "memo": memo_opt,
+                        "grantorIntent": lp_note,
+                        "riskLevel": lp_risk,
+                        "aiPercentage": lp_ai_pct,
+                        "axiomConsentHash": lp_hash,
+                    })).unwrap_or(no_args());
+                    match call::<String>("create_freeform_timelock", args).await {
+                        Ok(txid) => {
+                            msg.set(format!("Promise made! ID: {}", &txid[..16.min(txid.len())]));
+                            amount.set(String::new());
+                            lock_date.set(String::new());
+                            memo.set(String::new());
+                            freeform_recip.set(String::new());
+                            grantor_intent.set(String::new());
+                            risk_level.set(50);
+                            axiom_consented.set(false);
+                            axiom_consent_hash.set(String::new());
+                            poll_balance_update(info).await;
                         }
-                        // Always force a final refresh so balance is correct even if nonce poll timed out
-                        if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
-                            info.set(Some(a));
-                        }
+                        Err(e) => msg.set(format!("Error: {e}")),
                     }
-                    Err(e) => msg.set(format!("Error: {e}")),
-                }
-                sending.set(false);
-            });
+                    sending.set(false);
+                });
+            } else {
+                // KX address recipient
+                let pubkey = to_pubkey.get_untracked();
+                let to_pubkey_hex: Option<String> = if pubkey.is_empty() { None } else { Some(pubkey) };
+                spawn_local(async move {
+                    sending.set(true);
+                    msg.set("Mining PoW\u{2026} (~10s)".into());
+                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                        "amountKx": amt,
+                        "unlockAtUnix": unlock_unix,
+                        "memo": memo_opt,
+                        "toPubkeyHex": to_pubkey_hex,
+                        "grantorIntent": lp_note,
+                        "riskLevel": lp_risk,
+                        "aiPercentage": lp_ai_pct,
+                        "axiomConsentHash": lp_hash,
+                    })).unwrap_or(no_args());
+                    match call::<String>("create_timelock", args).await {
+                        Ok(txid) => {
+                            msg.set(format!("Promise made! ID: {}", &txid[..16.min(txid.len())]));
+                            amount.set(String::new());
+                            lock_date.set(String::new());
+                            memo.set(String::new());
+                            to_pubkey.set(String::new());
+                            grantor_intent.set(String::new());
+                            risk_level.set(50);
+                            axiom_consented.set(false);
+                            axiom_consent_hash.set(String::new());
+                            poll_balance_update(info).await;
+                        }
+                        Err(e) => msg.set(format!("Error: {e}")),
+                    }
+                    sending.set(false);
+                });
+            }
         } else if sub == 1 && mode == 0 {
             // Email + Send Now (unlock = 0 → backend uses now → immediately claimable)
             let email_str = email.get_untracked();
@@ -2615,6 +2885,15 @@ fn SendPanel(
                 None => { msg.set("Error: invalid date.".into()); return; }
             };
 
+            // Capture long promise / AI fields for email send later
+            let lp_active = is_long_promise.get_untracked();
+            let lp_note: Option<String> = { let n = grantor_intent.get_untracked(); if n.is_empty() { None } else { Some(n) } };
+            let lp_risk: Option<u32> = if ai_managed.get_untracked() { Some(risk_level.get_untracked()) } else { None };
+            let lp_ai_pct: Option<u32> = if ai_managed.get_untracked() { Some(ai_percentage.get_untracked()) } else { None };
+            let lp_hash: Option<String> = { let h = axiom_consent_hash.get_untracked(); if h.is_empty() { None } else { Some(h) } };
+            let lp_email_str = email_str.clone();
+            let lp_amt = amt;
+
             // Check if this is a series (additional entries present)
             let extra = series_entries.get_untracked();
             if !extra.is_empty() {
@@ -2708,6 +2987,11 @@ fn SendPanel(
                 });
             } else {
                 // --- Single email send ---
+                let lp_note2 = lp_note.clone();
+                let lp_hash2 = lp_hash.clone();
+                let lp_email_for_confirm = lp_email_str.clone();
+                let lp_risk_for_confirm = lp_risk;
+                let lp_note_preview = lp_note.as_deref().unwrap_or("").chars().take(100).collect::<String>();
                 spawn_local(async move {
                     sending.set(true);
                     pending_email_chronos.set((amt * 1_000_000.0) as u64);
@@ -2717,6 +3001,10 @@ fn SendPanel(
                         "amountKx": amt,
                         "unlockAtUnix": unlock_unix,
                         "memo": memo_opt.clone(),
+                        "grantorIntent": lp_note2,
+                        "riskLevel": lp_risk,
+                        "aiPercentage": lp_ai_pct,
+                        "axiomConsentHash": lp_hash2,
                     })).unwrap_or(no_args());
                     match call::<EmailLockResult>("create_email_timelock", args).await {
                         Ok(result) => {
@@ -2761,6 +3049,44 @@ fn SendPanel(
                                 info.set(Some(a));
                             }
                             pending_email_chronos.set(0);
+                            // Reset long promise fields
+                            grantor_intent.set(String::new());
+                            risk_level.set(50);
+                            axiom_consented.set(false);
+                            axiom_consent_hash.set(String::new());
+                            // Fire-and-forget: send long promise confirmation email
+                            if lp_active {
+                                let confirm_txid = txid.clone();
+                                let confirm_email = lp_email_for_confirm.clone();
+                                let confirm_note = lp_note_preview.clone();
+                                let confirm_risk = lp_risk_for_confirm.unwrap_or(50);
+                                let confirm_unlock = unlock_unix;
+                                let cancel_ms = js_sys::Date::now() + (7.0 * 86400.0 * 1000.0);
+                                let cancel_d = js_sys::Date::new(&JsValue::from_f64(cancel_ms));
+                                let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                                let cm = cancel_d.get_utc_month() as usize;
+                                let cancel_deadline = format!("{} {:02}, {}", if cm < 12 { months[cm] } else { "?" }, cancel_d.get_utc_date(), cancel_d.get_utc_full_year());
+                                let unlock_d = js_sys::Date::new(&JsValue::from_f64(confirm_unlock as f64 * 1000.0));
+                                let um = unlock_d.get_utc_month() as usize;
+                                let unlock_date_str = format!("{} {:02}, {}", if um < 12 { months[um] } else { "?" }, unlock_d.get_utc_date(), unlock_d.get_utc_full_year());
+                                spawn_local(async move {
+                                    let body = serde_json::json!({
+                                        "tx_id": confirm_txid,
+                                        "sender_email": confirm_email,
+                                        "recipient_email": confirm_email,
+                                        "amount_kx": lp_amt,
+                                        "unlock_date": unlock_date_str,
+                                        "risk_level": confirm_risk,
+                                        "cancellation_deadline": cancel_deadline,
+                                        "beneficiary_note_preview": confirm_note,
+                                    });
+                                    // Silently ignore all errors — endpoint may not exist yet
+                                    let _ = JsFuture::from(post_json_fire_and_forget(
+                                        "https://api.chronx.io/long-promise-confirm",
+                                        &body.to_string(),
+                                    )).await;
+                                });
+                            }
                         }
                         Err(e) => {
                             pending_email_chronos.set(0);
@@ -2773,20 +3099,58 @@ fn SendPanel(
         }
     };
 
+    let desktop_send = is_desktop();
+
     view! {
         <div class="card">
 
-            // Sub-tabs: KX Address | Email Address
-            <div class="send-subtabs">
+            // Desktop-only dismissible warning banner
+            {move || if desktop_send && !warning_dismissed.get() {
+                view! {
+                    <div class="desktop-warning-banner">
+                        <p class="desktop-warning-text">
+                            <strong>"\u{26a0} Please read before using this screen. "</strong>
+                            "These features allow you to send KX across time \u{2014} to wallet addresses, \
+                             email recipients, or people you can only describe by name. \
+                             Once sent, the ChronX protocol cannot change or reverse any transaction. \
+                             A limited cancellation window may apply. \
+                             You may also enable AI management, which could manage \u{2014} and potentially lose \
+                             \u{2014} all or a portion of your funds. \
+                             Proceed only if you understand what you are doing."
+                        </p>
+                        <button class="desktop-warning-dismiss"
+                            on:click=move |_| warning_dismissed.set(true)>
+                            "\u{2715}"
+                        </button>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
+
+            // Recipient mode: KX Address | Email | Freeform
+            <div class="recipient-mode-group">
                 <button type="button"
-                    class=move || if send_sub.get()==0 { "send-subtab active" } else { "send-subtab" }
-                    on:click=move |_| { send_sub.set(0); lock_date.set(String::new()); }
+                    class=move || if recipient_mode.get()==0 { "recipient-mode-btn active-kx" } else { "recipient-mode-btn" }
+                    on:click=move |_| { recipient_mode.set(0); send_sub.set(0); lock_date.set(String::new()); }
                     disabled=move || sending.get()>"KX Address"</button>
                 <button type="button"
-                    class=move || if send_sub.get()==1 { "send-subtab active" } else { "send-subtab" }
-                    on:click=move |_| { send_sub.set(1); lock_date.set(String::new()); }
-                    disabled=move || sending.get()>"Email Address"</button>
+                    class=move || if recipient_mode.get()==1 { "recipient-mode-btn active-email" } else { "recipient-mode-btn" }
+                    on:click=move |_| { recipient_mode.set(1); send_sub.set(1); lock_date.set(String::new()); }
+                    disabled=move || sending.get()>"Email"</button>
+                <button type="button"
+                    class=move || if recipient_mode.get()==2 { "recipient-mode-btn active-free" } else { "recipient-mode-btn" }
+                    on:click=move |_| { recipient_mode.set(2); send_sub.set(0); send_mode.set(1); lock_date.set(String::new()); }
+                    disabled=move || sending.get()>"Freeform"</button>
             </div>
+            // Freeform warning
+            {move || if recipient_mode.get() == 2 {
+                view! {
+                    <div class="freeform-warning">
+                        "The KX is locked on-chain to a cryptographic hash of the identifier you enter below. Neither you nor anyone else can spend it until the unlock date \u{2014} at which point any person who can prove they are the named recipient may claim it. You have 7 days to cancel (or until the unlock date, whichever comes first)."
+                    </div>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
 
             // Mode: Send Now | Send Later BETA
             <div class="send-mode-row">
@@ -2800,95 +3164,113 @@ fn SendPanel(
                     disabled=move || sending.get()>"\u{23f3} Send Later BETA"</button>
             </div>
 
-            // KX or Email address field
-            {move || if send_sub.get() == 0 {
-                let lbl = if send_mode.get() == 0 { "To (account ID)" }
-                          else { "To (recipient public key hex \u{b7} leave blank to promise to yourself)" };
-                view! {
-                    <div class="field">
-                        <label>{lbl}</label>
-                        <div style="display:flex;gap:8px;align-items:center">
-                            {move || if send_mode.get() == 0 {
-                                view! {
-                                    <input type="text" placeholder="Base-58 address\u{2026}" style="flex:1"
-                                        prop:value=move || to_addr.get()
-                                        on:input=move |ev| to_addr.set(event_target_value(&ev))
-                                        disabled=move || sending.get() />
-                                }.into_any()
-                            } else {
-                                view! {
-                                    <input type="text"
-                                        placeholder="Leave blank for self \u{b7} paste pubkey hex or scan QR\u{2026}"
-                                        style="flex:1"
-                                        prop:value=move || to_pubkey.get()
-                                        on:input=move |ev| to_pubkey.set(event_target_value(&ev))
-                                        disabled=move || sending.get() />
-                                }.into_any()
+            // Recipient field — depends on recipient_mode
+            {move || match recipient_mode.get() {
+                // KX Address
+                0 => {
+                    let lbl = if send_mode.get() == 0 { "To (account ID)" }
+                              else { "To (recipient public key hex \u{b7} leave blank to promise to yourself)" };
+                    view! {
+                        <div class="field">
+                            <label>{lbl}</label>
+                            <div style="display:flex;gap:8px;align-items:center">
+                                {move || if send_mode.get() == 0 {
+                                    view! {
+                                        <input type="text" placeholder="Base-58 address\u{2026}" style="flex:1"
+                                            prop:value=move || to_addr.get()
+                                            on:input=move |ev| to_addr.set(event_target_value(&ev))
+                                            disabled=move || sending.get() />
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <input type="text"
+                                            placeholder="Leave blank for self \u{b7} paste pubkey hex or scan QR\u{2026}"
+                                            style="flex:1"
+                                            prop:value=move || to_pubkey.get()
+                                            on:input=move |ev| to_pubkey.set(event_target_value(&ev))
+                                            disabled=move || sending.get() />
+                                    }.into_any()
+                                }}
+                                <button type="button" style="white-space:nowrap"
+                                    on:click=on_scan_qr
+                                    disabled=move || sending.get()>"📷 Scan QR"</button>
+                            </div>
+                            {move || {
+                                let s = scan_msg.get();
+                                if s.is_empty() { view! { <span></span> }.into_any() }
+                                else {
+                                    let cls = if s.starts_with("Scan") || s.starts_with("No file") { "msg error" } else { "msg success" };
+                                    view! { <p class=cls style="margin-top:4px">{s}</p> }.into_any()
+                                }
                             }}
-                            <button type="button" style="white-space:nowrap"
-                                on:click=on_scan_qr
-                                disabled=move || sending.get()>"📷 Scan QR"</button>
-                        </div>
-                        {move || {
-                            let s = scan_msg.get();
-                            if s.is_empty() { view! { <span></span> }.into_any() }
-                            else {
-                                let cls = if s.starts_with("Scan") || s.starts_with("No file") { "msg error" } else { "msg success" };
-                                view! { <p class=cls style="margin-top:4px">{s}</p> }.into_any()
-                            }
-                        }}
-                        {move || if send_mode.get() == 1 {
-                            view! {
-                                <p class="label" style="margin-top:4px">
-                                    {move || if to_pubkey.get().is_empty() {
-                                        "Promising to: yourself"
-                                    } else {
-                                        "Promising to: recipient (custom key)"
-                                    }}
-                                </p>
-                            }.into_any()
-                        } else { view! { <span></span> }.into_any() }}
-                    </div>
-                }.into_any()
-            } else {
-                view! {
-                    <div class="field">
-                        <label>"Recipient Email Address"</label>
-                        <input type="email" placeholder="recipient@example.com"
-                            prop:value=move || email.get()
-                            on:input=move |ev| email.set(event_target_value(&ev))
-                            disabled=move || sending.get() />
-                        // Self-email warning (FIX 8)
-                        {move || {
-                            let user_email = claim_email.get();
-                            let entered = email.get();
-                            if !user_email.is_empty() && !entered.is_empty()
-                                && user_email.to_lowercase() == entered.to_lowercase()
-                            {
+                            {move || if send_mode.get() == 1 {
                                 view! {
-                                    <p class="msg mining" style="margin-top:6px;font-size:13px">
-                                        "\u{26a0} This is your registered claim email. "
-                                        "The KX will be sent to your own wallet automatically when you click Claim in your email."
+                                    <p class="label" style="margin-top:4px">
+                                        {move || if to_pubkey.get().is_empty() {
+                                            "Promising to: yourself"
+                                        } else {
+                                            "Promising to: recipient (custom key)"
+                                        }}
                                     </p>
                                 }.into_any()
-                            } else { view! { <span></span> }.into_any() }
-                        }}
-                    </div>
-                }.into_any()
+                            } else { view! { <span></span> }.into_any() }}
+                        </div>
+                    }.into_any()
+                }
+                // Email
+                1 => {
+                    view! {
+                        <div class="field">
+                            <label>"Recipient Email Address"</label>
+                            <input type="email" placeholder="recipient@example.com"
+                                prop:value=move || email.get()
+                                on:input=move |ev| email.set(event_target_value(&ev))
+                                disabled=move || sending.get() />
+                            // Self-email warning (FIX 8)
+                            {move || {
+                                let user_email = claim_email.get();
+                                let entered = email.get();
+                                if !user_email.is_empty() && !entered.is_empty()
+                                    && user_email.to_lowercase() == entered.to_lowercase()
+                                {
+                                    view! {
+                                        <p class="msg mining" style="margin-top:6px;font-size:13px">
+                                            "\u{26a0} This is your registered claim email. "
+                                            "The KX will be sent to your own wallet automatically when you click Claim in your email."
+                                        </p>
+                                    }.into_any()
+                                } else { view! { <span></span> }.into_any() }
+                            }}
+                        </div>
+                    }.into_any()
+                }
+                // Freeform
+                _ => {
+                    view! {
+                        <div class="field">
+                            <label>"Recipient Name or Description"</label>
+                            <input type="text" placeholder="e.g. Emma Johnson, born 2019 \u{b7} Greenpeace Foundation \u{b7} My future self"
+                                prop:value=move || freeform_recip.get()
+                                on:input=move |ev| freeform_recip.set(event_target_value(&ev))
+                                disabled=move || sending.get() />
+                        </div>
+                    }.into_any()
+                }
             }}
 
             // Amount
             <div class="field">
                 <label>"Amount (KX)"</label>
                 <input type="text" inputmode="decimal" placeholder="0.000000"
-                    prop:value=move || amount.get()
+                    prop:value=move || format_amount_display(&amount.get())
                     on:input=move |ev| {
                         let raw = event_target_value(&ev);
-                        // Allow digits, at most one decimal point, max 6 decimal places
+                        // Strip commas (display-only), then filter to digits + one dot + max 6 decimals
+                        let stripped: String = raw.chars().filter(|&c| c != ',').collect();
                         let filtered: String = {
                             let mut has_dot = false;
                             let mut decimals = 0u8;
-                            raw.chars().filter(|&c| {
+                            stripped.chars().filter(|&c| {
                                 if c.is_ascii_digit() {
                                     if has_dot { decimals += 1; decimals <= 6 } else { true }
                                 } else if c == '.' && !has_dot {
@@ -2976,6 +3358,31 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
+            // Beneficiary description (grantor_intent) — Send Later only
+            {move || if send_mode.get() == 1 {
+                view! {
+                    <div class="beneficiary-field">
+                        <label>"Beneficiary Description "<span style="color:#666;font-size:0.8rem">"(optional \u{2014} strongly recommended for promises over 1 year)"</span></label>
+                        <textarea class="lp-textarea" rows="3" maxlength="1000"
+                            placeholder="Who is this for? Describe the intended recipient so they can be identified in the future.\nExample: Emma Johnson, my daughter, born 2019. Last known email: emma@example.com."
+                            prop:value=move || grantor_intent.get()
+                            on:input=move |ev| grantor_intent.set(event_target_value(&ev))
+                            disabled=move || sending.get()></textarea>
+                        <div class="field-meta">
+                            <span class="field-hint">"In 20 years your recipient may have a different email. Help them \u{2014} and us \u{2014} find them."</span>
+                            <span class=move || { let c = grantor_intent.get().len(); if c > 900 { "char-counter near-limit" } else { "char-counter" } }>
+                                {move || format!("{} / 1000", grantor_intent.get().len())}
+                            </span>
+                        </div>
+                        <p class="beneficiary-disclosure">
+                            "The information you type here will be securely encrypted on the blockchain. \
+                             It becomes readable by bonded verifiers only if the funds are undeliverable \
+                             after 90 days."
+                        </p>
+                    </div>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
+
             // Email info box
             {move || if send_sub.get() == 1 {
                 let txt = if send_mode.get() == 0 {
@@ -2983,7 +3390,7 @@ fn SendPanel(
                 } else {
                     "The recipient will receive an email and has 72 hours to accept. \
                      If not accepted, your KX is automatically returned. \
-                     You can cancel from History at any time."
+                     You may cancel this promise from History within your cancellation window only."
                 };
                 view! {
                     <div style="background:#1a1d27;border:1px solid #2a2d37;border-radius:8px;padding:10px 12px;margin-bottom:8px">
@@ -2991,6 +3398,158 @@ fn SendPanel(
                     </div>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
+
+            // ── AI / MISAI management section (Send Later only) ────────────────
+            {move || {
+                if send_mode.get() != 1 {
+                    return view! { <span></span> }.into_any();
+                }
+                let rl = risk_level.get();
+                let (_risk_text, _risk_class) = match rl {
+                    1..=20   => ("Capital Preservation", "safe"),
+                    21..=40  => ("Conservative Growth", "safe"),
+                    41..=60  => ("Balanced", "moderate"),
+                    61..=80  => ("Growth", "moderate"),
+                    _        => ("Aggressive Growth", "aggressive"),
+                };
+                view! {
+                    <div class="ai-section">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                            <label style="font-weight:600;color:#e5e7eb">"AI Management (MISAI)"</label>
+                            <label class="toggle-switch">
+                                <input type="checkbox"
+                                    prop:checked=move || ai_managed.get()
+                                    on:change=move |ev| {
+                                        use wasm_bindgen::JsCast;
+                                        let checked = ev.target()
+                                            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                            .map(|i| i.checked()).unwrap_or(false);
+                                        ai_managed.set(checked);
+                                    } />
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        {move || if ai_managed.get() {
+                            let rl2 = risk_level.get();
+                            let (rt2, rc2) = match rl2 {
+                                1..=20   => ("Capital Preservation", "safe"),
+                                21..=40  => ("Conservative Growth", "safe"),
+                                41..=60  => ("Balanced", "moderate"),
+                                61..=80  => ("Growth", "moderate"),
+                                _        => ("Aggressive Growth", "aggressive"),
+                            };
+                            view! {
+                                <div>
+                                    <p style="color:#9ca3af;font-size:13px;margin:0 0 12px">"The AI agent will actively manage a portion of the promise value according to your risk preference."</p>
+
+                                    // Slider 1: Percentage to manage
+                                    <div class="field" style="margin-bottom:16px">
+                                        <label style="margin-bottom:4px">"Percentage to manage"</label>
+                                        <div class="risk-slider-row">
+                                            <span style="color:#888;font-size:12px">"1%"</span>
+                                            <input type="range" class="pct-slider" min="1" max="100" step="1"
+                                                prop:value=move || ai_percentage.get().to_string()
+                                                on:input=move |ev| {
+                                                    let v: u32 = event_target_value(&ev).parse().unwrap_or(1);
+                                                    ai_percentage.set(v);
+                                                }
+                                                disabled=move || sending.get() />
+                                            <span style="color:#888;font-size:12px">"100%"</span>
+                                        </div>
+                                        <div style="text-align:center;margin-top:4px">
+                                            <span class="risk-number">{move || ai_percentage.get()}</span>
+                                            <span style="color:#888;font-size:0.85rem">"% managed"</span>
+                                        </div>
+                                    </div>
+
+                                    // Slider 2: Risk level
+                                    <div class="field" style="margin-bottom:0">
+                                        <label style="margin-bottom:4px">
+                                            "Risk Level "
+                                            <span class=format!("risk-label {}", rc2)>{rt2}</span>
+                                        </label>
+                                        <div class="risk-slider-row">
+                                            <span style="color:#888;font-size:12px">"Conservative"</span>
+                                            <input type="range" class="risk-slider" min="1" max="100" step="1"
+                                                style=move || {
+                                                    let v = risk_level.get();
+                                                    let (r, g) = if v <= 50 {
+                                                        let t = v as f64 / 50.0;
+                                                        let r = (t * 255.0) as u32;
+                                                        (r, 200u32)
+                                                    } else {
+                                                        let t = (v as f64 - 50.0) / 50.0;
+                                                        let g = ((1.0 - t) * 200.0) as u32;
+                                                        (255u32, g)
+                                                    };
+                                                    format!(
+                                                        "background: linear-gradient(to right, \
+                                                         rgb(34,197,94) 0%, \
+                                                         rgb(234,179,8) 50%, \
+                                                         rgb(239,68,68) 100%); \
+                                                         accent-color: rgb({},{},0);",
+                                                        r, g
+                                                    )
+                                                }
+                                                prop:value=move || risk_level.get().to_string()
+                                                on:input=move |ev| {
+                                                    let v: u32 = event_target_value(&ev).parse().unwrap_or(50);
+                                                    risk_level.set(v);
+                                                }
+                                                disabled=move || sending.get() />
+                                            <span style="color:#888;font-size:12px">"Aggressive"</span>
+                                        </div>
+                                        <div style="text-align:center;margin-top:4px">
+                                            <span style="color:#888;font-size:0.85rem">"Level: "</span>
+                                            <span class="risk-number">{move || risk_level.get()}</span>
+                                            <span style="color:#888;font-size:0.85rem">"/100"</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
+                    </div>
+                }.into_any()
+            }}
+
+            // ── Long Promise badge (>1 year) ─────────────────────────────────────
+            {move || {
+                if !is_long_promise.get() {
+                    return view! { <span></span> }.into_any();
+                }
+                view! {
+                    <div class="long-promise-section">
+                        <div class="long-promise-header">
+                            <span class="long-promise-badge">"\u{23f3} Long Promise"</span>
+                            <span style="color:#9ca3af;font-size:0.82rem">"This promise unlocks in over a year. Axiom consent is required."</span>
+                        </div>
+                        <div class="axiom-consent-row">
+                            <label class="axiom-checkbox-label">
+                                <input type="checkbox"
+                                    prop:checked=move || axiom_consented.get()
+                                    on:change=move |ev| {
+                                        use wasm_bindgen::JsCast;
+                                        let checked = ev.target()
+                                            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                            .map(|i| i.checked()).unwrap_or(false);
+                                        axiom_consented.set(checked);
+                                    }
+                                />
+                                " I have read and accept the "
+                                <a href="https://chronx.io/governance.html#axioms" target="_blank"
+                                   class="axiom-link">"Promise Axioms"</a>
+                            </label>
+                        </div>
+                        {move || if !axiom_consented.get() {
+                            view! { <p class="axiom-required">"Required: accept the Promise Axioms before sending."</p> }.into_any()
+                        } else {
+                            view! { <span class="msg success" style="font-size:13px;margin:4px 0">"\u{2705} Axiom consent recorded"</span> }.into_any()
+                        }}
+                    </div>
+                }.into_any()
+            }}
 
             // Series entries (Email + Send Later only)
             {move || {
@@ -3041,15 +3600,25 @@ fn SendPanel(
             {move || if send_mode.get() == 1 {
                 view! {
                     <p class="lock-warning">
-                        "\u{26a0} Promised funds cannot be recovered before the unlock date. "
-                        "This action is permanent and cannot be undone."
+                        "\u{26a0} You may cancel this promise from History within the cancellation window."
+                        <br/>
+                        "Once the window closes, the grantor cannot recover promised funds under any circumstances. A promise is a promise."
                     </p>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
             // Submit button
             <button class=move || if send_mode.get()==1 { "primary danger" } else { "primary" }
-                on:click=on_send disabled=move || sending.get()>
+                style=move || if is_long_promise.get() && !axiom_consented.get() { "opacity:0.5" } else { "" }
+                on:click=move |ev: web_sys::MouseEvent| {
+                    // Gate: if long promise and axiom not yet consented, open modal instead of sending
+                    if is_long_promise.get() && !axiom_consented.get() {
+                        axiom_modal_open.set(true);
+                        return;
+                    }
+                    on_send(ev);
+                }
+                disabled=move || sending.get() || (is_long_promise.get() && !axiom_consented.get())>
                 {move || {
                     let has_series = !series_entries.get().is_empty() && send_sub.get() == 1 && send_mode.get() == 1;
                     if sending.get() {
@@ -3133,6 +3702,53 @@ fn SendPanel(
                 </div>
             }.into_any()
         } else { view! { <span></span> }.into_any() }}
+        <AxiomConsentModal open=axiom_modal_open consented=axiom_consented consent_hash=axiom_consent_hash />
+    }
+}
+
+// ── AxiomConsentModal ─────────────────────────────────────────────────────────
+
+#[component]
+fn AxiomConsentModal(
+    open: RwSignal<bool>,
+    consented: RwSignal<bool>,
+    consent_hash: RwSignal<String>,
+) -> impl IntoView {
+    view! {
+        {move || if open.get() {
+            view! {
+                <div class="axiom-modal-overlay" on:click=move |_| open.set(false)>
+                    <div class="axiom-modal-box" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                        <h3 style="margin:0 0 12px;color:#e5e7eb">"ChronX Promise Axioms"</h3>
+                        <div class="axiom-modal-body">
+                            <p>"By creating a Long Promise (over 1 year), you acknowledge:"</p>
+                            <ul style="padding-left:20px;color:#d1d5db;line-height:1.7">
+                                <li>"This promise becomes irrevocable after 7 days."</li>
+                                <li>"If AI management is enabled, your KX may be actively managed, which may result in gains or losses including total loss."</li>
+                                <li>"The risk level you set is advisory and does not guarantee a specific outcome."</li>
+                                <li>"ChronX bears no liability for the outcome of AI-managed promises."</li>
+                                <li>"You have read the full governance policy at chronx.io/governance.html."</li>
+                            </ul>
+                        </div>
+                        <div class="btn-row" style="margin-top:16px">
+                            <button class="btn-confirm" on:click=move |_| {
+                                consented.set(true);
+                                spawn_local(async move {
+                                    match call::<String>("get_axiom_consent_hash", no_args()).await {
+                                        Ok(h) => consent_hash.set(h),
+                                        Err(_) => consent_hash.set("unavailable".to_string()),
+                                    }
+                                });
+                                open.set(false);
+                            }>"I Accept"</button>
+                            <button class="btn-cancel" on:click=move |_| open.set(false)>"Cancel"</button>
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else {
+            view! { <span></span> }.into_any()
+        }}
     }
 }
 
@@ -3372,10 +3988,13 @@ fn CascadeSendPanel(
                                 view! {
                                     <div class="cascade-stage-row">
                                         <span class="stage-num">{i + 1}</span>
-                                        <input type="number" step="any" min="0.000001"
-                                            placeholder="KX"
-                                            prop:value=move || s.amount.get()
-                                            on:input=move |ev| s.amount.set(event_target_value(&ev))
+                                        <input type="text" inputmode="decimal"
+                                            placeholder="KX" style="width:100px"
+                                            prop:value=move || format_amount_display(&s.amount.get())
+                                            on:input=move |ev| {
+                                                let raw: String = event_target_value(&ev).chars().filter(|&c| c != ',').collect();
+                                                s.amount.set(raw);
+                                            }
                                             disabled=move || sending.get() />
                                         <select
                                             prop:value=move || s.unlock_mode.get().to_string()
@@ -3462,13 +4081,10 @@ fn CascadeSendPanel(
                         {move || {
                             let st = stages.get();
                             st.into_iter().enumerate().map(|(i, s)| {
-                                let amt = s.amount.get();
-                                let amt_display = if amt.is_empty() { "?".to_string() } else { format!("{amt} KX") };
-                                let date_display = stage_display_date(&s);
                                 view! {
                                     <div class="stage-line">
-                                        <span>{amt_display}</span>
-                                        <span class="stage-date">{format!("\u{2192} {date_display}")}</span>
+                                        <span>{move || { let a = s.amount.get(); if a.is_empty() { "? KX".to_string() } else { format!("{a} KX") } }}</span>
+                                        <span class="stage-date">{move || format!("\u{2192} {}", stage_display_date(&s))}</span>
                                     </div>
                                 }
                             }).collect_view()
@@ -3522,21 +4138,24 @@ fn CascadeSendPanel(
     }
 }
 
-// ── PromisesPanel (hidden — merged into HistoryPanel in v1.4.25) ──────────────
+// ── PromisesPanel — shows both incoming and outgoing with filters ─────────────
 
 #[component]
 fn PromisesPanel(
     info: RwSignal<Option<AccountInfo>>,
     lang: RwSignal<String>,
 ) -> impl IntoView {
-    let incoming = RwSignal::new(Vec::<TimeLockInfo>::new());
+    let all_promises = RwSignal::new(Vec::<TimeLockInfo>::new());
     let loading = RwSignal::new(false);
+
+    let sort_by = RwSignal::new("date".to_string());       // "date" | "amount"
+    let sort_asc = RwSignal::new(false);                   // false = newest/largest first
 
     let reload = move || {
         spawn_local(async move {
             loading.set(true);
-            if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
-                incoming.set(locks);
+            if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_all_promises", no_args()).await {
+                all_promises.set(locks);
             }
             loading.set(false);
         });
@@ -3544,72 +4163,183 @@ fn PromisesPanel(
 
     Effect::new(move |_| { reload(); });
 
-    // Auto-refresh every 30 seconds to catch auto-delivered promises
+    // Auto-refresh every 30 seconds
     Effect::new(move |_| {
         spawn_local(async move {
             loop {
                 delay_ms(30_000).await;
-                if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_pending_incoming", no_args()).await {
-                    incoming.set(locks);
+                if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_all_promises", no_args()).await {
+                    all_promises.set(locks);
                 }
             }
         });
     });
 
+    // Derived: separate incoming and outgoing lists
+    let sort_locks = move |mut locks: Vec<TimeLockInfo>| -> Vec<TimeLockInfo> {
+        let sb = sort_by.get();
+        let asc = sort_asc.get();
+        locks.sort_by(|a, b| {
+            let cmp = match sb.as_str() {
+                "amount" => {
+                    let a_val: u64 = a.amount_chronos.parse().unwrap_or(0);
+                    let b_val: u64 = b.amount_chronos.parse().unwrap_or(0);
+                    a_val.cmp(&b_val)
+                }
+                _ => a.unlock_at.cmp(&b.unlock_at), // "date"
+            };
+            if asc { cmp } else { cmp.reverse() }
+        });
+        locks
+    };
+    let incoming_promises = move || {
+        let locks: Vec<TimeLockInfo> = all_promises.get().into_iter()
+            .filter(|l| l.direction.as_deref() == Some("incoming"))
+            .collect();
+        sort_locks(locks)
+    };
+    let outgoing_promises = move || {
+        let locks: Vec<TimeLockInfo> = all_promises.get().into_iter()
+            .filter(|l| l.direction.as_deref() == Some("outgoing"))
+            .collect();
+        sort_locks(locks)
+    };
+
     view! {
         <div class="card">
-            <h3 class="section-title">{move || t(&lang.get(), "promises_header")}</h3>
-            <p class="muted" style="font-size:13px;margin-bottom:16px">
-                {move || t(&lang.get(), "promises_sub")}
-            </p>
+            // ── Sort controls ───────────────────────────────────────────────
+            <div class="promises-filter-bar">
+                <div class="promises-sort-controls">
+                    <select class="pf-select"
+                        on:change=move |ev| {
+                            use wasm_bindgen::JsCast;
+                            let val = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()).map(|i| i.value()).unwrap_or_default();
+                            sort_by.set(val);
+                        }>
+                        <option value="date" selected=move || sort_by.get() == "date">
+                            {move || t(&lang.get(), "sort_date")}
+                        </option>
+                        <option value="amount" selected=move || sort_by.get() == "amount">
+                            {move || t(&lang.get(), "sort_amount")}
+                        </option>
+                    </select>
+                    <button type="button" class="pf-dir-btn"
+                        on:click=move |_| sort_asc.set(!sort_asc.get_untracked())>
+                        {move || if sort_asc.get() { "\u{2191}" } else { "\u{2193}" }}
+                    </button>
+                </div>
+            </div>
+
+            // ── Section 1: KX Promised To You (incoming) ────────────────────
+            <h3 class="section-title" style="margin-top:12px">
+                {move || t(&lang.get(), "promises_incoming_header")}
+            </h3>
             {move || {
-                let locks = incoming.get();
+                let locks = incoming_promises();
                 if loading.get() {
                     view! { <p class="muted">"\u{2026}"</p> }.into_any()
                 } else if locks.is_empty() {
                     view! {
-                        <div style="text-align:center;padding:32px 16px">
-                            <div style="font-size:48px;margin-bottom:12px;opacity:0.4">{"\u{1f4e6}"}</div>
-                            <p style="font-size:16px;font-weight:600;color:#e0e0e0;margin-bottom:6px">
-                                {move || t(&lang.get(), "promises_empty_title")}
-                            </p>
+                        <div style="text-align:center;padding:20px 16px">
                             <p class="muted" style="font-size:13px">
-                                {move || t(&lang.get(), "promises_empty_sub")}
+                                {move || t(&lang.get(), "promises_incoming_empty")}
                             </p>
                         </div>
                     }.into_any()
                 } else {
+                    let lang_val = lang.get();
                     view! {
                         <div class="timelock-list">
                             {locks.into_iter().map(|lock| {
                                 let now = (js_sys::Date::now() / 1000.0) as i64;
-                                let sender_label = shorten_addr(&lock.sender);
+                                let peer_label = format!("{}: {}", t(&lang_val, "from"), shorten_addr(&lock.sender));
                                 let status_label = {
                                     let diff = lock.unlock_at - now;
                                     if diff <= 0 {
-                                        t(&lang.get(), "arriving_soon")
+                                        t(&lang_val, "arriving_soon")
                                     } else if diff < 3600 {
-                                        let mins = diff / 60;
-                                        format!("{} {}m", t(&lang.get(), "unlocks_in"), mins.max(1))
+                                        format!("{} {}m", t(&lang_val, "unlocks_in"), (diff / 60).max(1))
                                     } else if diff < 86400 {
-                                        let hours = diff / 3600;
-                                        let mins = (diff % 3600) / 60;
-                                        format!("{} {}h {}m", t(&lang.get(), "unlocks_in"), hours, mins)
+                                        format!("{} {}h {}m", t(&lang_val, "unlocks_in"), diff / 3600, (diff % 3600) / 60)
                                     } else {
-                                        let days = diff / 86400;
-                                        format!("{} {}d", t(&lang.get(), "unlocks_in"), days)
+                                        format!("{} {}d", t(&lang_val, "unlocks_in"), diff / 86400)
+                                    }
+                                };
+                                let amount_str = format!("+{} KX", format_kx(&lock.amount_chronos));
+                                let memo_text = lock.memo.clone().unwrap_or_default();
+                                view! {
+                                    <div class="timelock-item" style="position:relative">
+                                        <span class="badge-incoming" style="position:absolute;top:8px;right:8px">
+                                            {format!("\u{2190} {}", t(&lang_val, "incoming"))}
+                                        </span>
+                                        <div class="tl-row">
+                                            <span class="tl-amount" style="color:#5cb8ff">{amount_str}</span>
+                                            <span class="tl-status" style="color:#DAA520">{status_label}</span>
+                                        </div>
+                                        <div class="tl-row">
+                                            <span class="tl-label">{peer_label}</span>
+                                        </div>
+                                        {if !memo_text.is_empty() {
+                                            view! { <p class="tl-memo">{memo_text}</p> }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }.into_any()
+                }
+            }}
+
+            // ── Section 2: Promises You've Made (outgoing) ──────────────────
+            <h3 class="section-title" style="margin-top:24px;padding-top:16px;border-top:1px solid #333">
+                {move || t(&lang.get(), "promises_outgoing_header")}
+            </h3>
+            {move || {
+                let locks = outgoing_promises();
+                if loading.get() {
+                    view! { <p class="muted">"\u{2026}"</p> }.into_any()
+                } else if locks.is_empty() {
+                    view! {
+                        <div style="text-align:center;padding:20px 16px">
+                            <p class="muted" style="font-size:13px">
+                                {move || t(&lang.get(), "promises_outgoing_empty")}
+                            </p>
+                        </div>
+                    }.into_any()
+                } else {
+                    let lang_val = lang.get();
+                    view! {
+                        <div class="timelock-list">
+                            {locks.into_iter().map(|lock| {
+                                let now = (js_sys::Date::now() / 1000.0) as i64;
+                                let peer_label = format!("{}: {}", t(&lang_val, "to"), shorten_addr(&lock.recipient_account_id));
+                                let status_label = {
+                                    let diff = lock.unlock_at - now;
+                                    if diff <= 0 {
+                                        lock.status.clone()
+                                    } else if diff < 3600 {
+                                        format!("{} {}m", t(&lang_val, "unlocks_in"), (diff / 60).max(1))
+                                    } else if diff < 86400 {
+                                        format!("{} {}h {}m", t(&lang_val, "unlocks_in"), diff / 3600, (diff % 3600) / 60)
+                                    } else {
+                                        format!("{} {}d", t(&lang_val, "unlocks_in"), diff / 86400)
                                     }
                                 };
                                 let amount_str = format!("{} KX", format_kx(&lock.amount_chronos));
                                 let memo_text = lock.memo.clone().unwrap_or_default();
                                 view! {
-                                    <div class="timelock-item">
+                                    <div class="timelock-item" style="position:relative">
+                                        <span class="badge-outgoing" style="position:absolute;top:8px;right:8px">
+                                            {format!("\u{2192} {}", t(&lang_val, "outgoing"))}
+                                        </span>
                                         <div class="tl-row">
                                             <span class="tl-amount">{amount_str}</span>
                                             <span class="tl-status" style="color:#DAA520">{status_label}</span>
                                         </div>
                                         <div class="tl-row">
-                                            <span class="tl-label">{format!("From: {}", sender_label)}</span>
+                                            <span class="tl-label">{peer_label}</span>
                                         </div>
                                         {if !memo_text.is_empty() {
                                             view! { <p class="tl-memo">{memo_text}</p> }.into_any()
@@ -3908,8 +4638,19 @@ fn HistoryPanel(
                 let mut list = entries.get();
 
                 // Convert incoming promises to TxHistoryEntry for unified display
+                // Filter out self-referencing locks (sender == own wallet) to avoid
+                // ghost "Incoming Promise" rows for the user's own outgoing sends.
+                // NOTE: use .get() (not get_untracked) so the closure re-runs when
+                // info loads — otherwise own_account_id is empty on first render
+                // and the filter silently fails.
+                let own_account_id = info.get()
+                    .map(|i| i.account_id.clone())
+                    .unwrap_or_default();
                 let inc_locks = incoming.get();
                 for lock in &inc_locks {
+                    if lock.sender == own_account_id || own_account_id.is_empty() {
+                        continue; // skip self-referencing lock (or skip all if info not loaded yet)
+                    }
                     list.push(TxHistoryEntry {
                         tx_id: lock.lock_id.clone(),
                         tx_type: "Incoming Promise".to_string(),
@@ -4005,11 +4746,15 @@ fn HistoryPanel(
                                     _ => "\u{2197}",
                                 };
                                 // Type label badge
+                                let now_ts = (js_sys::Date::now() / 1000.0) as i64;
+                                let is_scheduled = matches!(entry.tx_type.as_str(), "Promise Sent" | "TimeLockCreate")
+                                    && entry.unlock_date.map_or(false, |u| u > now_ts);
                                 let type_label = match entry.tx_type.as_str() {
                                     "Transfer Sent" => "SENT",
                                     "Transfer Received" => "RECEIVED",
                                     "Email Send" => "SENT",
                                     "Email Claimed" => "RECEIVED",
+                                    "Promise Sent" | "TimeLockCreate" if is_scheduled => "SCHEDULED",
                                     "Promise Sent" | "TimeLockCreate" => "OUTGOING PROMISE",
                                     "Promise Kept" => "RECEIVED",
                                     "TimeLockClaim" => "RECEIVED",
@@ -4021,6 +4766,7 @@ fn HistoryPanel(
                                     "RECEIVED" => "history-type-badge received",
                                     "INCOMING PROMISE" => "history-type-badge incoming-promise",
                                     "OUTGOING PROMISE" => "history-type-badge outgoing-promise",
+                                    "SCHEDULED" => "history-type-badge scheduled",
                                     _ => "history-type-badge",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
@@ -4090,6 +4836,8 @@ fn HistoryPanel(
                                     "Promised \u{2713}".to_string()
                                 } else if can_cancel && !is_email_send {
                                     "Pending \u{2014} subject to reversion".to_string()
+                                } else if entry.status == "Pending Claim" {
+                                    "Pending".to_string()
                                 } else {
                                     entry.status.clone()
                                 };
@@ -4129,7 +4877,11 @@ fn HistoryPanel(
                                                 "Expired \u{2014} Reclaiming" => "email-badge reclaiming",
                                                 _               => "email-badge expired",
                                             };
-                                            let badge_text = entry_status.clone();
+                                            let badge_text = if entry_status == "Pending Claim" {
+                                                "Pending".to_string()
+                                            } else {
+                                                entry_status.clone()
+                                            };
                                             let reclaim_lock_id = entry.tx_id.clone();
                                             let cancel_cascade_for_click = entry_cascade_ids.clone();
                                             view! {
@@ -4174,7 +4926,7 @@ fn HistoryPanel(
                                                                     cancel_cascade_ids.set(cancel_cascade_for_click.clone());
                                                                     cancel_target.set(Some(inline_cancel_id.clone()));
                                                                 }}>
-                                                                {if is_cascade { "Cancel Series" } else { "Cancel" }}
+                                                                "Cancel"
                                                             </button>
                                                         }.into_any()
                                                     } else { view! { <span></span> }.into_any() }}
@@ -4225,9 +4977,9 @@ fn HistoryPanel(
                                             if is_expanded {
                                                 let cancel_id = cancel_lock_id.clone();
                                                 let detail_cascade_ids = entry_cascade_ids.clone();
-                                                let btn_label = if is_cascade && is_email_send {
-                                                    "Cancel Series"
-                                                } else if is_email_send { "Cancel Send" } else { "Cancel Promise" };
+                                                let btn_label = if is_email_send {
+                                                    "Cancel"
+                                                } else { "Cancel Promise" };
                                                 let code_opt = entry_claim_code.clone();
                                                 let detail_reclaim_id = entry.tx_id.clone();
                                                 view! {
@@ -4333,19 +5085,17 @@ fn HistoryPanel(
                 let is_email = cancel_is_email.get_untracked();
                 let cascade_ids = cancel_cascade_ids.get_untracked();
                 let is_series = cascade_ids.len() > 1;
-                let modal_title = if is_series {
-                    "Cancel Email Series?"
-                } else if is_email { "Cancel Email Send?" } else { "Cancel Promise?" };
-                let modal_body = if is_series {
-                    "Cancel all sends in this series? The KX will return to your balance immediately."
-                } else if is_email {
-                    "Cancel this send? The KX will return to your balance immediately."
+                let modal_title = if is_email { "Cancel Email Send?" } else { "Cancel Promise?" };
+                let modal_body = if is_email {
+                    if is_series {
+                        "Cancel all sends in this series? The KX will return to your balance immediately."
+                    } else {
+                        "Cancel this send? The KX will return to your balance immediately."
+                    }
                 } else {
                     "Are you sure you wish to cancel this Promise? The KX will be returned to your balance immediately. This cannot be undone."
                 };
-                let confirm_label = if is_series {
-                    "Yes, Cancel Series"
-                } else if is_email { "Yes, Cancel Send" } else { "Yes, Cancel Promise" };
+                let confirm_label = if is_email { "Yes, Cancel" } else { "Yes, Cancel Promise" };
                 view! {
                     <div class="modal-overlay" on:click=move |_| {
                         if !cancel_busy.get_untracked() { cancel_target.set(None); }
@@ -4700,6 +5450,7 @@ fn SettingsPanel(
     let import_key        = RwSignal::new(String::new());
     let import_msg        = RwSignal::new(String::new());
     let import_busy       = RwSignal::new(false);
+    let import_confirm    = RwSignal::new(false);
 
     // Cold storage state
     let show_cold         = RwSignal::new(false);
@@ -5210,6 +5961,7 @@ fn SettingsPanel(
                 <button on:click=move |_| {
                     import_key.set(String::new());
                     import_msg.set(String::new());
+                    import_confirm.set(false);
                     show_import.set(true);
                 }>{move || format!("\u{1f4e5} {}", t(&lang.get(), "settings_import_key"))}</button>
             </div>
@@ -5568,7 +6320,13 @@ fn SettingsPanel(
                                             </div>
                                         }.into_any()
                                     } else {
-                                        let dl_url = info.download_url.clone();
+                                        let dl_url = if is_desktop() {
+                                            info.download_url.clone()
+                                        } else {
+                                            "market://details?id=com.chronx.wallet".to_string()
+                                        };
+                                        let fallback_url = "https://play.google.com/store/apps/details?id=com.chronx.wallet".to_string();
+                                        let desktop = is_desktop();
                                         view! {
                                             <div class="update-info">
                                                 <p class="update-available">
@@ -5584,11 +6342,18 @@ fn SettingsPanel(
                                                 <button class="primary" style="margin-top:10px"
                                                     on:click=move |_| {
                                                         let url = dl_url.clone();
+                                                        let fallback = fallback_url.clone();
+                                                        let is_mobile = !desktop;
                                                         spawn_local(async move {
                                                             let args = serde_wasm_bindgen::to_value(
                                                                 &serde_json::json!({ "url": url })
                                                             ).unwrap_or(no_args());
-                                                            let _ = call::<()>("open_url", args).await;
+                                                            if call::<()>("open_url", args).await.is_err() && is_mobile {
+                                                                let fb_args = serde_wasm_bindgen::to_value(
+                                                                    &serde_json::json!({ "url": fallback })
+                                                                ).unwrap_or(no_args());
+                                                                let _ = call::<()>("open_url", fb_args).await;
+                                                            }
                                                         });
                                                     }>{if is_desktop() { "\u{2b07} Download Update" } else { "\u{25b6} Update on Google Play" }}</button>
                                             </div>
@@ -5790,37 +6555,52 @@ fn SettingsPanel(
                                 let m = import_msg.get();
                                 if m.is_empty() { view! { <span></span> }.into_any() }
                                 else {
-                                    let cls = if m.starts_with("Error") || m.starts_with("Invalid") || m.starts_with("A wallet") { "msg error" } else { "msg success" };
+                                    let cls = if m.starts_with("Error") || m.starts_with("Invalid") || m.starts_with("A wallet") || m.starts_with("This will REPLACE") { "msg error" } else { "msg success" };
                                     view! { <p class=cls>{m}</p> }.into_any()
                                 }
                             }}
                             <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-                                <button class="primary"
+                                <button class={move || if import_confirm.get() { "btn-danger" } else { "primary" }}
                                     disabled=move || import_busy.get() || import_key.get().trim().is_empty()
                                     on:click=move |_| {
                                         let key = import_key.get_untracked().trim().to_string();
+                                        let confirming = import_confirm.get_untracked();
                                         import_busy.set(true);
                                         import_msg.set(String::new());
                                         spawn_local(async move {
-                                            let args = serde_wasm_bindgen::to_value(
-                                                &serde_json::json!({ "backupKey": key })
-                                            ).unwrap_or(no_args());
+                                            let args = if confirming {
+                                                serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "backupKey": key, "force": true })
+                                                ).unwrap_or(no_args())
+                                            } else {
+                                                serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "backupKey": key })
+                                                ).unwrap_or(no_args())
+                                            };
                                             match call::<String>("restore_wallet", args).await {
                                                 Ok(acct) => {
                                                     import_msg.set(format!("Wallet restored! Account: {}", acct));
-                                                    // Delay then reload
+                                                    import_confirm.set(false);
                                                     delay_ms(2000).await;
                                                     let _ = web_sys::window().map(|w| w.location().reload());
                                                 }
-                                                Err(e) => import_msg.set(format!("{e}")),
+                                                Err(e) => {
+                                                    if e.contains("WALLET_EXISTS_CONFIRM") {
+                                                        import_confirm.set(true);
+                                                        import_msg.set("This will REPLACE your current wallet. Make sure you have backed up your private key. Click the red button to confirm.".to_string());
+                                                    } else {
+                                                        import_confirm.set(false);
+                                                        import_msg.set(format!("{e}"));
+                                                    }
+                                                }
                                             }
                                             import_busy.set(false);
                                         });
                                     }>
-                                    {move || if import_busy.get() { "Restoring\u{2026}" } else { "Restore Wallet" }}
+                                    {move || if import_busy.get() { "Restoring\u{2026}".to_string() } else if import_confirm.get() { "Yes, Replace My Wallet".to_string() } else { "Restore Wallet".to_string() }}
                                 </button>
                                 <button disabled=move || import_busy.get()
-                                    on:click=move |_| show_import.set(false)>"Cancel"</button>
+                                    on:click=move |_| { import_confirm.set(false); show_import.set(false); }>"Cancel"</button>
                             </div>
                         </div>
                     </div>
@@ -5918,5 +6698,6 @@ fn SettingsPanel(
                 </div>
             }.into_any()
         } else { view! { <span></span> }.into_any() }}
+
     }
 }

@@ -4,6 +4,7 @@
   "description": "Default capability for ChronX Wallet",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "opener:default"
   ]
 }

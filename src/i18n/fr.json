@@ -54,6 +54,7 @@
   "view_promises": "Voir les promesses",
   "promises_empty_title": "Aucune promesse",
   "promises_empty_sub": "Quand quelqu’un vous envoie un paiement différé, il apparaîtra ici.",
+  "promises_coming_to_me": "Promesses en attente",
   "lang_ur": "اردو",
   "settings_node_url": "URL du nœud",
   "settings_save_reconnect": "Enregistrer et reconnecter",
@@ -113,5 +114,19 @@
   "verify_code_sent": "Code envoyé ! Vérifiez votre boîte de réception.",
   "verified": "Vérifié",
   "unverified": "Non vérifié",
-  "settings_claim_emails_sub_v2": "Vérifiez votre email pour recevoir les KX envoyés. Les emails vérifiés sont surveillés automatiquement."
+  "settings_claim_emails_sub_v2": "Vérifiez votre email pour recevoir les KX envoyés. Les emails vérifiés sont surveillés automatiquement.",
+  "promises_header_all": "Promesses",
+  "filter_all": "Toutes",
+  "filter_incoming": "Entrantes",
+  "filter_outgoing": "Sortantes",
+  "sort_date": "Date d'échéance",
+  "sort_amount": "Montant",
+  "incoming": "Entrante",
+  "outgoing": "Sortante",
+  "from": "De",
+  "to": "À",
+  "promises_incoming_header": "KX qui vous sont promis",
+  "promises_incoming_empty": "Aucune promesse entrante pour le moment.",
+  "promises_outgoing_header": "Promesses que vous avez faites",
+  "promises_outgoing_empty": "Aucune promesse sortante pour le moment."
 }

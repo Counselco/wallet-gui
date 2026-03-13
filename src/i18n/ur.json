@@ -55,6 +55,7 @@
   "view_promises": "وعدا دیکھیں",
   "promises_empty_title": "ابھی کوئی وعدہ نہیں",
   "promises_empty_sub": "جب کوئی آپ کو وقت کا پابند ادائیگی بھیجا گا، یہاں ظاہر ہوگا۔",
+  "promises_coming_to_me": "میرے لیے وعدے",
   "settings_node_url": "نوڈ URL",
   "settings_save_reconnect": "محفوظ کریں اور دوبارہ جڈیں",
   "settings_public_key": "میری عوامی کلید",
@@ -113,5 +114,19 @@
   "verify_code_sent": "تصدیقی کوڈ بھیجا گیا! اپنا ان باکس چیک کریں۔",
   "verified": "تصدیق شدہ",
   "unverified": "غیر تصدیق شدہ",
-  "settings_claim_emails_sub_v2": "اپنا ایمیل تصدیق کریں تاکہ اس پر بھیجا گیا KX مل سکا۔ تصدیق شدہ ایمیلز خودکار نگرانی میں رہتا ہوگیا۔"
+  "settings_claim_emails_sub_v2": "اپنا ایمیل تصدیق کریں تاکہ اس پر بھیجا گیا KX مل سکا۔ تصدیق شدہ ایمیلز خودکار نگرانی میں رہتا ہوگیا۔",
+  "promises_header_all": "وعدے",
+  "filter_all": "سب",
+  "filter_incoming": "آنا والا",
+  "filter_outgoing": "جانا والا",
+  "sort_date": "مقررہ تاریخ",
+  "sort_amount": "رقم",
+  "incoming": "آنا والا",
+  "outgoing": "جانا والا",
+  "from": "سا",
+  "to": "کو",
+  "promises_incoming_header": "آپ کو وعدہ کیا گیا KX",
+  "promises_incoming_empty": "ابھی کوئی آنے والا وعدہ نہیں۔",
+  "promises_outgoing_header": "آپ کے دیے ہوئے وعدے",
+  "promises_outgoing_empty": "ابھی کوئی جانے والا وعدہ نہیں۔"
 }

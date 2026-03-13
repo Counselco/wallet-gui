@@ -12,6 +12,9 @@ use chronx_crypto::{hash::tx_id_from_body, mine_pow, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::AppHandle;
+use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
+use hkdf::Hkdf;
+use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
 const DEFAULT_RPC_URL: &str = "https://rpc.chronx.io";
 
@@ -83,6 +86,10 @@ struct WalletConfig {
     /// Blocked poke sender emails (user chose "Block this sender" on decline).
     #[serde(default)]
     blocked_senders: Option<Vec<String>>,
+    /// BLAKE3 hashes from successful claim_by_code calls. Used to discover
+    /// sibling locks (e.g. 30d/60d faucet stages) even without email registration.
+    #[serde(default)]
+    claimed_hashes: Option<Vec<String>>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -99,6 +106,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             cold_wallets: None,
             verified_emails: None,
             blocked_senders: None,
+            claimed_hashes: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -158,6 +166,9 @@ pub struct TimeLockInfo {
     /// Cancellation window in seconds (72 h for email, 24 h for ≥1-year).
     #[serde(default)]
     pub cancellation_window_secs: Option<u32>,
+    /// Direction: "incoming" or "outgoing". Set by get_all_promises.
+    #[serde(default)]
+    pub direction: Option<String>,
 }
 
 /// Returned by `create_email_timelock` — carries both the on-chain TxId and
@@ -247,6 +258,78 @@ async fn rpc_call(
     }
 
     Ok(json["result"].clone())
+}
+
+// ── MISAI lock_metadata encryption ───────────────────────────────────────────
+
+/// Fetch MISAI's X25519 public key from the node. Returns None if not available.
+async fn fetch_misai_x25519_pubkey(url: &str) -> Option<[u8; 32]> {
+    let result = rpc_call(url, "chronx_getMisaiPubkey", serde_json::json!([])).await;
+    match result {
+        Ok(val) => {
+            let hex_str = val.get("pubkey_hex")?.as_str()?;
+            let bytes = hex::decode(hex_str).ok()?;
+            if bytes.len() != 32 { return None; }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            Some(arr)
+        }
+        Err(_) => None,
+    }
+}
+
+/// Encrypt a claim code for MISAI using X25519 + HKDF + ChaCha20-Poly1305.
+///
+/// Layout: ephemeral_pubkey (32) || nonce (12) || ciphertext+tag (48)
+/// Total: 92 bytes → 184 hex chars.
+///
+/// The claim_code (19 bytes, e.g. "KX-ABCD-1234-EF56-7890") is zero-padded
+/// to 32 bytes before encryption so the ciphertext length is fixed.
+fn encrypt_claim_for_misai(
+    claim_code: &str,
+    misai_pubkey: &[u8; 32],
+) -> Result<String, String> {
+    // Zero-pad claim_code to 32 bytes
+    let mut plaintext = [0u8; 32];
+    let code_bytes = claim_code.as_bytes();
+    if code_bytes.len() > 32 {
+        return Err("claim_code too long".into());
+    }
+    plaintext[..code_bytes.len()].copy_from_slice(code_bytes);
+
+    // Generate ephemeral X25519 keypair
+    let ephemeral_secret = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
+    let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
+
+    // X25519 key agreement
+    let their_public = X25519PublicKey::from(*misai_pubkey);
+    let shared_secret = ephemeral_secret.diffie_hellman(&their_public);
+
+    // HKDF-SHA256 to derive symmetric key
+    let hk = Hkdf::<sha2::Sha256>::new(Some(b"chronx-misai-v1"), shared_secret.as_bytes());
+    let mut symmetric_key = [0u8; 32];
+    hk.expand(&[], &mut symmetric_key)
+        .map_err(|e| format!("HKDF expand failed: {e}"))?;
+
+    // Generate random 12-byte nonce
+    let mut nonce_bytes = [0u8; 12];
+    rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
+
+    // ChaCha20-Poly1305 encrypt
+    let cipher = ChaCha20Poly1305::new_from_slice(&symmetric_key)
+        .map_err(|e| format!("cipher init: {e}"))?;
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("encryption failed: {e}"))?;
+    // ciphertext = 32 bytes data + 16 bytes tag = 48 bytes
+
+    // Pack: ephemeral_pubkey (32) || nonce (12) || ciphertext+tag (48) = 92 bytes
+    let mut packed = Vec::with_capacity(92);
+    packed.extend_from_slice(ephemeral_public.as_bytes());
+    packed.extend_from_slice(&nonce_bytes);
+    packed.extend_from_slice(&ciphertext);
+
+    Ok(hex::encode(packed))
 }
 
 // ── Keypair helpers ───────────────────────────────────────────────────────────
@@ -440,6 +523,10 @@ pub async fn create_timelock(
     unlock_at_unix: i64,
     memo: Option<String>,
     to_pubkey_hex: Option<String>,
+    grantor_intent: Option<String>,
+    risk_level: Option<u32>,
+    ai_percentage: Option<u32>,
+    axiom_consent_hash: Option<String>,
 ) -> Result<String, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
@@ -475,12 +562,53 @@ pub async fn create_timelock(
         if m.len() > 256 { m[..256].to_string() } else { m }
     });
 
+    // Build tags (max 5 tags, each max 32 chars)
+    let mut lock_tags: Vec<String> = vec![];
+    if let Some(pct) = ai_percentage {
+        if pct > 0 {
+            lock_tags.push("ai_managed".to_string());
+            lock_tags.push(format!("ai_pct:{}", pct));
+            if let Some(risk) = risk_level {
+                lock_tags.push(format!("risk:{}", risk));
+            }
+        }
+    }
+    if let Some(ref hash) = axiom_consent_hash {
+        if !hash.is_empty() {
+            lock_tags.push(format!("ax:{}", &hash[..hash.len().min(24)]));
+        }
+    }
+    let tags_opt = if lock_tags.is_empty() { None } else { Some(lock_tags) };
+
+    // grantor_intent → extension_data as JSON (max 1024 bytes)
+    let ext_data: Option<Vec<u8>> = grantor_intent
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let json = format!(r#"{{"beneficiary":"{}"}}"#,
+                s.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            let bytes = json.into_bytes();
+            bytes[..bytes.len().min(1024)].to_vec()
+        });
+
+    // Cancellation window: min(time_until_unlock, 7 days)
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let secs_until_unlock = (unlock_at_unix - now_unix).max(0) as u32;
+    let cancel_window = secs_until_unlock.min(604_800u32); // 7 days max
+    let cancellation_window = if cancel_window < 60 { None } else { Some(cancel_window) };
+
+    let is_ai = ai_percentage.map_or(false, |p| p > 0);
+
     let actions = vec![Action::TimeLockCreate {
         recipient,
         amount: chronos,
         unlock_at: unlock_at_unix,
         memo,
-        cancellation_window_secs: None,
+        cancellation_window_secs: cancellation_window,
         notify_recipient: None,
         tags: None,
         private: None,
@@ -496,14 +624,14 @@ pub async fn create_timelock(
         recipient_email_hash: None,
         claim_window_secs: None,
         unclaimed_action: None,
-        lock_type: None,
+        lock_type: if is_ai { Some("M".to_string()) } else { None },
         lock_metadata: None,
-        agent_managed: None,
-        grantor_axiom_consent_hash: None,
-        investable_fraction: None,
-        risk_level: None,
+        agent_managed: if is_ai { Some(true) } else { None },
+        grantor_axiom_consent_hash: axiom_consent_hash.clone(),
+        investable_fraction: ai_percentage.filter(|&p| p > 0).map(|p| p as f64 / 100.0),
+        risk_level,
         investment_exclusions: None,
-        grantor_intent: None,
+        grantor_intent: grantor_intent.clone(),
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -525,8 +653,13 @@ pub async fn create_email_timelock(
     amount_kx: f64,
     unlock_at_unix: i64,
     memo: Option<String>,
+    grantor_intent: Option<String>,
+    risk_level: Option<u32>,
+    ai_percentage: Option<u32>,
+    axiom_consent_hash: Option<String>,
 ) -> Result<EmailLockResult, String> {
     use chronx_core::account::UnclaimedAction;
+    // grantor_intent now stored in dedicated TimeLockCreate field
 
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
@@ -579,12 +712,52 @@ pub async fn create_email_timelock(
         if m.len() > 256 { m[..256].to_string() } else { m }
     });
 
+    // Build tags (max 5 tags, each max 32 chars)
+    let mut lock_tags: Vec<String> = vec![];
+    if let Some(pct) = ai_percentage {
+        if pct > 0 {
+            lock_tags.push("ai_managed".to_string());
+            lock_tags.push(format!("ai_pct:{}", pct));
+            if let Some(risk) = risk_level {
+                lock_tags.push(format!("risk:{}", risk));
+            }
+        }
+    }
+    if let Some(ref hash) = axiom_consent_hash {
+        if !hash.is_empty() {
+            lock_tags.push(format!("ax:{}", &hash[..hash.len().min(24)]));
+        }
+    }
+    let lp_tags_opt = if lock_tags.is_empty() { None } else { Some(lock_tags) };
+
+    let is_ai = ai_percentage.map_or(false, |p| p > 0);
+
+    // For Type M locks: encrypt the claim_code to MISAI's X25519 public key
+    // so MISAI can autonomously claim and manage the funds.
+    let lock_metadata = if is_ai {
+        match fetch_misai_x25519_pubkey(&url).await {
+            Some(pubkey) => match encrypt_claim_for_misai(&claim_code, &pubkey) {
+                Ok(hex) => Some(hex),
+                Err(e) => {
+                    eprintln!("[warn] Failed to encrypt lock_metadata for MISAI: {e}");
+                    None // graceful fallback — lock created without metadata
+                }
+            },
+            None => {
+                eprintln!("[warn] MISAI X25519 pubkey not available — lock_metadata will be null");
+                None // graceful fallback
+            }
+        }
+    } else {
+        None
+    };
+
     let actions = vec![Action::TimeLockCreate {
         recipient,
         amount: chronos,
         unlock_at: unlock_at_unix,
         memo,
-        cancellation_window_secs: Some(259_200), // 72 hours — sender can cancel anytime
+        cancellation_window_secs: Some(86_400), // 24 hours max
         notify_recipient: Some(true),
         tags: None,
         private: None,
@@ -600,14 +773,14 @@ pub async fn create_email_timelock(
         recipient_email_hash: Some(email_hash),
         claim_window_secs: Some(259_200), // 72 hours
         unclaimed_action: Some(UnclaimedAction::RevertToSender),
-        lock_type: None,
-        lock_metadata: None,
-        agent_managed: None,
-        grantor_axiom_consent_hash: None,
-        investable_fraction: None,
-        risk_level: None,
+        lock_type: if is_ai { Some("M".to_string()) } else { None },
+        lock_metadata,
+        agent_managed: if is_ai { Some(true) } else { None },
+        grantor_axiom_consent_hash: axiom_consent_hash.clone(),
+        investable_fraction: ai_percentage.filter(|&p| p > 0).map(|p| p as f64 / 100.0),
+        risk_level,
         investment_exclusions: None,
-        grantor_intent: None,
+        grantor_intent: grantor_intent.clone(),
     }];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -663,6 +836,7 @@ fn parse_timelock_json(v: &serde_json::Value) -> TimeLockInfo {
         memo: v["memo"].as_str().map(|s| s.to_string()),
         claim_secret_hash: v["claim_secret_hash"].as_str().map(|s| s.to_string()),
         cancellation_window_secs: v["cancellation_window_secs"].as_u64().map(|n| n as u32),
+        direction: None,
     }
 }
 
@@ -678,24 +852,26 @@ pub async fn export_secret_key(app: AppHandle) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(json.as_bytes()))
 }
 
-/// Restore a wallet from a base64 backup key. Errors if a wallet already exists.
+/// Restore a wallet from a base64 backup key (same format as export).
+/// If a wallet already exists and `force` is not true, returns "WALLET_EXISTS_CONFIRM".
 /// Returns the base58 account ID on success.
 #[tauri::command]
-pub async fn restore_wallet(app: AppHandle, backup_key: String) -> Result<String, String> {
+pub async fn restore_wallet(app: AppHandle, backup_key: String, force: Option<bool>) -> Result<String, String> {
     let path = keyfile_path(&app);
-    if path.exists() {
-        return Err("A wallet already exists on this device.".to_string());
+    if path.exists() && !force.unwrap_or(false) {
+        return Err("WALLET_EXISTS_CONFIRM".to_string());
     }
-    let json_bytes = base64::engine::general_purpose::STANDARD
-        .decode(backup_key.trim())
-        .map_err(|_| "Invalid backup key — could not decode".to_string())?;
-    let json = String::from_utf8(json_bytes)
-        .map_err(|_| "Invalid backup key — not valid UTF-8".to_string())?;
-    let kp: KeyPair = serde_json::from_str(&json)
+    let key = backup_key.trim().trim_start_matches('\u{FEFF}');
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(key)
+        .map_err(|e| format!("Invalid backup key: {e}"))?;
+    let kp: KeyPair = serde_json::from_slice(&bytes)
         .map_err(|_| "Invalid backup key — not a valid wallet file".to_string())?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Creating wallet dir: {e}"))?;
     }
+    let json = serde_json::to_string_pretty(&kp)
+        .map_err(|e| format!("Serializing wallet: {e}"))?;
     std::fs::write(&path, &json).map_err(|e| format!("Writing wallet: {e}"))?;
     Ok(kp.account_id.to_b58())
 }
@@ -704,33 +880,9 @@ pub async fn restore_wallet(app: AppHandle, backup_key: String) -> Result<String
 
 /// Open a URL or mailto: link using the platform-native handler.
 #[tauri::command]
-pub async fn open_url(url: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", &url])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "android")]
-    {
-        let _ = url;
-    }
-    Ok(())
+pub async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Claim a matured timelock. `lock_id_hex` is the hex TxId of the lock.
@@ -914,6 +1066,22 @@ pub async fn claim_by_code(app: AppHandle, claim_code: String) -> Result<ClaimBy
             e
         })?;
     eprintln!("claim_by_code: tx submitted: {tx_id}");
+
+    // Store the claim_secret_hash so we can discover sibling locks (e.g. 30d/60d
+    // faucet stages) in get_pending_incoming / get_all_promises even if the user
+    // hasn't registered a claim email.
+    {
+        let mut cfg = read_config(&app);
+        let hashes = cfg.claimed_hashes.get_or_insert_with(Vec::new);
+        if !hashes.contains(&target_hash) {
+            hashes.push(target_hash);
+            // Keep at most 50 hashes to avoid unbounded growth
+            if hashes.len() > 50 {
+                hashes.drain(..hashes.len() - 50);
+            }
+            let _ = write_config(&app, &cfg);
+        }
+    }
 
     Ok(ClaimByCodeResult {
         tx_id,
@@ -1667,20 +1835,29 @@ pub async fn mark_notice_dismissed(app: AppHandle, id: String) -> Result<(), Str
 /// Fires best-effort — errors are logged but not surfaced to the user.
 #[tauri::command]
 pub async fn notify_email_recipient(
+    app: AppHandle,
     email: String,
     amount_kx: f64,
     unlock_at_unix: i64,
     memo: Option<String>,
     claim_code: String,
 ) -> Result<(), String> {
+    // Include sender identity so the recipient knows who sent the KX
+    let sender_wallet = load_keypair(&app)
+        .map(|kp| kp.account_id.to_b58())
+        .ok();
+    let sender_email = read_config(&app)
+        .claim_emails
+        .and_then(|v| v.into_iter().next());
     let client = reqwest::Client::new();
-    // The API includes claim_code in the email body and then FORGETS it — never stored in DB.
     let body = serde_json::json!({
         "to": email,
         "amount": format!("{:.6}", amount_kx),
         "unlock_at": unlock_at_unix,
         "memo": memo,
         "claim_code": claim_code,
+        "sender_email": sender_email,
+        "sender_wallet": sender_wallet,
     });
     let res = client
         .post("https://api.chronx.io/notify")
@@ -1751,6 +1928,10 @@ pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, S
     let kp = load_keypair(&app)?;
     let b58 = kp.account_id.to_b58();
 
+    let mut seen = std::collections::HashSet::new();
+    let mut locks = Vec::new();
+
+    // 1. Direct wallet-to-wallet incoming (recipient_account_id = me)
     let result = rpc_call(&url, "chronx_getPendingIncoming", serde_json::json!([b58]))
         .await
         .map_err(|e| format!("RPC failed: {e}"))?;
@@ -1758,13 +1939,157 @@ pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, S
     let raw: Vec<serde_json::Value> =
         serde_json::from_value(result).map_err(|e| format!("Parsing incoming locks: {e}"))?;
 
-    let locks = raw
-        .into_iter()
-        .take(20)
-        .map(|v| parse_timelock_json(&v))
-        .collect();
+    for v in raw.into_iter().take(20) {
+        let lock = parse_timelock_json(&v);
+        // Filter out self-referencing locks (sender == own wallet) — these are
+        // outgoing email locks where recipient_account_id == sender, NOT real incoming.
+        if lock.sender != b58 && seen.insert(lock.lock_id.clone()) {
+            locks.push(lock);
+        }
+    }
+
+    // 2. Email-based incoming (recipient_email_hash matches our registered emails)
+    let cfg = read_config(&app);
+    let emails = cfg.claim_emails.unwrap_or_default();
+    for email in &emails {
+        if email.trim().is_empty() {
+            continue;
+        }
+        let email_lower = email.to_lowercase();
+        let hash = blake3::hash(email_lower.as_bytes());
+        let hash_hex = hex::encode(hash.as_bytes());
+
+        if let Ok(result) = rpc_call(&url, "chronx_getEmailLocks", serde_json::json!([hash_hex])).await {
+            if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
+                for v in raw {
+                    let lock = parse_timelock_json(&v);
+                    if seen.insert(lock.lock_id.clone()) {
+                        locks.push(lock);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Claimed-hash-based incoming: discover sibling locks from previous
+    //    claim_by_code calls (e.g. 30d/60d faucet stages not yet matured).
+    for hash_hex in cfg.claimed_hashes.unwrap_or_default() {
+        if hash_hex.trim().is_empty() {
+            continue;
+        }
+        if let Ok(result) = rpc_call(&url, "chronx_getCascadeDetails", serde_json::json!([hash_hex])).await {
+            if let Ok(cascade) = serde_json::from_value::<serde_json::Value>(result) {
+                if let Some(arr) = cascade["locks"].as_array() {
+                    for v in arr {
+                        let lock = parse_timelock_json(v);
+                        // Only include pending locks from other wallets
+                        if lock.status == "Pending" && lock.sender != b58 && seen.insert(lock.lock_id.clone()) {
+                            locks.push(lock);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(locks)
+}
+
+/// Fetch ALL promises for the Promises tab: both outgoing (sender = me) and incoming
+/// (recipient = me). Each lock is tagged with direction = "outgoing" or "incoming".
+/// Deduplicates by lock_id in case a self-send appears in both sets.
+#[tauri::command]
+pub async fn get_all_promises(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+
+    let mut all = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // 1. Outgoing: locks where sender = my_address
+    if let Ok(result) = rpc_call(&url, "chronx_getTimeLockContracts", serde_json::json!([b58])).await {
+        if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
+            for v in raw {
+                let mut lock = parse_timelock_json(&v);
+                lock.direction = Some("outgoing".to_string());
+                if seen.insert(lock.lock_id.clone()) {
+                    all.push(lock);
+                }
+            }
+        }
+    }
+
+    // 2. Incoming: locks where recipient_account_id = my_address (direct wallet locks)
+    if let Ok(result) = rpc_call(&url, "chronx_getPendingIncoming", serde_json::json!([b58])).await {
+        if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
+            for v in raw {
+                let mut lock = parse_timelock_json(&v);
+                // Skip self-referencing locks (own outgoing email sends show up here
+                // because email locks use sender's pubkey as recipient)
+                if lock.sender == b58 {
+                    continue;
+                }
+                lock.direction = Some("incoming".to_string());
+                if seen.insert(lock.lock_id.clone()) {
+                    all.push(lock);
+                }
+            }
+        }
+    }
+
+    // 3. Incoming email locks: locks sent TO our registered email addresses.
+    // Email locks use recipient_email_hash (not recipient_account_id) to identify
+    // the recipient, so they won't appear in getPendingIncoming. We query by
+    // BLAKE3(lowercase(email)) using getEmailLocks.
+    let cfg = read_config(&app);
+    let emails = cfg.claim_emails.unwrap_or_default();
+    for email in &emails {
+        if email.trim().is_empty() {
+            continue;
+        }
+        let email_lower = email.to_lowercase();
+        let hash = blake3::hash(email_lower.as_bytes());
+        let hash_hex = hex::encode(hash.as_bytes());
+
+        if let Ok(result) = rpc_call(&url, "chronx_getEmailLocks", serde_json::json!([hash_hex])).await {
+            if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
+                for v in raw {
+                    let mut lock = parse_timelock_json(&v);
+                    lock.direction = Some("incoming".to_string());
+                    if seen.insert(lock.lock_id.clone()) {
+                        all.push(lock);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Claimed-hash-based incoming: discover sibling locks from previous
+    //    claim_by_code calls (e.g. 30d/60d faucet stages not yet matured).
+    for hash_hex in cfg.claimed_hashes.unwrap_or_default() {
+        if hash_hex.trim().is_empty() {
+            continue;
+        }
+        if let Ok(result) = rpc_call(&url, "chronx_getCascadeDetails", serde_json::json!([hash_hex])).await {
+            if let Ok(cascade) = serde_json::from_value::<serde_json::Value>(result) {
+                if let Some(arr) = cascade["locks"].as_array() {
+                    for v in arr {
+                        let mut lock = parse_timelock_json(v);
+                        // Only include pending locks from other wallets as incoming
+                        if lock.status == "Pending" && lock.sender != b58 {
+                            lock.direction = Some("incoming".to_string());
+                            if seen.insert(lock.lock_id.clone()) {
+                                all.push(lock);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(all)
 }
 
 /// Check the node for any email-addressed timelocks destined for the wallet's registered
@@ -2254,6 +2579,29 @@ pub async fn set_language(app: AppHandle, lang: String) -> Result<(), String> {
     std::fs::write(&path, lang.trim()).map_err(|e| format!("Writing language: {e}"))
 }
 
+// ── Long Promise: axiom consent hash ─────────────────────────────────────────
+
+/// Fetches the Promise Axioms text from the node RPC and returns BLAKE3 hash.
+/// Used by the frontend to record the user's consent to a specific version
+/// of the axioms when creating a Long Promise (>1 year).
+#[tauri::command]
+pub async fn get_axiom_consent_hash(app: AppHandle) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let rpc_payload = serde_json::json!({
+        "jsonrpc": "2.0", "method": "chronx_getPromiseAxioms", "params": [], "id": 1
+    });
+    let client = reqwest::Client::new();
+    let response = client.post(&url).json(&rpc_payload).send().await
+        .map_err(|e| e.to_string())?;
+    let json: serde_json::Value = response.json().await
+        .map_err(|e| e.to_string())?;
+    let promise_axioms = json["result"]["promise_axioms"].as_str().unwrap_or("").to_string();
+    let trading_axioms = json["result"]["trading_axioms"].as_str().unwrap_or("").to_string();
+    let combined = format!("{}{}", promise_axioms, trading_axioms);
+    let hash = blake3::hash(combined.as_bytes());
+    Ok(hex::encode(hash.as_bytes()))
+}
+
 fn language_path(app: &AppHandle) -> PathBuf {
     #[cfg(target_os = "android")]
     {
@@ -2267,4 +2615,205 @@ fn language_path(app: &AppHandle) -> PathBuf {
         let _ = app;
         expand_tilde("~/.chronx/language.txt")
     }
+}
+
+/// Create a freeform timelock — the recipient is an arbitrary string
+/// (name, organisation, description) rather than a wallet address or email.
+/// BLAKE3(freeform_recipient) is stored as `recipient_hash` in tags.
+/// The lock is created to the sender's own pubkey (self-lock) with metadata
+/// recording the intended freeform recipient.
+#[tauri::command]
+pub async fn create_freeform_timelock(
+    app: AppHandle,
+    freeform_recipient: String,
+    amount_kx: f64,
+    unlock_at_unix: i64,
+    memo: Option<String>,
+    grantor_intent: Option<String>,
+    risk_level: Option<u32>,
+    ai_percentage: Option<u32>,
+    axiom_consent_hash: Option<String>,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    if freeform_recipient.trim().is_empty() {
+        return Err("Freeform recipient cannot be empty".to_string());
+    }
+    if amount_kx <= 0.0 {
+        return Err("Amount must be greater than 0".to_string());
+    }
+    let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u128;
+
+    let now = chrono::Utc::now().timestamp();
+    if unlock_at_unix <= now {
+        return Err("Unlock date must be in the future".to_string());
+    }
+    const WALLET_MIN_LOCK_SECS: i64 = 86_400; // 1 day
+    if unlock_at_unix < now + WALLET_MIN_LOCK_SECS {
+        return Err("Unlock date must be at least 24 hours from now.".to_string());
+    }
+
+    // Truncate memo to 256 bytes.
+    let memo = memo.map(|m| {
+        if m.len() > 256 { m[..256].to_string() } else { m }
+    });
+
+    // Compute BLAKE3 hash of the freeform recipient string
+    let recipient_hash = {
+        let hash = blake3::hash(freeform_recipient.as_bytes());
+        hex::encode(hash.as_bytes())
+    };
+
+    // Truncate display name for tags (max 200 chars)
+    let recipient_display = if freeform_recipient.len() > 200 {
+        freeform_recipient[..200].to_string()
+    } else {
+        freeform_recipient.clone()
+    };
+
+    // Build tags (max 5 tags, each max 32 chars)
+    let mut lock_tags: Vec<String> = vec![];
+    lock_tags.push("type:freeform".to_string());
+    lock_tags.push(format!("hash:{}", &recipient_hash[..recipient_hash.len().min(27)]));
+    if let Some(pct) = ai_percentage {
+        if pct > 0 {
+            lock_tags.push("ai_managed".to_string());
+            lock_tags.push(format!("ai_pct:{}", pct));
+            if let Some(risk) = risk_level {
+                lock_tags.push(format!("risk:{}", risk));
+            }
+        }
+    }
+    let tags = Some(lock_tags);
+
+    // Pack freeform recipient + grantor_intent into extension_data as JSON (max 1024 bytes)
+    let ext_data: Option<Vec<u8>> = {
+        let mut parts = vec![format!(r#""freeform_recipient":"{}""#,
+            recipient_display.replace('\\', "\\\\").replace('"', "\\\""))];
+        if let Some(ref note) = grantor_intent {
+            if !note.is_empty() {
+                let truncated = if note.len() > 1000 { &note[..1000] } else { note.as_str() };
+                parts.push(format!(r#""beneficiary":"{}""#,
+                    truncated.replace('\\', "\\\\").replace('"', "\\\"")));
+            }
+        }
+        let json = format!("{{{}}}", parts.join(","));
+        let bytes = json.into_bytes();
+        Some(bytes[..bytes.len().min(1024)].to_vec())
+    };
+
+    // Self-lock: recipient is sender's own pubkey
+    let recipient = kp.public_key.clone();
+
+    // Cancellation window: min(time_until_unlock, 24 hours)
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let secs_until_unlock = (unlock_at_unix - now_unix).max(0) as u32;
+    let cancel_window = secs_until_unlock.min(604_800u32); // 7 days max
+    let cancellation_window = if cancel_window < 60 { None } else { Some(cancel_window) };
+
+    let is_ai = ai_percentage.map_or(false, |p| p > 0);
+
+    let actions = vec![Action::TimeLockCreate {
+        recipient,
+        amount: chronos,
+        unlock_at: unlock_at_unix,
+        memo,
+        cancellation_window_secs: cancellation_window,
+        notify_recipient: None,
+        tags: None,
+        private: None,
+        expiry_policy: None,
+        split_policy: None,
+        claim_attempts_max: None,
+        recurring: None,
+        extension_data: None,
+        oracle_hint: None,
+        jurisdiction_hint: None,
+        governance_proposal_id: None,
+        client_ref: None,
+        recipient_email_hash: None,
+        claim_window_secs: None,
+        unclaimed_action: None,
+        lock_type: if is_ai { Some("M".to_string()) } else { Some("F".to_string()) },
+        lock_metadata: None,
+        agent_managed: if is_ai { Some(true) } else { None },
+        grantor_axiom_consent_hash: axiom_consent_hash.clone(),
+        investable_fraction: ai_percentage.filter(|&p| p > 0).map(|p| p as f64 / 100.0),
+        risk_level,
+        investment_exclusions: None,
+        grantor_intent: grantor_intent.clone(),
+    }];
+
+    build_sign_mine_submit(&kp, actions, &url).await
+}
+
+// ── Whitelist popup: claim-info + whitelist-email ─────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub struct ClaimInfo {
+    pub found: bool,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub amount_kx: Option<f64>,
+}
+
+/// Fetch sender email and amount for a claim code from the notify API.
+#[tauri::command]
+pub async fn get_claim_info(claim_code: String) -> Result<ClaimInfo, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "{}/claim-info?code={}",
+        NOTIFY_API_URL,
+        urlencoding(&claim_code)
+    );
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("API error: HTTP {}", resp.status()));
+    }
+
+    let info: ClaimInfo = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+    Ok(info)
+}
+
+/// Register the recipient's email in the whitelist (verified_emails) on the notify API.
+#[tauri::command]
+pub async fn whitelist_email(email: String, wallet_address: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/whitelist-email", NOTIFY_API_URL);
+
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "email": email,
+            "wallet_address": wallet_address,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("API error: HTTP {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+    Ok(body.get("success").and_then(|v| v.as_bool()).unwrap_or(false))
 }
