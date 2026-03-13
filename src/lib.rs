@@ -137,6 +137,20 @@ struct TrustedContact {
     added_at: u64,
 }
 
+// ── Contact type (address book) ──────────────────────────────────────────────
+
+#[derive(Clone, Deserialize, Default, serde::Serialize)]
+struct Contact {
+    id: String,
+    name: String,
+    email: Option<String>,
+    kx_address: Option<String>,
+    notes: Option<String>,
+    last_sent: Option<i64>,
+    send_count: u32,
+    created_at: i64,
+}
+
 // ── Poke request type (frontend) ─────────────────────────────────────────────
 
 #[derive(Clone, Deserialize, Default)]
@@ -915,6 +929,9 @@ fn App() -> impl IntoView {
     let poke_prefill_memo   = RwSignal::new(String::new());
     let poke_prefill_id     = RwSignal::new(String::new()); // request_id for confirm_poke_paid
 
+    // Contact pre-fill: when user clicks "Send KX" on a contact → navigate to Send tab
+    let email_prefill_from_contact = RwSignal::new(String::new());
+
     // Poke decline modal state
     let decline_modal_open    = RwSignal::new(false);
     let decline_request_id    = RwSignal::new(String::new());
@@ -1476,10 +1493,14 @@ fn App() -> impl IntoView {
                                         on:click=move |_| active_tab.set(4)>
                                         {move || t(&lang.get(), "tab_history")}
                                     </button>
-                                </nav>
-                                <div class="sidebar-bottom">
                                     <button class=move || if active_tab.get()==5 {"sidebar-tab active"} else {"sidebar-tab"}
                                         on:click=move |_| active_tab.set(5)>
+                                        {move || t(&lang.get(), "tab_contacts")}
+                                    </button>
+                                </nav>
+                                <div class="sidebar-bottom">
+                                    <button class=move || if active_tab.get()==6 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(6)>
                                         {move || t(&lang.get(), "tab_settings")}
                                         {move || {
                                             let unread = notices.get().iter()
@@ -1565,7 +1586,7 @@ fn App() -> impl IntoView {
                     <div class=if desktop { "main-body" } else { "" }>
                         {move || {
                             let tab = active_tab.get();
-                            let settings_tab: u8 = if desktop { 5 } else { 3 };
+                            let settings_tab: u8 = if desktop { 6 } else { 3 };
                             match tab {
                                 // Tab 0: Receive (was part of AccountPanel)
                                 0 => view! {
@@ -1592,7 +1613,7 @@ fn App() -> impl IntoView {
                                         view! { <span></span> }.into_any()
                                     }}
                                     {move || if send_cascade_mode.get() == 0 {
-                                        view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id /> }.into_any()
+                                        view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact /> }.into_any()
                                     } else {
                                         view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
                                     }}
@@ -1609,7 +1630,11 @@ fn App() -> impl IntoView {
                                 4 if desktop => view! {
                                     <HistoryPanel info=info email_locks=email_locks on_email_check=check_email />
                                 }.into_any(),
-                                // Settings tab (3 on mobile, 5 on desktop)
+                                // Tab 5: Contacts (desktop only)
+                                5 if desktop => view! {
+                                    <ContactsPanel lang=lang active_tab=active_tab email_prefill_from_contact=email_prefill_from_contact />
+                                }.into_any(),
+                                // Settings tab (3 on mobile, 6 on desktop)
                                 _ if tab == settings_tab => view! {
                                     <SettingsPanel
                                         online=online
@@ -2743,6 +2768,7 @@ fn SendPanel(
     poke_prefill_amount: RwSignal<String>,
     poke_prefill_memo: RwSignal<String>,
     poke_prefill_id: RwSignal<String>,
+    email_prefill_from_contact: RwSignal<String>,
 ) -> impl IntoView {
     let send_sub  = RwSignal::new(0u8); // 0=KX Address, 1=Email Address
     let send_mode = RwSignal::new(0u8); // 0=Send Now,   1=Send Later
@@ -2839,6 +2865,36 @@ fn SendPanel(
             poke_applied.set(false);
         }
     });
+
+    // Contact pre-fill: when user clicks "Send KX" on a contact card
+    Effect::new(move |_| {
+        let prefill = email_prefill_from_contact.get();
+        if !prefill.is_empty() {
+            send_sub.set(1);  // Email Address tab
+            send_mode.set(0); // Send Now
+            email.set(prefill);
+            msg.set(String::new());
+            email_prefill_from_contact.set(String::new()); // consume
+        }
+    });
+
+    // Contact autocomplete state
+    let contact_suggestions: RwSignal<Vec<Contact>> = RwSignal::new(Vec::new());
+    let show_contact_dropdown = RwSignal::new(false);
+    // Mobile time picker: 0=Send Now, 1=1h, 2=24h, 3=1w, 4=1m, 5=3m, 6=6m, 7=1y
+    let mobile_time_option = RwSignal::new(0u8);
+    // Mobile confirmation screen
+    let mobile_confirm_open = RwSignal::new(false);
+    let mobile_confirm_to_display = RwSignal::new(String::new());
+    let mobile_confirm_amount_display = RwSignal::new(String::new());
+    let mobile_confirm_unlock_display = RwSignal::new(String::new());
+    let mobile_confirm_memo_display = RwSignal::new(String::new());
+
+    // "Save as contact?" banner after successful send
+    let save_contact_banner = RwSignal::new(false);
+    let save_contact_email = RwSignal::new(String::new());
+    let save_contact_name = RwSignal::new(String::new());
+    let save_contact_msg = RwSignal::new(String::new());
 
     let set_date = move |date: String| lock_date.set(date);
 
@@ -3062,6 +3118,16 @@ fn SendPanel(
                             Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
                             Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                         }
+                        // Show "Save as contact?" banner if not already a contact
+                        if is_desktop() {
+                            let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": email_str.clone(), "kxAddress": Option::<String>::None })).unwrap_or(no_args());
+                            if let Ok(None) = call::<Option<Contact>>("check_if_contact", chk).await {
+                                save_contact_email.set(email_str.clone());
+                                save_contact_name.set(String::new());
+                                save_contact_msg.set(String::new());
+                                save_contact_banner.set(true);
+                            }
+                        }
                         // If this send was triggered by a poke PAY NOW, confirm payment
                         let poke_id = poke_prefill_id.get_untracked();
                         if !poke_id.is_empty() {
@@ -3279,6 +3345,16 @@ fn SendPanel(
                                 Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
                                 Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
+                            // Show "Save as contact?" banner if not already a contact
+                            if is_desktop() {
+                                let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": lp_email_for_confirm.clone(), "kxAddress": Option::<String>::None })).unwrap_or(no_args());
+                                if let Ok(None) = call::<Option<Contact>>("check_if_contact", chk).await {
+                                    save_contact_email.set(lp_email_for_confirm.clone());
+                                    save_contact_name.set(String::new());
+                                    save_contact_msg.set(String::new());
+                                    save_contact_banner.set(true);
+                                }
+                            }
                             let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                             for i in 0..=10u8 {
                                 if i > 0 { delay_ms(1500).await; }
@@ -3369,7 +3445,7 @@ fn SendPanel(
                 view! { <span></span> }.into_any()
             }}
 
-            // Recipient mode: KX Address | Email | Freeform
+            // Recipient mode: KX Address | Email | Freeform (Freeform desktop-only)
             <div class="recipient-mode-group">
                 <button type="button"
                     class=move || if recipient_mode.get()==0 { "recipient-mode-btn active-kx" } else { "recipient-mode-btn" }
@@ -3379,10 +3455,16 @@ fn SendPanel(
                     class=move || if recipient_mode.get()==1 { "recipient-mode-btn active-email" } else { "recipient-mode-btn" }
                     on:click=move |_| { recipient_mode.set(1); send_sub.set(1); lock_date.set(String::new()); }
                     disabled=move || sending.get()>"Email"</button>
-                <button type="button"
-                    class=move || if recipient_mode.get()==2 { "recipient-mode-btn active-free" } else { "recipient-mode-btn" }
-                    on:click=move |_| { recipient_mode.set(2); send_sub.set(0); send_mode.set(1); lock_date.set(String::new()); }
-                    disabled=move || sending.get()>"Freeform"</button>
+                {if is_desktop() {
+                    view! {
+                        <button type="button"
+                            class=move || if recipient_mode.get()==2 { "recipient-mode-btn active-free" } else { "recipient-mode-btn" }
+                            on:click=move |_| { recipient_mode.set(2); send_sub.set(0); send_mode.set(1); lock_date.set(String::new()); }
+                            disabled=move || sending.get()>"Freeform"</button>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }}
             </div>
             // Freeform warning
             {move || if recipient_mode.get() == 2 {
@@ -3393,17 +3475,23 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
-            // Mode: Send Now | Send Later BETA
-            <div class="send-mode-row">
-                <button type="button"
-                    class=move || if send_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
-                    on:click=move |_| { send_mode.set(0); lock_date.set(String::new()); }
-                    disabled=move || sending.get()>"Send Now"</button>
-                <button type="button"
-                    class=move || if send_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
-                    on:click=move |_| send_mode.set(1)
-                    disabled=move || sending.get()>"\u{23f3} Send Later BETA"</button>
-            </div>
+            // Mode: Send Now | Send Later BETA (desktop = toggle, mobile = time picker below)
+            {if is_desktop() {
+                view! {
+                    <div class="send-mode-row">
+                        <button type="button"
+                            class=move || if send_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                            on:click=move |_| { send_mode.set(0); lock_date.set(String::new()); }
+                            disabled=move || sending.get()>"Send Now"</button>
+                        <button type="button"
+                            class=move || if send_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                            on:click=move |_| send_mode.set(1)
+                            disabled=move || sending.get()>"\u{23f3} Send Later BETA"</button>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
 
             // Recipient field — depends on recipient_mode
             {move || match recipient_mode.get() {
@@ -3461,12 +3549,64 @@ fn SendPanel(
                 // Email
                 1 => {
                     view! {
-                        <div class="field">
+                        <div class="field" style="position:relative">
                             <label>"Recipient Email Address"</label>
                             <input type="email" placeholder="recipient@example.com"
                                 prop:value=move || email.get()
-                                on:input=move |ev| email.set(event_target_value(&ev))
+                                on:input=move |ev| {
+                                    let val = event_target_value(&ev);
+                                    email.set(val.clone());
+                                    // Contact autocomplete (desktop only)
+                                    if is_desktop() && val.len() >= 2 {
+                                        let q = val.clone();
+                                        spawn_local(async move {
+                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "query": q })).unwrap_or(no_args());
+                                            if let Ok(results) = call::<Vec<Contact>>("search_contacts", args).await {
+                                                if !results.is_empty() {
+                                                    contact_suggestions.set(results);
+                                                    show_contact_dropdown.set(true);
+                                                } else {
+                                                    show_contact_dropdown.set(false);
+                                                }
+                                            }
+                                        });
+                                    } else {
+                                        show_contact_dropdown.set(false);
+                                    }
+                                }
+                                on:blur=move |_| {
+                                    // Delay hide so click on dropdown item registers first
+                                    spawn_local(async move {
+                                        delay_ms(200).await;
+                                        show_contact_dropdown.set(false);
+                                    });
+                                }
                                 disabled=move || sending.get() />
+                            // Contact autocomplete dropdown
+                            {move || {
+                                if !show_contact_dropdown.get() { return view! { <span></span> }.into_any(); }
+                                let suggestions = contact_suggestions.get();
+                                view! {
+                                    <div class="contact-dropdown">
+                                        {suggestions.into_iter().map(|c| {
+                                            let display_email = c.email.clone().unwrap_or_default();
+                                            let display_name = c.name.clone();
+                                            let fill_email = display_email.clone();
+                                            view! {
+                                                <div class="contact-dropdown-item"
+                                                    on:mousedown=move |ev| {
+                                                        ev.prevent_default();
+                                                        email.set(fill_email.clone());
+                                                        show_contact_dropdown.set(false);
+                                                    }>
+                                                    <span class="contact-dropdown-name">{display_name}</span>
+                                                    <span class="contact-dropdown-email">{display_email}</span>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                }.into_any()
+                            }}
                             // Self-email warning (FIX 8)
                             {move || {
                                 let user_email = claim_email.get();
@@ -3525,8 +3665,71 @@ fn SendPanel(
                 <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
             </div>
 
-            // Datetime picker — Send Later only
-            {move || if send_mode.get() == 1 {
+            // Mobile time picker — replaces Send Now / Send Later toggle on mobile
+            {if !is_desktop() {
+                view! {
+                    <div class="field">
+                        <label>{move || t(&lang.get(), "mobile_send_when")}</label>
+                        <div class="mobile-time-picker">
+                            {[
+                                (0u8, "mobile_send_now"),
+                                (1, "mobile_send_1h"),
+                                (2, "mobile_send_24h"),
+                                (3, "mobile_send_1w"),
+                                (4, "mobile_send_1m"),
+                                (5, "mobile_send_3m"),
+                                (6, "mobile_send_6m"),
+                                (7, "mobile_send_1y"),
+                            ].into_iter().map(|(val, key)| {
+                                let key_str = key.to_string();
+                                view! {
+                                    <button type="button"
+                                        class=move || if mobile_time_option.get() == val { "mobile-time-btn active" } else { "mobile-time-btn" }
+                                        on:click=move |_| {
+                                            mobile_time_option.set(val);
+                                            if val == 0 {
+                                                send_mode.set(0);
+                                                lock_date.set(String::new());
+                                            } else {
+                                                send_mode.set(1);
+                                                // Compute future date from now
+                                                let secs: i64 = match val {
+                                                    1 => 3600,       // 1 hour
+                                                    2 => 86400,      // 24 hours
+                                                    3 => 604800,     // 1 week
+                                                    4 => 2592000,    // 1 month (~30d)
+                                                    5 => 7776000,    // 3 months (~90d)
+                                                    6 => 15552000,   // 6 months (~180d)
+                                                    7 => 31536000,   // 1 year (365d)
+                                                    _ => 0,
+                                                };
+                                                let now = (js_sys::Date::now() / 1000.0) as i64;
+                                                let target = now + secs;
+                                                // Format as datetime-local string (YYYY-MM-DDTHH:MM)
+                                                let d = js_sys::Date::new_0();
+                                                d.set_time((target as f64) * 1000.0);
+                                                let year = d.get_utc_full_year();
+                                                let month = d.get_utc_month() + 1;
+                                                let day = d.get_utc_date();
+                                                let hour = d.get_utc_hours();
+                                                let min = d.get_utc_minutes();
+                                                lock_date.set(format!("{:04}-{:02}-{:02}T{:02}:{:02}", year, month, day, hour, min));
+                                            }
+                                        }
+                                        disabled=move || sending.get()>
+                                        {move || t(&lang.get(), &key_str)}
+                                    </button>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
+
+            // Datetime picker — Send Later only (desktop only on mobile since time picker replaces it)
+            {move || if send_mode.get() == 1 && is_desktop() {
                 view! {
                     <div class="field">
                         <div class="utc-clock">
@@ -3857,6 +4060,26 @@ fn SendPanel(
                         axiom_modal_open.set(true);
                         return;
                     }
+                    // Mobile confirmation screen
+                    if !is_desktop() && !mobile_confirm_open.get_untracked() {
+                        let to_display = if send_sub.get_untracked() == 1 {
+                            email.get_untracked()
+                        } else {
+                            to_addr.get_untracked()
+                        };
+                        mobile_confirm_to_display.set(to_display);
+                        mobile_confirm_amount_display.set(format!("{} KX", amount.get_untracked()));
+                        let unlock_str = if send_mode.get_untracked() == 0 {
+                            t(&lang.get_untracked(), "mobile_send_now")
+                        } else {
+                            lock_date.get_untracked()
+                        };
+                        mobile_confirm_unlock_display.set(unlock_str);
+                        mobile_confirm_memo_display.set(memo.get_untracked());
+                        mobile_confirm_open.set(true);
+                        return;
+                    }
+                    mobile_confirm_open.set(false);
                     on_send(ev);
                 }
                 disabled=move || sending.get() || (is_long_promise.get() && !axiom_consented.get())>
@@ -3894,6 +4117,59 @@ fn SendPanel(
                         </p>
                     }.into_any()
                 } else { view! { <span></span> }.into_any() }
+            }}
+            // "Save as contact?" banner after successful email send
+            {move || {
+                if !save_contact_banner.get() { return view! { <span></span> }.into_any(); }
+                let _em = save_contact_email.get();
+                let banner_msg = save_contact_msg.get();
+                view! {
+                    <div class="save-contact-banner">
+                        {if banner_msg.is_empty() {
+                            view! {
+                                <div>
+                                    <p style="font-weight:600;color:#e5e7eb;margin:0 0 4px">
+                                        {move || t(&lang.get(), "contacts_save_prompt")}
+                                    </p>
+                                    <p style="font-size:12px;color:#9ca3af;margin:0 0 8px">
+                                        {move || t(&lang.get(), "contacts_save_prompt_sub")}
+                                    </p>
+                                    <div style="display:flex;gap:8px;align-items:center">
+                                        <input type="text" class="input" placeholder="Name"
+                                            style="flex:1;padding:6px 8px;font-size:13px"
+                                            prop:value=move || save_contact_name.get()
+                                            on:input=move |ev| save_contact_name.set(event_target_value(&ev)) />
+                                        <button class="primary" style="padding:6px 14px;font-size:13px"
+                                            on:click=move |_| {
+                                                let name = save_contact_name.get_untracked();
+                                                let em2 = save_contact_email.get_untracked();
+                                                if name.trim().is_empty() { return; }
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                        "name": name, "email": em2, "kxAddress": Option::<String>::None, "notes": Option::<String>::None
+                                                    })).unwrap_or(no_args());
+                                                    match call::<Contact>("add_contact", args).await {
+                                                        Ok(_) => save_contact_msg.set(t(&lang.get_untracked(), "contacts_saved")),
+                                                        Err(e) => save_contact_msg.set(format!("Error: {e}")),
+                                                    }
+                                                });
+                                            }>
+                                            {move || t(&lang.get(), "contacts_save")}
+                                        </button>
+                                        <button style="padding:6px 10px;font-size:13px;background:transparent;border:1px solid #374151;color:#9ca3af;border-radius:6px;cursor:pointer"
+                                            on:click=move |_| { save_contact_banner.set(false); save_contact_msg.set(String::new()); }>
+                                            "\u{2715}"
+                                        </button>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <p style="color:#4ade80;font-size:13px;margin:0">{banner_msg}</p>
+                            }.into_any()
+                        }}
+                    </div>
+                }.into_any()
             }}
         </div>
         // Email send confirmation modal
@@ -3944,6 +4220,55 @@ fn SendPanel(
             }.into_any()
         } else { view! { <span></span> }.into_any() }}
         <AxiomConsentModal open=axiom_modal_open consented=axiom_consented consent_hash=axiom_consent_hash />
+        // Mobile confirmation screen
+        {move || if mobile_confirm_open.get() {
+            let to_val = mobile_confirm_to_display.get();
+            let amt_val = mobile_confirm_amount_display.get();
+            let unlock_val = mobile_confirm_unlock_display.get();
+            let memo_val = mobile_confirm_memo_display.get();
+            view! {
+                <div class="cascade-confirm-modal">
+                    <div class="cascade-confirm-box" style="max-width:400px">
+                        <h3 style="margin:0 0 16px;color:#e5e7eb">{move || t(&lang.get(), "send_confirm_title")}</h3>
+                        <div style="display:flex;flex-direction:column;gap:10px">
+                            <div style="display:flex;justify-content:space-between">
+                                <span style="color:#9ca3af;font-size:13px">{move || t(&lang.get(), "mobile_confirm_to")}</span>
+                                <span style="color:#e5e7eb;font-size:13px;font-weight:600;word-break:break-all;text-align:right;max-width:60%">{to_val}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between">
+                                <span style="color:#9ca3af;font-size:13px">{move || t(&lang.get(), "mobile_confirm_amount")}</span>
+                                <span style="color:#d4a84b;font-size:13px;font-weight:600">{amt_val}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between">
+                                <span style="color:#9ca3af;font-size:13px">{move || t(&lang.get(), "mobile_confirm_unlocks")}</span>
+                                <span style="color:#e5e7eb;font-size:13px">{unlock_val}</span>
+                            </div>
+                            {if !memo_val.is_empty() {
+                                let m = memo_val.clone();
+                                view! {
+                                    <div style="display:flex;justify-content:space-between">
+                                        <span style="color:#9ca3af;font-size:13px">{move || t(&lang.get(), "mobile_confirm_memo")}</span>
+                                        <span style="color:#e5e7eb;font-size:13px;max-width:60%;text-align:right;word-break:break-word">{m}</span>
+                                    </div>
+                                }.into_any()
+                            } else { view! { <span></span> }.into_any() }}
+                        </div>
+                        <div style="display:flex;gap:8px;margin-top:20px">
+                            <button style="flex:1;padding:10px;background:transparent;border:1px solid #374151;color:#9ca3af;border-radius:8px;cursor:pointer;font-size:14px"
+                                on:click=move |_| mobile_confirm_open.set(false)>
+                                {move || t(&lang.get(), "cancel")}
+                            </button>
+                            <button class="primary" style="flex:1;padding:10px;font-size:14px"
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    on_send(ev);
+                                }>
+                                {move || t(&lang.get(), "confirm_send")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
     }
 }
 
@@ -4758,6 +5083,277 @@ fn RequestPanel(
                 }
             }}
         </div>
+    }
+}
+
+// ── ContactsPanel (desktop only) ─────────────────────────────────────────────
+
+#[component]
+fn ContactsPanel(
+    lang: RwSignal<String>,
+    active_tab: RwSignal<u8>,
+    email_prefill_from_contact: RwSignal<String>,
+) -> impl IntoView {
+    let contacts: RwSignal<Vec<Contact>> = RwSignal::new(Vec::new());
+    let search_query = RwSignal::new(String::new());
+    let loading = RwSignal::new(true);
+    let msg = RwSignal::new(String::new());
+
+    // Add/Edit modal state
+    let modal_open = RwSignal::new(false);
+    let edit_id = RwSignal::new(Option::<String>::None); // None = add, Some = edit
+    let form_name = RwSignal::new(String::new());
+    let form_email = RwSignal::new(String::new());
+    let form_kx = RwSignal::new(String::new());
+    let form_notes = RwSignal::new(String::new());
+
+    // Delete confirmation
+    let delete_confirm_id = RwSignal::new(Option::<String>::None);
+
+    // Load contacts
+    let load_contacts = move || {
+        spawn_local(async move {
+            loading.set(true);
+            let q = search_query.get_untracked();
+            if q.is_empty() {
+                match call::<Vec<Contact>>("get_contacts", no_args()).await {
+                    Ok(c) => contacts.set(c),
+                    Err(e) => msg.set(format!("Error: {e}")),
+                }
+            } else {
+                let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "query": q })).unwrap_or(no_args());
+                match call::<Vec<Contact>>("search_contacts", args).await {
+                    Ok(c) => contacts.set(c),
+                    Err(e) => msg.set(format!("Error: {e}")),
+                }
+            }
+            loading.set(false);
+        });
+    };
+    let load_contacts_init = load_contacts.clone();
+    Effect::new(move |_| { load_contacts_init(); });
+
+    let open_add = move |_: web_sys::MouseEvent| {
+        edit_id.set(None);
+        form_name.set(String::new());
+        form_email.set(String::new());
+        form_kx.set(String::new());
+        form_notes.set(String::new());
+        modal_open.set(true);
+    };
+
+    let open_edit = move |c: Contact| {
+        edit_id.set(Some(c.id.clone()));
+        form_name.set(c.name.clone());
+        form_email.set(c.email.clone().unwrap_or_default());
+        form_kx.set(c.kx_address.clone().unwrap_or_default());
+        form_notes.set(c.notes.clone().unwrap_or_default());
+        modal_open.set(true);
+    };
+
+    let on_save = move |_: web_sys::MouseEvent| {
+        let name = form_name.get_untracked();
+        if name.trim().is_empty() { msg.set("Name is required".into()); return; }
+        let email_val = { let e = form_email.get_untracked(); if e.trim().is_empty() { None } else { Some(e) } };
+        let kx_val = { let k = form_kx.get_untracked(); if k.trim().is_empty() { None } else { Some(k) } };
+        let notes_val = { let n = form_notes.get_untracked(); if n.trim().is_empty() { None } else { Some(n) } };
+        let eid = edit_id.get_untracked();
+        let reload = load_contacts.clone();
+        spawn_local(async move {
+            let result = if let Some(id) = eid {
+                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                    "id": id, "name": name, "email": email_val, "kxAddress": kx_val, "notes": notes_val
+                })).unwrap_or(no_args());
+                call::<Contact>("update_contact", args).await.map(|_| ())
+            } else {
+                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                    "name": name, "email": email_val, "kxAddress": kx_val, "notes": notes_val
+                })).unwrap_or(no_args());
+                call::<Contact>("add_contact", args).await.map(|_| ())
+            };
+            match result {
+                Ok(_) => { modal_open.set(false); msg.set(String::new()); reload(); }
+                Err(e) => msg.set(format!("Error: {e}")),
+            }
+        });
+    };
+
+    let on_delete = move |id: String| {
+        let reload = load_contacts.clone();
+        spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "id": id })).unwrap_or(no_args());
+            match call::<()>("delete_contact", args).await {
+                Ok(_) => { delete_confirm_id.set(None); reload(); }
+                Err(e) => msg.set(format!("Error: {e}")),
+            }
+        });
+    };
+
+    let on_send_kx = move |c: Contact| {
+        if let Some(em) = c.email.as_ref() {
+            email_prefill_from_contact.set(em.clone());
+            active_tab.set(1); // Switch to Send tab
+        }
+    };
+
+    view! {
+        <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+                <h2 style="margin:0;font-size:18px;color:#e5e7eb">{move || t(&lang.get(), "tab_contacts")}</h2>
+                <button class="primary" style="padding:6px 14px;font-size:13px" on:click=open_add>
+                    {move || t(&lang.get(), "contacts_add_button")}
+                </button>
+            </div>
+            <div style="margin-bottom:12px">
+                <input type="text" class="input" style="width:100%;padding:8px 12px"
+                    placeholder=move || t(&lang.get(), "contacts_search_placeholder")
+                    prop:value=move || search_query.get()
+                    on:input=move |ev| {
+                        search_query.set(event_target_value(&ev));
+                        let reload = load_contacts.clone();
+                        reload();
+                    } />
+            </div>
+            {move || {
+                let m = msg.get();
+                if m.is_empty() { view! { <span></span> }.into_any() }
+                else { view! { <p class="msg error" style="margin-bottom:8px">{m}</p> }.into_any() }
+            }}
+            {move || {
+                let list = contacts.get();
+                if loading.get() {
+                    view! { <p style="color:#9ca3af;text-align:center;padding:24px">"Loading..."</p> }.into_any()
+                } else if list.is_empty() {
+                    view! { <p style="color:#6b7280;text-align:center;padding:24px">{move || t(&lang.get(), "contacts_empty_state")}</p> }.into_any()
+                } else {
+                    view! {
+                        <div class="contacts-list">
+                            {list.into_iter().map(|c| {
+                                let c_edit = c.clone();
+                                let c_send = c.clone();
+                                let c_del_id = c.id.clone();
+                                let c_del_id2 = c.id.clone();
+                                let display_name = c.name.clone();
+                                let display_email = c.email.clone().unwrap_or_default();
+                                let display_kx = c.kx_address.clone().unwrap_or_default();
+                                let display_notes = c.notes.clone().unwrap_or_default();
+                                let send_count = c.send_count;
+                                let _last_sent = c.last_sent;
+                                view! {
+                                    <div class="contact-card">
+                                        <div class="contact-card-main">
+                                            <div class="contact-card-info">
+                                                <span class="contact-card-name">{display_name}</span>
+                                                {if !display_email.is_empty() {
+                                                    view! { <span class="contact-card-email">{display_email}</span> }.into_any()
+                                                } else if !display_kx.is_empty() {
+                                                    let short_kx = if display_kx.len() > 12 { format!("{}...{}", &display_kx[..6], &display_kx[display_kx.len()-6..]) } else { display_kx.clone() };
+                                                    view! { <span class="contact-card-email" style="font-family:monospace">{short_kx}</span> }.into_any()
+                                                } else {
+                                                    view! { <span></span> }.into_any()
+                                                }}
+                                                {if !display_notes.is_empty() {
+                                                    view! { <span class="contact-card-notes">{display_notes}</span> }.into_any()
+                                                } else { view! { <span></span> }.into_any() }}
+                                            </div>
+                                            {if send_count > 0 {
+                                                view! {
+                                                    <span class="contact-card-meta">
+                                                        {format!("{} {}", send_count, t(&lang.get_untracked(), "contacts_times_sent"))}
+                                                    </span>
+                                                }.into_any()
+                                            } else { view! { <span></span> }.into_any() }}
+                                        </div>
+                                        <div class="contact-card-actions">
+                                            <button class="contact-btn contact-btn-send" on:click=move |_| on_send_kx(c_send.clone())>
+                                                {move || t(&lang.get(), "contacts_send_kx")}
+                                            </button>
+                                            <button class="contact-btn" on:click=move |_| open_edit(c_edit.clone())>
+                                                {move || t(&lang.get(), "contacts_edit")}
+                                            </button>
+                                            {move || {
+                                                let del_id = c_del_id.clone();
+                                                let del_id2 = c_del_id2.clone();
+                                                if delete_confirm_id.get().as_deref() == Some(&del_id) {
+                                                    view! {
+                                                        <span style="display:flex;gap:4px;align-items:center">
+                                                            <span style="font-size:12px;color:#ef4444">{move || t(&lang.get(), "contacts_delete_confirm")}</span>
+                                                            <button class="contact-btn" style="color:#ef4444;border-color:#ef4444"
+                                                                on:click=move |_| on_delete(del_id.clone())>
+                                                                {move || t(&lang.get(), "confirm")}
+                                                            </button>
+                                                            <button class="contact-btn" on:click=move |_| delete_confirm_id.set(None)>
+                                                                {move || t(&lang.get(), "cancel")}
+                                                            </button>
+                                                        </span>
+                                                    }.into_any()
+                                                } else {
+                                                    view! {
+                                                        <button class="contact-btn" style="color:#ef4444" on:click=move |_| delete_confirm_id.set(Some(del_id2.clone()))>
+                                                            {move || t(&lang.get(), "contacts_delete")}
+                                                        </button>
+                                                    }.into_any()
+                                                }
+                                            }}
+                                        </div>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </div>
+        // Add/Edit Contact Modal
+        {move || if modal_open.get() {
+            let is_edit = edit_id.get().is_some();
+            view! {
+                <div class="cascade-confirm-modal">
+                    <div class="cascade-confirm-box" style="max-width:450px">
+                        <h3 style="margin:0 0 16px;color:#e5e7eb">
+                            {if is_edit { t(&lang.get(), "contacts_edit") } else { t(&lang.get(), "contacts_add_button") }}
+                        </h3>
+                        <div style="display:flex;flex-direction:column;gap:10px">
+                            <div>
+                                <label style="display:block;font-size:12px;color:#9ca3af;margin-bottom:4px">{move || t(&lang.get(), "contacts_name")}" *"</label>
+                                <input type="text" class="input" style="width:100%;padding:8px 10px"
+                                    prop:value=move || form_name.get()
+                                    on:input=move |ev| form_name.set(event_target_value(&ev)) />
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:12px;color:#9ca3af;margin-bottom:4px">{move || t(&lang.get(), "contacts_email")}</label>
+                                <input type="email" class="input" style="width:100%;padding:8px 10px"
+                                    placeholder="user@example.com"
+                                    prop:value=move || form_email.get()
+                                    on:input=move |ev| form_email.set(event_target_value(&ev)) />
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:12px;color:#9ca3af;margin-bottom:4px">{move || t(&lang.get(), "contacts_kx_address")}</label>
+                                <input type="text" class="input" style="width:100%;padding:8px 10px;font-family:monospace;font-size:12px"
+                                    prop:value=move || form_kx.get()
+                                    on:input=move |ev| form_kx.set(event_target_value(&ev)) />
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:12px;color:#9ca3af;margin-bottom:4px">{move || t(&lang.get(), "contacts_notes")}</label>
+                                <textarea class="input" style="width:100%;padding:8px 10px;min-height:60px;resize:vertical"
+                                    prop:value=move || form_notes.get()
+                                    on:input=move |ev| form_notes.set(event_target_value(&ev))>
+                                </textarea>
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+                            <button style="padding:8px 16px;background:transparent;border:1px solid #374151;color:#9ca3af;border-radius:6px;cursor:pointer"
+                                on:click=move |_| modal_open.set(false)>
+                                {move || t(&lang.get(), "cancel")}
+                            </button>
+                            <button class="primary" style="padding:8px 16px" on:click=on_save>
+                                {move || t(&lang.get(), "contacts_save")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
     }
 }
 

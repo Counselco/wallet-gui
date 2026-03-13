@@ -14,6 +14,7 @@
 // ╚══════════════════════════════════════════════════════════════════════════════╝
 
 mod commands;
+mod contacts;
 
 use std::sync::Mutex;
 use tauri::Emitter;
@@ -111,6 +112,13 @@ pub fn run() {
             commands::create_freeform_timelock,
             commands::get_claim_info,
             commands::whitelist_email,
+            contacts::get_contacts,
+            contacts::search_contacts,
+            contacts::add_contact,
+            contacts::update_contact,
+            contacts::delete_contact,
+            contacts::record_send_to_contact,
+            contacts::check_if_contact,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
