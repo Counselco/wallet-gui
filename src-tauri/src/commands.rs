@@ -1429,13 +1429,15 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     let kp = load_keypair(&app)?;
     let b58 = kp.account_id.to_b58();
 
-    // ── Promise (timelock) transactions only ─────────────────────────────────
-    let tl_result = rpc_call(
+    // ── Outgoing timelocks ────────────────────────────────────────────────────
+    // Use if-let so a transient RPC failure here doesn't abort the function and
+    // hide the incoming-transfers section. Worst case: timelocks show empty.
+    let locks: Vec<serde_json::Value> = rpc_call(
         &url, "chronx_getTimeLockContracts", serde_json::json!([b58])
-    ).await.map_err(|e| format!("RPC failed: {e}"))?;
-
-    let locks: Vec<serde_json::Value> =
-        serde_json::from_value(tl_result).map_err(|e| format!("Parsing history: {e}"))?;
+    ).await
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
     // Load email send history for enrichment (lock_id → (email, claim_code))
     let email_map: std::collections::HashMap<String, (String, Option<String>)> = {
@@ -1526,34 +1528,68 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     entries.extend(local);
 
     // ── Incoming transactions (transfers received, claimed timelocks) ────────
-    let incoming_result = rpc_call(
+    let incoming: Vec<serde_json::Value> = rpc_call(
         &url, "chronx_getIncomingTransfers", serde_json::json!([b58])
-    ).await;
+    ).await
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
-    if let Ok(incoming_val) = incoming_result {
-        let incoming: Vec<serde_json::Value> =
-            serde_json::from_value(incoming_val).unwrap_or_default();
-        for v in incoming {
-            let raw_type = v["tx_type"].as_str().unwrap_or("transfer");
-            let tx_type = match raw_type {
-                "email_claim"   => "Email Claimed".to_string(),
-                "timelock_claim" => "Promise Kept".to_string(),
-                _               => "Transfer Received".to_string(),
-            };
-            entries.push(TxHistoryEntry {
-                tx_id: v["tx_id"].as_str().unwrap_or("").to_string(),
-                tx_type,
-                amount_chronos: Some(v["amount_chronos"].as_str().unwrap_or("0").to_string()),
-                counterparty: Some(v["from"].as_str().unwrap_or("").to_string()),
-                timestamp: v["timestamp"].as_i64().unwrap_or(0),
-                status: "Confirmed".to_string(),
-                unlock_date: None,
-                cancellation_window_secs: None,
-                created_at: Some(v["timestamp"].as_i64().unwrap_or(0)),
-                claim_code: None,
-                claim_secret_hash: None,
-            });
+    for v in incoming {
+        let raw_type = v["tx_type"].as_str().unwrap_or("transfer");
+        let tx_type = match raw_type {
+            "email_claim"    => "Email Claimed".to_string(),
+            "timelock_claim" => "Promise Kept".to_string(),
+            _                => "Transfer Received".to_string(),
+        };
+        entries.push(TxHistoryEntry {
+            tx_id: v["tx_id"].as_str().unwrap_or("").to_string(),
+            tx_type,
+            amount_chronos: Some(v["amount_chronos"].as_str().unwrap_or("0").to_string()),
+            counterparty: Some(v["from"].as_str().unwrap_or("").to_string()),
+            timestamp: v["timestamp"].as_i64().unwrap_or(0),
+            status: "Confirmed".to_string(),
+            unlock_date: None,
+            cancellation_window_secs: None,
+            created_at: Some(v["timestamp"].as_i64().unwrap_or(0)),
+            claim_code: None,
+            claim_secret_hash: None,
+        });
+    }
+
+    // ── Outgoing immediate transfers (non-timelock sends) ─────────────────────
+    // chronx_getOutgoingTransfers is a node RPC added in v7.x. Graceful fallback
+    // if the node doesn't support it yet (returns method-not-found or network error).
+    // Deduplicates against local transfer-history.json entries already in `entries`
+    // so restoring a wallet never double-counts sends made on this device.
+    let local_tx_ids: std::collections::HashSet<String> =
+        entries.iter().map(|e| e.tx_id.clone()).collect();
+
+    let outgoing: Vec<serde_json::Value> = rpc_call(
+        &url, "chronx_getOutgoingTransfers", serde_json::json!([b58])
+    ).await
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    for v in outgoing {
+        let tx_id = v["tx_id"].as_str().unwrap_or("").to_string();
+        if local_tx_ids.contains(&tx_id) {
+            continue; // already present from local transfer-history.json
         }
+        entries.push(TxHistoryEntry {
+            tx_id,
+            tx_type: "Transfer Sent".to_string(),
+            amount_chronos: Some(v["amount_chronos"].as_str().unwrap_or("0").to_string()),
+            counterparty: Some(v["to"].as_str().unwrap_or("").to_string()),
+            timestamp: v["timestamp"].as_i64().unwrap_or(0),
+            status: "Confirmed".to_string(),
+            unlock_date: None,
+            cancellation_window_secs: None,
+            created_at: Some(v["timestamp"].as_i64().unwrap_or(0)),
+            claim_code: None,
+            claim_secret_hash: None,
+        });
     }
 
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -2031,11 +2067,17 @@ pub async fn get_all_promises(app: AppHandle) -> Result<Vec<TimeLockInfo>, Strin
     let mut all = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // 1. Outgoing: locks where sender = my_address
+    // 1. Outgoing: locks where sender = my_address, pending only (future unlock date).
+    //    chronx_getTimeLockContracts returns ALL outgoing locks regardless of status;
+    //    we filter to Pending so the Promises tab only shows time-locked sends that
+    //    have not yet been delivered.
     if let Ok(result) = rpc_call(&url, "chronx_getTimeLockContracts", serde_json::json!([b58])).await {
         if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
             for v in raw {
                 let mut lock = parse_timelock_json(&v);
+                if lock.status != "Pending" {
+                    continue; // skip delivered/claimed outgoing locks
+                }
                 lock.direction = Some("outgoing".to_string());
                 if seen.insert(lock.lock_id.clone()) {
                     all.push(lock);
