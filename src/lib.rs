@@ -1,3 +1,47 @@
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║  PLATFORM UI GUIDE — ChronX Wallet Frontend (Leptos WASM)                  ║
+// ║                                                                            ║
+// ║  This file compiles to WASM and runs identically on ALL platforms.          ║
+// ║  The WASM target is always wasm32-unknown-unknown — no #[cfg()] here.      ║
+// ║  Platform differences are handled at RUNTIME via:                          ║
+// ║                                                                            ║
+// ║    is_desktop() → true on Windows/macOS/Linux (user-agent check)           ║
+// ║    is_ios()     → true on iPhone/iPad (user-agent check)                   ║
+// ║    else         → Android                                                  ║
+// ║                                                                            ║
+// ║  LAYOUT:                                                                   ║
+// ║    Desktop  — Left sidebar, 6 tabs: Receive|Send|Promises|Request|         ║
+// ║               History|Settings. CSS class "desktop-shell".                 ║
+// ║    Mobile   — Top header + bottom tab bar, 4 tabs: Receive|Send|           ║
+// ║               Promises|Settings. CSS class "app". History & Rewards        ║
+// ║               accessible as sub-views from Settings.                       ║
+// ║                                                                            ║
+// ║  DESKTOP-ONLY FEATURES (gated by `if desktop { ... }`):                    ║
+// ║    • Cascade Send toggle (Simple/Cascade) on Send tab                      ║
+// ║    • CascadeSendPanel — multi-stage time-locked send builder               ║
+// ║    • RequestPanel (Tab 3) — poke payment requests                          ║
+// ║    • HistoryPanel (Tab 4) — full transaction history with filters          ║
+// ║    • Cold Storage wallet generator (Settings)                              ║
+// ║    • Node URL setting (Settings → Advanced)                                ║
+// ║    • Power-user warning banner on Send screen                              ║
+// ║                                                                            ║
+// ║  MOBILE-ONLY FEATURES (gated by `if !desktop { ... }`):                    ║
+// ║    • History sub-view (full-screen from Settings)                          ║
+// ║    • Rewards sub-view (full-screen from Settings)                          ║
+// ║    • Poke badge on Send tab (desktop shows in Request tab)                 ║
+// ║                                                                            ║
+// ║  iOS-SPECIFIC (gated by `if is_ios() { ... }`):                            ║
+// ║    • Update button shows "Update via App Store" (no direct link)           ║
+// ║                                                                            ║
+// ║  ALL PLATFORMS (no gating):                                                ║
+// ║    • AccountPanel (Receive tab) — balance, QR, claim-by-code              ║
+// ║    • SendPanel — simple KX/email sends, now/later, series                  ║
+// ║    • PromisesPanel — incoming + outgoing sections                          ║
+// ║    • SettingsPanel — language, PIN, email verification, backup             ║
+// ║    • Deep link handling (chronx://claim, chronx://pay)                     ║
+// ║    • QR code generation and scanning                                       ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
 use base64::Engine as _;
 use js_sys::Promise;
 use leptos::prelude::*;

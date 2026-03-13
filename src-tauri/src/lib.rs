@@ -1,3 +1,18 @@
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║  PLATFORM ENTRY POINT — ChronX Wallet (Tauri v2)                           ║
+// ║                                                                            ║
+// ║  This is the native app shell. Compiles per-platform:                      ║
+// ║    Desktop (Windows/macOS/Linux) — #[cfg(desktop)]                         ║
+// ║    Mobile  (Android/iOS)         — #[cfg(mobile)]                          ║
+// ║                                                                            ║
+// ║  Desktop-only: single-instance plugin (prevents duplicate windows)         ║
+// ║  Desktop-only: deep-link scheme registration (runtime)                     ║
+// ║  Mobile:       deep links handled by OS (Intent filters / Universal Links) ║
+// ║                                                                            ║
+// ║  All Tauri commands are registered for ALL platforms. UI gating in the      ║
+// ║  WASM frontend (lib.rs) controls which features are shown.                 ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
 mod commands;
 
 use std::sync::Mutex;

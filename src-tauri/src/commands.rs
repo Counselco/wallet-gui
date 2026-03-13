@@ -1,6 +1,30 @@
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║  PLATFORM COMPILATION GUIDE — ChronX Wallet Backend (Tauri commands)       ║
+// ║                                                                            ║
+// ║  This file compiles for THREE targets from ONE source:                     ║
+// ║    • Windows/macOS/Linux  — `#[cfg(not(mobile))]` or `#[cfg(desktop)]`     ║
+// ║    • Android              — `#[cfg(mobile)]`                               ║
+// ║    • iOS                  — `#[cfg(mobile)]`                               ║
+// ║                                                                            ║
+// ║  Tauri sets `cfg(mobile)` automatically for Android + iOS builds,          ║
+// ║  and `cfg(desktop)` for Windows/macOS/Linux.                               ║
+// ║                                                                            ║
+// ║  KEY DIFFERENCE: File paths.                                               ║
+// ║    Desktop  → ~/.chronx/*.json  (home directory)                           ║
+// ║    Mobile   → app_data_dir()    (sandboxed app storage, Android & iOS)     ║
+// ║                                                                            ║
+// ║  All Tauri commands compile on ALL platforms. UI gating (is_desktop()      ║
+// ║  in lib.rs) controls which features are shown per platform.                ║
+// ║                                                                            ║
+// ║  Build commands:                                                           ║
+// ║    Windows:  cargo tauri build                                             ║
+// ║    Android:  JAVA_HOME="..." cargo tauri android build --target aarch64    ║
+// ║    iOS:      cargo tauri ios build   (on macOS only)                       ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
 use base64::Engine as _;
 use sha2::{Sha256, Digest};
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 use tauri::Manager;
 use chronx_core::{
     constants::{CHRONOS_PER_KX, POW_INITIAL_DIFFICULTY},
@@ -32,14 +56,14 @@ fn expand_tilde(path: &str) -> PathBuf {
 }
 
 fn keyfile_path(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("wallet.json")
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(mobile))]
     {
         let _ = app; // unused on desktop
         expand_tilde("~/.chronx/wallet.json")
@@ -47,14 +71,14 @@ fn keyfile_path(app: &AppHandle) -> PathBuf {
 }
 
 fn config_path(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("wallet-config.json")
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(mobile))]
     {
         let _ = app;
         expand_tilde("~/.chronx/wallet-config.json")
@@ -1671,14 +1695,14 @@ struct EmailSendEntry {
 }
 
 fn email_history_path(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("email-history.json")
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(mobile))]
     {
         let _ = app;
         expand_tilde("~/.chronx/email-history.json")
@@ -1716,14 +1740,14 @@ pub async fn save_email_send(
 }
 
 fn transfer_history_path(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("transfer-history.json")
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(mobile))]
     {
         let _ = app;
         expand_tilde("~/.chronx/transfer-history.json")
@@ -1743,14 +1767,14 @@ fn append_transfer_history(app: &AppHandle, entry: &TxHistoryEntry) {
 }
 
 fn seen_notices_path(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("seen-notices.json")
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(mobile))]
     {
         let _ = app;
         expand_tilde("~/.chronx/seen-notices.json")
@@ -2332,14 +2356,14 @@ pub struct TrustedContact {
 }
 
 fn trusted_contacts_path(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("trusted_contacts.json")
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(mobile))]
     {
         let _ = app;
         expand_tilde("~/.chronx/trusted_contacts.json")
@@ -2603,14 +2627,14 @@ pub async fn get_axiom_consent_hash(app: AppHandle) -> Result<String, String> {
 }
 
 fn language_path(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     {
         app.path()
             .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("language.txt")
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(mobile))]
     {
         let _ = app;
         expand_tilde("~/.chronx/language.txt")
