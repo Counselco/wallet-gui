@@ -2253,6 +2253,7 @@ fn AccountPanel(
     let convert_nickname  = RwSignal::new(String::new());
     let convert_saved_nick = RwSignal::new(String::new()); // loaded from config
     // Address check: unknown address warning
+    let convert_nick_saved = RwSignal::new(false); // brief "Saved!" confirmation
     let convert_addr_unknown = RwSignal::new(false);
     let convert_addr_checked = RwSignal::new(false); // true = check completed
     let convert_addr_override = RwSignal::new(false); // user checked "I've verified"
@@ -2483,6 +2484,7 @@ fn AccountPanel(
                                                 view! { <p style="font-size:11px;color:#d4a84b;margin:0 0 4px">"Saved address"</p> }.into_any()
                                             } else { view! { <span></span> }.into_any() }
                                         }}
+                                        <p style="color:#ff4444;font-size:13px;font-weight:700;margin:0 0 6px">{"\u{26a0} Please enter ONLY a receiving USDC address on the Base network. Sending to any other address risks permanent loss of funds."}</p>
                                         <label style="font-size:12px;color:#9ca3af;display:block;margin-bottom:4px">"Your Base wallet address (to receive USDC)"</label>
                                         <input type="text" class="convert-input" placeholder="0x..."
                                             style="font-family:monospace;font-size:13px"
@@ -2590,14 +2592,42 @@ fn AccountPanel(
                                         // Nickname input (shown when "Save" is checked)
                                         {move || {
                                             if !convert_save_base.get() { return view! { <span></span> }.into_any(); }
+                                            let save_nick = move || {
+                                                let a = convert_base_addr.get_untracked().trim().to_string();
+                                                let n = convert_nickname.get_untracked();
+                                                let nick_opt: Option<String> = if n.trim().is_empty() { None } else { Some(n) };
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(
+                                                        &serde_json::json!({ "address": a, "nickname": nick_opt })
+                                                    ).unwrap_or(no_args());
+                                                    let _ = call::<()>("set_base_address", args).await;
+                                                    convert_nick_saved.set(true);
+                                                    set_timeout(move || convert_nick_saved.set(false), std::time::Duration::from_secs(2));
+                                                });
+                                            };
+                                            let save_nick_enter = save_nick.clone();
                                             view! {
                                                 <div style="margin-top:6px">
                                                     <label style="font-size:11px;color:#9ca3af;display:block;margin-bottom:2px">"Nickname for this address (optional)"</label>
-                                                    <input type="text" class="convert-input" placeholder="e.g. My Trust Wallet, Coinbase, MetaMask"
-                                                        style="font-size:12px"
-                                                        prop:value=move || convert_nickname.get()
-                                                        on:input=move |ev| convert_nickname.set(event_target_value(&ev))
-                                                    />
+                                                    <div style="display:flex;align-items:center;gap:6px">
+                                                        <input type="text" class="convert-input" placeholder="e.g. My Trust Wallet, Coinbase, MetaMask"
+                                                            style="font-size:12px;flex:1"
+                                                            prop:value=move || convert_nickname.get()
+                                                            on:input=move |ev| convert_nickname.set(event_target_value(&ev))
+                                                            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                                if ev.key() == "Enter" {
+                                                                    ev.prevent_default();
+                                                                    save_nick_enter();
+                                                                }
+                                                            }
+                                                        />
+                                                        <button style="background:#d4a84b;color:#0a0a0a;border:none;border-radius:4px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap"
+                                                            on:click=move |_| save_nick()
+                                                        >"Save"</button>
+                                                    </div>
+                                                    {move || if convert_nick_saved.get() {
+                                                        view! { <p style="color:#22c55e;font-size:11px;margin:4px 0 0;font-weight:600">{"\u{2713} Saved!"}</p> }.into_any()
+                                                    } else { view! { <span></span> }.into_any() }}
                                                 </div>
                                             }.into_any()
                                         }}
