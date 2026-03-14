@@ -5992,11 +5992,19 @@ fn HistoryPanel(
                 // Build cascade maps: which claim_secret_hash groups have any claimed lock?
                 let mut cascade_claimed: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
                 let mut cascade_lock_ids: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                // Map claim_secret_hash → (email, recipient_registered) from Email Send entries
+                let mut cascade_email: std::collections::HashMap<String, (String, Option<bool>)> = std::collections::HashMap::new();
                 for e in &list {
                     if let Some(ref hash) = e.claim_secret_hash {
                         cascade_lock_ids.entry(hash.clone()).or_default().push(e.tx_id.clone());
                         if e.status == "Claimed" || e.status.contains("Reverted") {
                             cascade_claimed.insert(hash.clone(), true);
+                        }
+                        // Capture email from Email Send entries for cascade cross-reference
+                        if e.tx_type == "Email Send" {
+                            if let Some(ref cp) = e.counterparty {
+                                cascade_email.entry(hash.clone()).or_insert_with(|| (cp.clone(), e.recipient_registered));
+                            }
                         }
                     }
                 }
@@ -6107,6 +6115,7 @@ fn HistoryPanel(
                                         _ => "SENT",
                                     },
                                     "Email Claimed" => "RECEIVED",
+                                    "Promise Sent" | "TimeLockCreate" if is_cascade_early => "CASCADE",
                                     "Promise Sent" | "TimeLockCreate" if is_scheduled => "SCHEDULED",
                                     "Promise Sent" | "TimeLockCreate" => "OUTGOING PROMISE",
                                     "Promise Kept" => "RECEIVED",
@@ -6156,6 +6165,12 @@ fn HistoryPanel(
                                     entry.counterparty.as_deref()
                                         .map(|a| format!("From {}", shorten_addr(a)))
                                         .unwrap_or_default()
+                                } else if is_cascade_early {
+                                    // Cascade "Promise Sent": show email from sibling Email Send entry
+                                    entry.claim_secret_hash.as_ref()
+                                        .and_then(|h| cascade_email.get(h))
+                                        .map(|(email, _)| if email.len() > 26 { format!("{}…", &email[..24]) } else { email.clone() })
+                                        .unwrap_or_else(|| entry.counterparty.as_deref().map(shorten_addr).unwrap_or_default())
                                 } else if let Some(unlock_ts) = entry.unlock_date {
                                     format!("Unlocks {}", unix_to_date_str(unlock_ts))
                                 } else {
@@ -6303,9 +6318,14 @@ fn HistoryPanel(
                                                             </button>
                                                         }.into_any()
                                                     } else { view! { <span></span> }.into_any() }}
-                                                    // Category subtext (v1.5.1: cascade + registration-aware)
+                                                    // Category subtext (v1.5.2: cascade + registration from sibling data)
                                                     {if is_cascade_early && entry_status != "Claimed" && entry_status != "Cancelled" && entry_status != "Expired \u{2014} Reverted" {
-                                                        let is_registered = entry.recipient_registered.unwrap_or(false);
+                                                        // Use entry's own recipient_registered, or fall back to sibling cascade data
+                                                        let is_registered = entry.recipient_registered
+                                                            .or_else(|| entry.claim_secret_hash.as_ref()
+                                                                .and_then(|h| cascade_email.get(h))
+                                                                .and_then(|(_, reg)| *reg))
+                                                            .unwrap_or(false);
                                                         let reg_label = if is_registered { "Registered" } else { "Unregistered" };
                                                         let unlock_date = entry.unlock_date.map(unix_to_date_str).unwrap_or_default();
                                                         let subtext = format!("{} \u{b7} Unlocks {}", reg_label, unlock_date);
@@ -6350,6 +6370,42 @@ fn HistoryPanel(
                                                         "Enter claim code to receive"
                                                     </span>
                                                 }.into_any()
+                                            }
+                                        } else if is_cascade_early && !is_email_send && !is_incoming_promise {
+                                            // "Promise Sent" cascade entries: show registration + unlock subtext
+                                            let resolved = matches!(entry_status.as_str(), "Claimed" | "Cancelled" | "Expired" | "Reverted");
+                                            if !resolved {
+                                                let is_reg = entry.recipient_registered
+                                                    .or_else(|| entry.claim_secret_hash.as_ref()
+                                                        .and_then(|h| cascade_email.get(h))
+                                                        .and_then(|(_, reg)| *reg))
+                                                    .unwrap_or(false);
+                                                let reg_label = if is_reg { "Registered" } else { "Unregistered" };
+                                                let unlock_date = entry.unlock_date.map(unix_to_date_str).unwrap_or_default();
+                                                let sub = format!("{} \u{b7} Unlocks {}", reg_label, unlock_date);
+                                                view! {
+                                                    <div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap">
+                                                        <span style="color:#9ca3af;font-size:10px">{sub}</span>
+                                                        {if can_cancel && !cascade_has_claim {
+                                                            let cancel_cascade_for_ps = entry_cascade_ids.clone();
+                                                            let inline_cancel_ps = entry.tx_id.clone();
+                                                            view! {
+                                                                <button class="cancel-btn" style="margin-top:0;font-size:11px;padding:2px 10px"
+                                                                    on:click={move |ev: web_sys::MouseEvent| {
+                                                                        ev.stop_propagation();
+                                                                        cancel_msg.set(String::new());
+                                                                        cancel_is_email.set(true);
+                                                                        cancel_cascade_ids.set(cancel_cascade_for_ps.clone());
+                                                                        cancel_target.set(Some(inline_cancel_ps.clone()));
+                                                                    }}>
+                                                                    "Cancel"
+                                                                </button>
+                                                            }.into_any()
+                                                        } else { view! { <span></span> }.into_any() }}
+                                                    </div>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
                                             }
                                         } else { view! { <span></span> }.into_any() }}
                                         {move || {
