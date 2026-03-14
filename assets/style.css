@@ -2116,4 +2116,52 @@ input[type="range"].pct-slider {
     margin-top: 10px;
 }
 
+/* ── Inline email save icon (mobile) ──────────────────────────────────────── */
+.email-field-wrap { position: relative; }
+.email-field-wrap input { padding-right: 36px; }
+.email-save-icon {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px;
+    line-height: 1;
+}
+.email-save-icon:hover { opacity: 0.8; }
+.email-save-icon.saved { color: #d4a84b; cursor: default; }
+.nickname-prompt {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+    animation: fadeIn 0.15s ease-out;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.nickname-prompt input {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 13px;
+    background: #161b27;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    color: #e5e7eb;
+    outline: none;
+}
+.nickname-prompt input:focus { border-color: #d4a84b; }
+.nickname-prompt button {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    background: #d4a84b;
+    color: #000;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
 /* ═══════════════════════════════════════════════════════════ */

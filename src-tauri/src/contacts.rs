@@ -193,6 +193,9 @@ pub async fn add_contact(
         }
     }
     let mut book = ContactBook::load(&app);
+    if book.contacts.len() >= 50 {
+        return Err("Address book is full (50/50). Delete a contact to add another.".into());
+    }
     let contact = book.add(name, email, kx_address, notes);
     book.save(&app)?;
     Ok(contact)

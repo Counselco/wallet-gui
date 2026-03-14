@@ -3256,6 +3256,10 @@ fn SendPanel(
     // Address book modal (mobile only)
     let address_book_open = RwSignal::new(false);
     let address_book_contacts: RwSignal<Vec<Contact>> = RwSignal::new(Vec::new());
+    // Inline email save icon state: 0=hidden, 1=save icon, 2=nickname prompt, 3=saved ✓
+    let email_save_state = RwSignal::new(0u8);
+    let email_save_nickname = RwSignal::new(String::new());
+    let email_save_msg = RwSignal::new(String::new());
     // Mobile time picker: 0=Send Now, 1=1h, 2=24h, 3=1w, 4=1m, 5=3m, 6=6m, 7=1y
     let mobile_time_option = RwSignal::new(0u8);
     // Mobile confirmation screen
@@ -3265,11 +3269,7 @@ fn SendPanel(
     let mobile_confirm_unlock_display = RwSignal::new(String::new());
     let mobile_confirm_memo_display = RwSignal::new(String::new());
 
-    // "Save as contact?" banner after successful send
-    let save_contact_banner = RwSignal::new(false);
-    let save_contact_email = RwSignal::new(String::new());
-    let save_contact_name = RwSignal::new(String::new());
-    let save_contact_msg = RwSignal::new(String::new());
+    // (save_contact_banner signals removed — replaced by inline save icon)
 
     let set_date = move |date: String| lock_date.set(date);
 
@@ -3493,16 +3493,6 @@ fn SendPanel(
                             Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
                             Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                         }
-                        // Show "Save as contact?" banner if not already a contact
-                        {
-                            let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": email_str.clone(), "kxAddress": Option::<String>::None })).unwrap_or(no_args());
-                            if let Ok(None) = call::<Option<Contact>>("check_if_contact", chk).await {
-                                save_contact_email.set(email_str.clone());
-                                save_contact_name.set(String::new());
-                                save_contact_msg.set(String::new());
-                                save_contact_banner.set(true);
-                            }
-                        }
                         // If this send was triggered by a poke PAY NOW, confirm payment
                         let poke_id = poke_prefill_id.get_untracked();
                         if !poke_id.is_empty() {
@@ -3720,16 +3710,6 @@ fn SendPanel(
                                 Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
                                 Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
-                            // Show "Save as contact?" banner if not already a contact
-                            {
-                                let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": lp_email_for_confirm.clone(), "kxAddress": Option::<String>::None })).unwrap_or(no_args());
-                                if let Ok(None) = call::<Option<Contact>>("check_if_contact", chk).await {
-                                    save_contact_email.set(lp_email_for_confirm.clone());
-                                    save_contact_name.set(String::new());
-                                    save_contact_msg.set(String::new());
-                                    save_contact_banner.set(true);
-                                }
-                            }
                             let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                             for i in 0..=10u8 {
                                 if i > 0 { delay_ms(1500).await; }
@@ -3943,11 +3923,27 @@ fn SendPanel(
                                 }.into_any()
                             } else { view! { <span></span> }.into_any() }}
                             <label>"Recipient Email Address"</label>
+                            <div class="email-field-wrap">
                             <input type="email" placeholder="recipient@example.com"
                                 prop:value=move || email.get()
                                 on:input=move |ev| {
                                     let val = event_target_value(&ev);
                                     email.set(val.clone());
+                                    email_save_msg.set(String::new());
+                                    // Check if valid email for save icon (mobile only)
+                                    if !is_desktop() && val.contains('@') && val.contains('.') && val.len() >= 5 {
+                                        let check_email = val.clone();
+                                        spawn_local(async move {
+                                            let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": check_email, "kxAddress": Option::<String>::None })).unwrap_or(no_args());
+                                            if let Ok(Some(_)) = call::<Option<Contact>>("check_if_contact", chk).await {
+                                                email_save_state.set(3); // already saved
+                                            } else {
+                                                email_save_state.set(1); // show save icon
+                                            }
+                                        });
+                                    } else {
+                                        email_save_state.set(0);
+                                    }
                                     // Contact autocomplete
                                     if val.len() >= 2 {
                                         let q = val.clone();
@@ -3974,6 +3970,69 @@ fn SendPanel(
                                     });
                                 }
                                 disabled=move || sending.get() />
+                            // Inline save icon (mobile only)
+                            {move || {
+                                if is_desktop() { return view! { <span></span> }.into_any(); }
+                                match email_save_state.get() {
+                                    1 => view! {
+                                        <button class="email-save-icon" title="Save to Address Book"
+                                            on:click=move |_| {
+                                                email_save_nickname.set(String::new());
+                                                email_save_state.set(2);
+                                            }>"\u{1f4cb}"</button>
+                                    }.into_any(),
+                                    3 => view! {
+                                        <span class="email-save-icon saved" title="Saved">{"\u{2713}"}</span>
+                                    }.into_any(),
+                                    _ => view! { <span></span> }.into_any(),
+                                }
+                            }}
+                            </div>
+                            // Nickname prompt (below email field, mobile only)
+                            {move || {
+                                if email_save_state.get() != 2 { return view! { <span></span> }.into_any(); }
+                                let save_msg = email_save_msg.get();
+                                if !save_msg.is_empty() {
+                                    return view! { <p style="color:#4ade80;font-size:12px;margin:4px 0 0">{save_msg}</p> }.into_any();
+                                }
+                                view! {
+                                    <div class="nickname-prompt">
+                                        <input type="text" placeholder="Nickname (optional)"
+                                            prop:value=move || email_save_nickname.get()
+                                            on:input=move |ev| email_save_nickname.set(event_target_value(&ev))
+                                            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                if ev.key() == "Enter" {
+                                                    let em = email.get_untracked();
+                                                    let nick = email_save_nickname.get_untracked();
+                                                    let name = if nick.trim().is_empty() { em.clone() } else { nick.trim().to_string() };
+                                                    spawn_local(async move {
+                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                            "name": name, "email": em, "kxAddress": Option::<String>::None, "notes": Option::<String>::None
+                                                        })).unwrap_or(no_args());
+                                                        match call::<Contact>("add_contact", args).await {
+                                                            Ok(_) => { email_save_state.set(3); email_save_msg.set(String::new()); }
+                                                            Err(e) => { email_save_msg.set(format!("{e}")); }
+                                                        }
+                                                    });
+                                                }
+                                            } />
+                                        <button on:click=move |_| {
+                                            let em = email.get_untracked();
+                                            let nick = email_save_nickname.get_untracked();
+                                            let name = if nick.trim().is_empty() { em.clone() } else { nick.trim().to_string() };
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                    "name": name, "email": em, "kxAddress": Option::<String>::None, "notes": Option::<String>::None
+                                                })).unwrap_or(no_args());
+                                                match call::<Contact>("add_contact", args).await {
+                                                    Ok(_) => { email_save_state.set(3); email_save_msg.set(String::new()); }
+                                                    Err(e) => { email_save_msg.set(format!("{e}")); }
+                                                }
+                                            });
+                                        }>"Save"</button>
+                                    </div>
+                                }.into_any()
+                            }}
                             // Contact autocomplete dropdown
                             {move || {
                                 if !show_contact_dropdown.get() { return view! { <span></span> }.into_any(); }
@@ -4522,61 +4581,7 @@ fn SendPanel(
                     }.into_any()
                 } else { view! { <span></span> }.into_any() }
             }}
-            // "Save as contact?" banner after successful email send — two-button card, auto-dismiss 10s
-            {move || {
-                if !save_contact_banner.get() { return view! { <span></span> }.into_any(); }
-                let banner_msg = save_contact_msg.get();
-                // Auto-dismiss after 10 seconds
-                {
-                    let save_contact_banner = save_contact_banner.clone();
-                    let save_contact_msg = save_contact_msg.clone();
-                    set_timeout(move || {
-                        save_contact_banner.set(false);
-                        save_contact_msg.set(String::new());
-                    }, std::time::Duration::from_secs(10));
-                }
-                view! {
-                    <div class="save-contact-banner">
-                        {if banner_msg.is_empty() {
-                            view! {
-                                <div>
-                                    <p style="font-weight:600;color:#e5e7eb;margin:0 0 2px;font-size:14px">
-                                        {move || format!("Save {} to contacts?", save_contact_email.get())}
-                                    </p>
-                                    <p style="font-size:12px;color:#9ca3af;margin:0 0 10px">
-                                        "Quick access next time you send to this person"
-                                    </p>
-                                    <div style="display:flex;gap:10px">
-                                        <button style="padding:8px 18px;font-size:13px;font-weight:600;background:#d4a017;color:#000;border:none;border-radius:6px;cursor:pointer"
-                                            on:click=move |_| {
-                                                let em2 = save_contact_email.get_untracked();
-                                                spawn_local(async move {
-                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                                                        "name": em2.clone(), "email": em2, "kxAddress": Option::<String>::None, "notes": Option::<String>::None
-                                                    })).unwrap_or(no_args());
-                                                    match call::<Contact>("add_contact", args).await {
-                                                        Ok(_) => save_contact_msg.set(t(&lang.get_untracked(), "contacts_saved")),
-                                                        Err(e) => save_contact_msg.set(format!("Error: {e}")),
-                                                    }
-                                                });
-                                            }>
-                                            {move || t(&lang.get(), "contacts_save")}
-                                        </button>
-                                        <button style="padding:8px 18px;font-size:13px;font-weight:600;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer"
-                                            on:click=move |_| { save_contact_banner.set(false); save_contact_msg.set(String::new()); }>
-                                            {move || t(&lang.get(), "cancel")}
-                                        </button>
-                                    </div>
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <p style="color:#4ade80;font-size:13px;margin:0">{banner_msg}</p>
-                            }.into_any()
-                        }}
-                    </div>
-                }.into_any()
-            }}
+            // (save_contact_banner removed — replaced by inline save icon on email field)
         </div>
         // Address Book modal (mobile only)
         {move || if address_book_open.get() {
@@ -4598,6 +4603,9 @@ fn SendPanel(
                                         let c_name = c.name.clone();
                                         let fill_email = c_email.clone();
                                         let del_id = c.id.clone();
+                                        let has_nickname = !c_name.is_empty() && c_name.to_lowercase() != c_email.to_lowercase();
+                                        let primary = if has_nickname { c_name.clone() } else { c_email.clone() };
+                                        let secondary_email = c_email.clone();
                                         view! {
                                             <div class="address-book-item">
                                                 <div class="address-book-item-info"
@@ -4605,8 +4613,12 @@ fn SendPanel(
                                                         email.set(fill_email.clone());
                                                         address_book_open.set(false);
                                                     }>
-                                                    <span class="address-book-item-name">{c_name}</span>
-                                                    <span class="address-book-item-email">{c_email}</span>
+                                                    <span class="address-book-item-name">{primary}</span>
+                                                    {if has_nickname {
+                                                        view! { <span class="address-book-item-email">{secondary_email}</span> }.into_any()
+                                                    } else {
+                                                        view! { <span></span> }.into_any()
+                                                    }}
                                                 </div>
                                                 <button class="address-book-item-delete"
                                                     on:click=move |ev| {
