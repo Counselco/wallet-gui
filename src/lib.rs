@@ -290,6 +290,9 @@ struct TxHistoryEntry {
     /// BLAKE3(claim_code) hex — locks sharing this hash belong to a Promise Series.
     #[serde(default)]
     claim_secret_hash: Option<String>,
+    /// Whether the recipient email is registered (verified) in the system.
+    #[serde(default)]
+    recipient_registered: Option<bool>,
 }
 
 /// Returned by `create_email_timelock` — carries the on-chain TxId and
@@ -5982,6 +5985,7 @@ fn HistoryPanel(
                         created_at: Some(lock.created_at),
                         claim_code: None,
                         claim_secret_hash: lock.claim_secret_hash.clone(),
+                        recipient_registered: None,
                     });
                 }
 
@@ -6089,9 +6093,13 @@ fn HistoryPanel(
                                         }
                                     }
                                 } else { 0u8 };
+                                // Cascade detection (need early for type_label)
+                                let is_cascade_early = entry.claim_secret_hash.as_ref()
+                                    .map_or(false, |h| cascade_lock_ids.get(h).map_or(false, |ids| ids.len() > 1));
                                 let type_label = match entry.tx_type.as_str() {
                                     "Transfer Sent" => "SENT",
                                     "Transfer Received" => "RECEIVED",
+                                    "Email Send" if is_cascade_early => "CASCADE",
                                     "Email Send" => match email_category {
                                         1 | 2 => "PROMISE",
                                         3 => "SENT",
@@ -6113,6 +6121,7 @@ fn HistoryPanel(
                                     "OUTGOING PROMISE" => "history-type-badge outgoing-promise",
                                     "SCHEDULED" => "history-type-badge scheduled",
                                     "PROMISE" => "history-type-badge scheduled",
+                                    "CASCADE" => "history-type-badge scheduled",
                                     _ => "history-type-badge",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
@@ -6294,26 +6303,29 @@ fn HistoryPanel(
                                                             </button>
                                                         }.into_any()
                                                     } else { view! { <span></span> }.into_any() }}
-                                                    // Category subtext (v1.4.97: add "Unregistered" prefix)
-                                                    {if email_category == 4 {
-                                                        view! { <span style="color:#9ca3af;font-size:10px">{format!("{} \u{b7} Recipient has 72 hours to claim", t("en", "unregistered"))}</span> }.into_any()
-                                                    } else if email_category == 2 {
-                                                        let unlock = entry.unlock_date.unwrap_or(0);
-                                                        let remaining = unlock - now_ts;
-                                                        let hours = remaining / 3600;
-                                                        let days = hours / 24;
-                                                        let countdown = if days > 0 { format!("Unlocks in {}d {}h", days, hours % 24) }
-                                                                        else { format!("Unlocks in {}h", hours) };
-                                                        let subtext = format!("{} \u{b7} {}", t("en", "unregistered"), countdown);
+                                                    // Category subtext (v1.5.1: cascade + registration-aware)
+                                                    {if is_cascade_early && entry_status != "Claimed" && entry_status != "Cancelled" && entry_status != "Expired \u{2014} Reverted" {
+                                                        let is_registered = entry.recipient_registered.unwrap_or(false);
+                                                        let reg_label = if is_registered { "Registered" } else { "Unregistered" };
+                                                        let unlock_date = entry.unlock_date.map(unix_to_date_str).unwrap_or_default();
+                                                        let subtext = format!("{} \u{b7} Unlocks {}", reg_label, unlock_date);
                                                         view! { <span style="color:#9ca3af;font-size:10px">{subtext}</span> }.into_any()
-                                                    } else if email_category == 1 {
+                                                    } else if email_category == 4 {
+                                                        view! { <span style="color:#9ca3af;font-size:10px">{format!("{} \u{b7} Recipient has 72 hours to claim", t("en", "unregistered"))}</span> }.into_any()
+                                                    } else if email_category == 1 || email_category == 2 {
                                                         let unlock = entry.unlock_date.unwrap_or(0);
                                                         let remaining = unlock - now_ts;
                                                         let hours = remaining / 3600;
                                                         let days = hours / 24;
                                                         let countdown = if days > 0 { format!("Unlocks in {}d {}h", days, hours % 24) }
                                                                         else { format!("Unlocks in {}h", hours) };
-                                                        view! { <span style="color:#9ca3af;font-size:10px">{countdown}</span> }.into_any()
+                                                        let is_registered = entry.recipient_registered.unwrap_or(false);
+                                                        let subtext = if is_registered {
+                                                            countdown
+                                                        } else {
+                                                            format!("{} \u{b7} {}", t("en", "unregistered"), countdown)
+                                                        };
+                                                        view! { <span style="color:#9ca3af;font-size:10px">{subtext}</span> }.into_any()
                                                     } else { view! { <span></span> }.into_any() }}
                                                 </div>
                                             }.into_any()

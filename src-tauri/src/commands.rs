@@ -550,6 +550,7 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
         created_at: Some(now),
         claim_code: None,
         claim_secret_hash: None,
+        recipient_registered: None,
     });
     Ok(txid)
 }
@@ -1435,6 +1436,9 @@ pub struct TxHistoryEntry {
     /// BLAKE3(claim_code) hex — locks sharing this hash belong to a Promise Series (cascade).
     #[serde(default)]
     pub claim_secret_hash: Option<String>,
+    /// Whether the recipient email is registered (verified) in the system.
+    #[serde(default)]
+    pub recipient_registered: Option<bool>,
 }
 
 /// Fetch full transaction history for this wallet.
@@ -1468,6 +1472,31 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             .map(|e| (e.lock_id, (e.email, e.claim_code)))
             .collect()
     };
+
+    // ── Batch check recipient registration for all email sends ──────────────
+    let mut email_registered: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    {
+        let unique_emails: std::collections::HashSet<String> = email_map.values()
+            .map(|(email, _)| email.to_lowercase())
+            .collect();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .ok();
+        if let Some(client) = client {
+            for email in &unique_emails {
+                let check_url = format!("{}/check-email?email={}", NOTIFY_API_URL, urlencoding(email));
+                if let Ok(resp) = client.get(&check_url).send().await {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        let registered = json.get("registered")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        email_registered.insert(email.clone(), registered);
+                    }
+                }
+            }
+        }
+    }
 
     let mut entries: Vec<TxHistoryEntry> = locks
         .into_iter()
@@ -1519,6 +1548,9 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             } else {
                 raw_status
             };
+            let recipient_registered = counterparty.as_ref()
+                .and_then(|email| email_registered.get(&email.to_lowercase()))
+                .copied();
             TxHistoryEntry {
                 tx_id: lock_id,
                 tx_type,
@@ -1531,6 +1563,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                 created_at:     Some(created_at),
                 claim_code,
                 claim_secret_hash,
+                recipient_registered,
             }
         })
         .collect();
@@ -1572,6 +1605,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             created_at: Some(v["timestamp"].as_i64().unwrap_or(0)),
             claim_code: None,
             claim_secret_hash: None,
+            recipient_registered: None,
         });
     }
 
@@ -1607,6 +1641,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             created_at: Some(v["timestamp"].as_i64().unwrap_or(0)),
             claim_code: None,
             claim_secret_hash: None,
+            recipient_registered: None,
         });
     }
 
@@ -2768,6 +2803,7 @@ pub async fn convert_kx_to_usdc(
         created_at: Some(now),
         claim_code: None,
         claim_secret_hash: None,
+        recipient_registered: None,
     });
 
     Ok(txid)
