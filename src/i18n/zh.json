@@ -164,5 +164,6 @@
   "mobile_confirm_to": "收件人",
   "mobile_confirm_amount": "金额",
   "mobile_confirm_unlocks": "解锁时间",
-  "mobile_confirm_memo": "备注"
+  "mobile_confirm_memo": "备注",
+  "email_disclaimer": "未注册的收件人有72小时接受。如未接受，您的KX将自动退还。已注册的收件人立即收到资金。您只能在取消窗口期内从历史记录中取消此承诺。"
 }

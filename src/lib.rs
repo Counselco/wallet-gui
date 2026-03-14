@@ -3929,8 +3929,8 @@ fn SendPanel(
                                 on:input=move |ev| {
                                     let val = event_target_value(&ev);
                                     email.set(val.clone());
-                                    // Contact autocomplete (desktop only)
-                                    if is_desktop() && val.len() >= 2 {
+                                    // Contact autocomplete
+                                    if val.len() >= 2 {
                                         let q = val.clone();
                                         spawn_local(async move {
                                             let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "query": q })).unwrap_or(no_args());
@@ -4191,8 +4191,8 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
-            // Beneficiary description (grantor_intent) — Send Later only
-            {move || if send_mode.get() == 1 {
+            // Beneficiary description (grantor_intent) — Send Later, desktop only
+            {move || if send_mode.get() == 1 && is_desktop() {
                 view! {
                     <div class="beneficiary-field">
                         <label>"Beneficiary Description "<span style="color:#666;font-size:0.8rem">"(optional \u{2014} strongly recommended for promises over 1 year)"</span></label>
@@ -4218,13 +4218,7 @@ fn SendPanel(
 
             // Email info box
             {move || if send_sub.get() == 1 {
-                let txt = if send_mode.get() == 0 {
-                    "The recipient has 72 hours to accept. If not accepted, your KX is automatically returned."
-                } else {
-                    "The recipient will receive an email and has 72 hours to accept. \
-                     If not accepted, your KX is automatically returned. \
-                     You may cancel this promise from History within your cancellation window only."
-                };
+                let txt = t(&lang.get(), "email_disclaimer");
                 view! {
                     <div style="background:#1a1d27;border:1px solid #2a2d37;border-radius:8px;padding:10px 12px;margin-bottom:8px">
                         <p style="font-size:12px;color:#9ca3af;line-height:1.5;margin:0">{txt}</p>
@@ -4232,9 +4226,9 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
-            // ── AI / MISAI management section (Send Later only) ────────────────
+            // ── AI / MISAI management section (Send Later, desktop only) ────────────────
             {move || {
-                if send_mode.get() != 1 {
+                if send_mode.get() != 1 || !is_desktop() {
                     return view! { <span></span> }.into_any();
                 }
                 let rl = risk_level.get();
