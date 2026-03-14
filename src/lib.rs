@@ -5873,6 +5873,11 @@ fn HistoryPanel(
 
     // Claim message for incoming promise claims
     let inc_claim_msg = RwSignal::new(String::new());
+    // Inline claim code input for email locks in History tab
+    let inline_claim_open = RwSignal::new(Option::<String>::None); // lock_id when open
+    let inline_claim_code = RwSignal::new(String::new());
+    let inline_claim_busy = RwSignal::new(false);
+    let inline_claim_result = RwSignal::new(String::new());
 
     let reload = move || {
         spawn_local(async move {
@@ -6317,9 +6322,11 @@ fn HistoryPanel(
                                                 if expanded.get().as_deref() != Some(&hash_check) {
                                                     return view! { <span></span> }.into_any();
                                                 }
+                                                let mut sorted_group = group.clone();
+                                                sorted_group.sort_by_key(|s| s.unlock_date.unwrap_or(0));
                                                 view! {
                                                     <div>
-                                                        {group.iter().enumerate().map(|(i, stage)| {
+                                                        {sorted_group.iter().enumerate().map(|(i, stage)| {
                                                             let stage_amount = stage.amount_chronos.as_deref()
                                                                 .map(|c| format!("{} KX", format_kx(c)))
                                                                 .unwrap_or_default();
@@ -6493,11 +6500,76 @@ fn HistoryPanel(
                                                     <span class="badge pending" style="margin-top:4px;display:inline-block">{entry_status.clone()}</span>
                                                 }.into_any()
                                             } else {
-                                                // Email lock matured: prompt to enter claim code on Receive tab
+                                                // Email lock matured: inline claim code input
+                                                let claim_lock_id = entry.tx_id.clone();
+                                                let claim_lock_id2 = claim_lock_id.clone();
                                                 view! {
-                                                    <span class="badge pending" style="margin-top:4px;display:inline-block;color:#d4a84b;font-weight:600;font-size:11px">
-                                                        "Enter claim code to receive"
-                                                    </span>
+                                                    <div style="margin-top:4px">
+                                                        <button class="pill" style="color:#d4a84b;border-color:#d4a84b;font-weight:600;font-size:11px;padding:2px 10px"
+                                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                                ev.stop_propagation();
+                                                                let current = inline_claim_open.get_untracked();
+                                                                if current.as_deref() == Some(&claim_lock_id) {
+                                                                    inline_claim_open.set(None);
+                                                                    inline_claim_result.set(String::new());
+                                                                } else {
+                                                                    inline_claim_open.set(Some(claim_lock_id.clone()));
+                                                                    inline_claim_code.set(String::new());
+                                                                    inline_claim_result.set(String::new());
+                                                                }
+                                                            }>
+                                                            {move || if inline_claim_open.get().as_deref() == Some(&claim_lock_id2) { "Cancel" } else { "Enter claim code to receive" }}
+                                                        </button>
+                                                        {
+                                                        let claim_check_id = entry.tx_id.clone();
+                                                        move || {
+                                                            let open_id = inline_claim_open.get();
+                                                            if open_id.as_deref() != Some(&claim_check_id) {
+                                                                return view! { <span></span> }.into_any();
+                                                            }
+                                                            let result_msg = inline_claim_result.get();
+                                                            view! {
+                                                                <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                                                                    <input type="text" placeholder="KX-XXXX-XXXX-XXXX-XXXX" style="flex:1;min-width:180px;padding:6px 10px;font-size:13px;background:#161b27;border:1px solid #2d3748;border-radius:6px;color:#e5e7eb;font-family:monospace;letter-spacing:1px"
+                                                                        prop:value=move || inline_claim_code.get()
+                                                                        on:input=move |ev| inline_claim_code.set(event_target_value(&ev))
+                                                                        disabled=move || inline_claim_busy.get() />
+                                                                    <button style="padding:6px 14px;font-size:13px;font-weight:600;background:#d4a84b;color:#000;border:none;border-radius:6px;cursor:pointer;white-space:nowrap"
+                                                                        disabled=move || inline_claim_busy.get()
+                                                                        on:click=move |_| {
+                                                                            let code = inline_claim_code.get_untracked();
+                                                                            if code.trim().is_empty() { return; }
+                                                                            inline_claim_busy.set(true);
+                                                                            inline_claim_result.set("Claiming\u{2026}".into());
+                                                                            spawn_local(async move {
+                                                                                let args = serde_wasm_bindgen::to_value(
+                                                                                    &serde_json::json!({ "claimCode": code.trim() })
+                                                                                ).unwrap_or(no_args());
+                                                                                match call::<ClaimByCodeResult>("claim_by_code", args).await {
+                                                                                    Ok(result) => {
+                                                                                        let kx = format_kx(&result.total_chronos);
+                                                                                        inline_claim_result.set(format!("\u{2705} Claimed {kx} KX!"));
+                                                                                        inline_claim_code.set(String::new());
+                                                                                        inline_claim_open.set(None);
+                                                                                        reload();
+                                                                                    }
+                                                                                    Err(e) => {
+                                                                                        inline_claim_result.set(format!("Error: {e}"));
+                                                                                    }
+                                                                                }
+                                                                                inline_claim_busy.set(false);
+                                                                            });
+                                                                        }>
+                                                                        "Claim"
+                                                                    </button>
+                                                                </div>
+                                                                {if !result_msg.is_empty() {
+                                                                    let cls = if result_msg.starts_with("Error") { "color:#ef4444" } else if result_msg.starts_with("\u{2705}") { "color:#4ade80" } else { "color:#d4a84b" };
+                                                                    view! { <p style={format!("font-size:12px;margin:4px 0 0;{}", cls)}>{result_msg}</p> }.into_any()
+                                                                } else { view! { <span></span> }.into_any() }}
+                                                            }.into_any()
+                                                        }}
+                                                    </div>
                                                 }.into_any()
                                             }
                                         } else if is_cascade_early && !is_email_send && !is_incoming_promise {
