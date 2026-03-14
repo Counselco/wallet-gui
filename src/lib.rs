@@ -6246,6 +6246,11 @@ fn HistoryPanel(
                                 let cancel_lock_id = entry.tx_id.clone();
                                 let inline_cancel_id = cancel_lock_id.clone();
                                 let entry_claim_code = entry.claim_code.clone();
+                                let entry_recipient_registered = entry.recipient_registered
+                                    .or_else(|| entry.claim_secret_hash.as_ref()
+                                        .and_then(|h| cascade_email.get(h))
+                                        .and_then(|(_, reg)| *reg))
+                                    .unwrap_or(false);
 
                                 // ── Cascade group rendering (v1.5.3) ──
                                 let cascade_group_entries: Option<Vec<TxHistoryEntry>> = entry.claim_secret_hash.as_ref()
@@ -6623,8 +6628,8 @@ fn HistoryPanel(
                                                     <div class="history-detail">
                                                         <p>"TxID: " {tx_id_short.clone()}</p>
                                                         <p class="muted">"Status: " {status_display.clone()}</p>
-                                                        // Show claim code for email sends so Alice can re-share it
-                                                        {if is_email_send {
+                                                        // Show claim code for email sends so Alice can re-share it (hide if recipient verified)
+                                                        {if is_email_send && !entry_recipient_registered {
                                                             if let Some(code) = code_opt {
                                                                 let code_copy = code.clone();
                                                                 view! {
@@ -6664,7 +6669,7 @@ fn HistoryPanel(
                                                                     }
                                                                 >"Reclaim Funds"</button>
                                                             }.into_any()
-                                                        } else if is_cascade && cascade_has_claim {
+                                                        } else if is_cascade && cascade_has_claim && entry_status != "Claimed" && !entry_status.contains("Expired") && entry_status != "Cancelled" {
                                                             view! {
                                                                 <span style="color:#d4a84b;font-weight:700">"Promised \u{2713} \u{2014} cannot cancel"</span>
                                                             }.into_any()
