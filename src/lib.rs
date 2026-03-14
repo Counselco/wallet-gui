@@ -2379,7 +2379,7 @@ fn AccountPanel(
                         </p>
                         <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
                         <p style="margin-top:8px;font-size:12px">
-                            <a class={if is_desktop() { "exchange-link" } else { "exchange-link exchange-link-mobile" }} href="#" on:click=move |ev| {
+                            <a class="exchange-link exchange-link-mobile" href="#" on:click=move |ev| {
                                 ev.prevent_default();
                                 convert_visible.set(!convert_visible.get_untracked());
                             }>{move || if convert_visible.get() { "\u{25BC} Convert KX \u{2194} USDC" } else { "\u{25B6} Convert KX \u{2194} USDC" }}</a>
@@ -6047,6 +6047,17 @@ fn HistoryPanel(
                     .take(PAGE_SIZE)
                     .collect();
 
+                // Group cascade entries by claim_secret_hash for collapsed display
+                let mut seen_cascade_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut cascade_groups: std::collections::HashMap<String, Vec<TxHistoryEntry>> = std::collections::HashMap::new();
+                for e in &page_list {
+                    if let Some(ref hash) = e.claim_secret_hash {
+                        if cascade_lock_ids.get(hash).map_or(false, |ids| ids.len() > 1) {
+                            cascade_groups.entry(hash.clone()).or_default().push(e.clone());
+                        }
+                    }
+                }
+
                 if h_loading.get() {
                     view! { <p class="muted">"Loading\u{2026}"</p> }.into_any()
                 } else if total == 0 && h_err.get().is_empty() {
@@ -6059,7 +6070,16 @@ fn HistoryPanel(
                 } else {
                     view! {
                         <div class="history-list">
-                            {page_list.into_iter().map(|entry| {
+                            {page_list.into_iter().filter_map(|entry| {
+                                // Skip cascade entries that were already rendered as part of a group
+                                if let Some(ref hash) = entry.claim_secret_hash {
+                                    if cascade_groups.contains_key(hash) {
+                                        if seen_cascade_hashes.contains(hash) {
+                                            return None; // skip — already rendered in group
+                                        }
+                                        seen_cascade_hashes.insert(hash.clone());
+                                    }
+                                }
                                 let tx_id = entry.tx_id.clone();
                                 let tx_id_for_toggle = tx_id.clone();
                                 let is_email_send = entry.tx_type == "Email Send";
@@ -6130,7 +6150,7 @@ fn HistoryPanel(
                                     "OUTGOING PROMISE" => "history-type-badge outgoing-promise",
                                     "SCHEDULED" => "history-type-badge scheduled",
                                     "PROMISE" => "history-type-badge scheduled",
-                                    "CASCADE" => "history-type-badge scheduled",
+                                    "CASCADE" => "history-type-badge cascade",
                                     _ => "history-type-badge",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
@@ -6196,8 +6216,9 @@ fn HistoryPanel(
                                     .unwrap_or_default();
                                 let is_expired_reclaiming = entry_status == "Expired \u{2014} Reclaiming";
 
-                                // Determine if this entry can be cancelled
-                                let can_cancel_base = (entry.status == "Pending" || entry.status == "Pending Claim")
+                                // Determine if this entry can be cancelled (OUTGOING only — never on incoming)
+                                let can_cancel_base = !is_incoming
+                                    && (entry.status == "Pending" || entry.status == "Pending Claim")
                                     && entry.cancellation_window_secs.map_or(false, |w| w > 0)
                                     && entry.created_at.map_or(false, |ca| {
                                         let window = entry.cancellation_window_secs.unwrap_or(0) as f64;
@@ -6221,7 +6242,115 @@ fn HistoryPanel(
                                 let inline_cancel_id = cancel_lock_id.clone();
                                 let entry_claim_code = entry.claim_code.clone();
 
-                                view! {
+                                // ── Cascade group rendering (v1.5.3) ──
+                                let cascade_group_entries: Option<Vec<TxHistoryEntry>> = entry.claim_secret_hash.as_ref()
+                                    .and_then(|h| cascade_groups.get(h))
+                                    .cloned();
+                                let is_cascade_group = cascade_group_entries.is_some() && cascade_group_entries.as_ref().map_or(false, |g| g.len() > 1);
+
+                                if is_cascade_group {
+                                    let group = cascade_group_entries.unwrap();
+                                    let stage_count = group.len();
+                                    let total_chronos: u128 = group.iter()
+                                        .filter_map(|e| e.amount_chronos.as_deref()?.parse::<u128>().ok())
+                                        .sum();
+                                    let total_kx = format_kx(&total_chronos.to_string());
+                                    let group_email = entry.counterparty.clone()
+                                        .or_else(|| entry.claim_secret_hash.as_ref()
+                                            .and_then(|h| cascade_email.get(h))
+                                            .map(|(em, _)| em.clone()))
+                                        .unwrap_or_default();
+                                    let toggle_hash = entry.claim_secret_hash.clone().unwrap_or_default();
+                                    let any_claimed = group.iter().any(|e| e.status == "Claimed" || e.status.contains("Reverted"));
+                                    let group_can_cancel = can_cancel && !any_claimed;
+                                    let cancel_ids_for_group = entry_cascade_ids.clone();
+
+                                    return Some(view! {
+                                        <div class="cascade-parent">
+                                            <div class="history-row" on:click=move |_| {
+                                                let current = expanded.get_untracked();
+                                                if current.as_deref() == Some(&toggle_hash) {
+                                                    expanded.set(None);
+                                                } else {
+                                                    expanded.set(Some(toggle_hash.clone()));
+                                                }
+                                            }>
+                                                <div class="history-row-top">
+                                                    <span class="history-type">
+                                                        "\u{23f3} " {format!("Cascade ({} stages)", stage_count)}
+                                                    </span>
+                                                    <span class="history-type-badge cascade" style="font-size:9px;padding:1px 6px;border-radius:4px;font-weight:700;letter-spacing:0.5px;margin-left:6px">
+                                                        "CASCADE"
+                                                    </span>
+                                                    <span class={if is_incoming { "history-amount incoming" } else { "history-amount" }}>
+                                                        {if is_incoming { format!("+{} KX", total_kx) } else { format!("{} KX", total_kx) }}
+                                                    </span>
+                                                </div>
+                                                <div class="history-row-bottom">
+                                                    <span class="history-addr">
+                                                        {if group_email.len() > 26 { format!("{}…", &group_email[..24]) } else { group_email.clone() }}
+                                                    </span>
+                                                    <span class="history-date">{date_display.clone()}</span>
+                                                </div>
+                                                {if group_can_cancel {
+                                                    let cids = cancel_ids_for_group.clone();
+                                                    let first_id = entry.tx_id.clone();
+                                                    view! {
+                                                        <div style="margin-top:4px">
+                                                            <button class="cancel-btn" style="font-size:11px;padding:2px 10px"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    cancel_msg.set(String::new());
+                                                                    cancel_is_email.set(true);
+                                                                    cancel_cascade_ids.set(cids.clone());
+                                                                    cancel_target.set(Some(first_id.clone()));
+                                                                }>
+                                                                "Cancel Series"
+                                                            </button>
+                                                        </div>
+                                                    }.into_any()
+                                                } else { view! { <span></span> }.into_any() }}
+                                            </div>
+                                            // Expanded stages
+                                            {move || {
+                                                let hash_check = entry.claim_secret_hash.clone().unwrap_or_default();
+                                                if expanded.get().as_deref() != Some(&hash_check) {
+                                                    return view! { <span></span> }.into_any();
+                                                }
+                                                view! {
+                                                    <div>
+                                                        {group.iter().enumerate().map(|(i, stage)| {
+                                                            let stage_amount = stage.amount_chronos.as_deref()
+                                                                .map(|c| format!("{} KX", format_kx(c)))
+                                                                .unwrap_or_default();
+                                                            let stage_unlock = stage.unlock_date.map(unix_to_date_str).unwrap_or_default();
+                                                            let stage_status = stage.status.clone();
+                                                            let badge_cls = match stage_status.as_str() {
+                                                                "Claimed" => "email-badge claimed",
+                                                                "Cancelled" => "email-badge expired",
+                                                                _ => "email-badge pending-claim",
+                                                            };
+                                                            view! {
+                                                                <div class="cascade-stage">
+                                                                    <div class="cascade-stage-row">
+                                                                        <span style="color:#a78bfa;font-weight:600">{format!("Stage {}", i + 1)}</span>
+                                                                        <span>{format!("Unlocks {}", stage_unlock)}</span>
+                                                                        <span style="font-weight:600">{stage_amount}</span>
+                                                                        <span class=badge_cls style="font-size:10px;padding:1px 6px;border-radius:3px">
+                                                                            {if stage_status == "Pending Claim" || stage_status == "Pending" { "Pending".to_string() } else { stage_status }}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            }
+                                                        }).collect::<Vec<_>>()}
+                                                    </div>
+                                                }.into_any()
+                                            }}
+                                        </div>
+                                    }.into_any());
+                                }
+
+                                Some(view! {
                                     <div class="history-row"
                                         on:click=move |_| {
                                             let current = expanded.get_untracked();
@@ -6488,7 +6617,7 @@ fn HistoryPanel(
                                             } else { view! { <span></span> }.into_any() }
                                         }}
                                     </div>
-                                }
+                                }.into_any())
                             }).collect::<Vec<_>>()}
                         </div>
                         {if total_pages > 1 {
