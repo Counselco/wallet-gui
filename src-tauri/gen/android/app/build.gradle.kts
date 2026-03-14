@@ -21,8 +21,8 @@ android {
         applicationId = "com.chronx.wallet"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1004098
-        versionName = "1.4.98"
+        versionCode = 1004102
+        versionName = "1.5.2"
         // 16 KB memory page size support for Android 15+
         externalNativeBuild {
             cmake {
