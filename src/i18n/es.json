@@ -165,5 +165,6 @@
   "mobile_confirm_amount": "Cantidad",
   "mobile_confirm_unlocks": "Desbloqueo",
   "mobile_confirm_memo": "Nota",
-  "email_disclaimer": "Los destinatarios no registrados tienen 72 horas para aceptar. Si no se acepta, sus KX se devuelven automáticamente. Los destinatarios registrados reciben los fondos de inmediato. Solo puede cancelar esta promesa desde el Historial dentro de su ventana de cancelación."
+  "email_disclaimer": "Los destinatarios no registrados tienen 72 horas para aceptar. Si no se acepta, sus KX se devuelven automáticamente. Los destinatarios registrados reciben los fondos de inmediato. Solo puede cancelar esta promesa desde el Historial dentro de su ventana de cancelación.",
+  "unregistered": "No registrado"
 }

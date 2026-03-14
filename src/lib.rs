@@ -6068,10 +6068,36 @@ fn HistoryPanel(
                                 let now_ts = (js_sys::Date::now() / 1000.0) as i64;
                                 let is_scheduled = matches!(entry.tx_type.as_str(), "Promise Sent" | "TimeLockCreate")
                                     && entry.unlock_date.map_or(false, |u| u > now_ts);
+                                // ── Outgoing email lock category (v1.4.96 label rules) ──
+                                let entry_status_early = entry.status.clone();
+                                let email_category = if entry.tx_type == "Email Send" {
+                                    let resolved = matches!(entry_status_early.as_str(), "Claimed" | "Expired \u{2014} Reverted" | "Cancelled");
+                                    let is_reclaiming = entry_status_early == "Expired \u{2014} Reclaiming";
+                                    if resolved || is_reclaiming {
+                                        0u8 // resolved — show status as-is
+                                    } else {
+                                        let unlock = entry.unlock_date.unwrap_or(0);
+                                        let is_instant = unlock <= now_ts + 60;
+                                        if is_instant && entry_status_early == "Claimed" {
+                                            3u8 // Cat 3: instant + registered (auto-delivered)
+                                        } else if is_instant {
+                                            4u8 // Cat 4: instant + unregistered (pending claim)
+                                        } else if unlock > now_ts + (3 * 24 * 3600) {
+                                            1u8 // Cat 1: future >3 days
+                                        } else {
+                                            2u8 // Cat 2: future <=3 days
+                                        }
+                                    }
+                                } else { 0u8 };
                                 let type_label = match entry.tx_type.as_str() {
                                     "Transfer Sent" => "SENT",
                                     "Transfer Received" => "RECEIVED",
-                                    "Email Send" => "SENT",
+                                    "Email Send" => match email_category {
+                                        1 | 2 => "PROMISE",
+                                        3 => "SENT",
+                                        4 => "SENT",
+                                        _ => "SENT",
+                                    },
                                     "Email Claimed" => "RECEIVED",
                                     "Promise Sent" | "TimeLockCreate" if is_scheduled => "SCHEDULED",
                                     "Promise Sent" | "TimeLockCreate" => "OUTGOING PROMISE",
@@ -6086,6 +6112,7 @@ fn HistoryPanel(
                                     "INCOMING PROMISE" => "history-type-badge incoming-promise",
                                     "OUTGOING PROMISE" => "history-type-badge outgoing-promise",
                                     "SCHEDULED" => "history-type-badge scheduled",
+                                    "PROMISE" => "history-type-badge scheduled",
                                     _ => "history-type-badge",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
@@ -6195,16 +6222,29 @@ fn HistoryPanel(
                                         </div>
                                         // Email send status badge + inline Cancel/Reclaim for email sends
                                         {if is_email_send {
-                                            let badge_class = match entry_status.as_str() {
-                                                "Pending Claim" => "email-badge pending-claim",
-                                                "Claimed"       => "email-badge claimed",
-                                                "Expired \u{2014} Reclaiming" => "email-badge reclaiming",
-                                                _               => "email-badge expired",
+                                            // v1.4.96: category-based badge labels
+                                            let (badge_class, badge_text) = match email_category {
+                                                3 => ("email-badge claimed", "CLAIMED".to_string()),
+                                                4 => ("email-badge pending-claim", "PENDING".to_string()),
+                                                1 | 2 => ("email-badge pending-claim", "PROMISE".to_string()),
+                                                _ => {
+                                                    // Resolved / reclaiming — use status as-is
+                                                    let cls = match entry_status.as_str() {
+                                                        "Claimed"       => "email-badge claimed",
+                                                        "Expired \u{2014} Reclaiming" => "email-badge reclaiming",
+                                                        "Cancelled"     => "email-badge expired",
+                                                        _               => "email-badge expired",
+                                                    };
+                                                    (cls, entry_status.clone())
+                                                }
                                             };
-                                            let badge_text = if entry_status == "Pending Claim" {
-                                                "Promise".to_string()
-                                            } else {
-                                                entry_status.clone()
+                                            // Cancel button visibility per category
+                                            let cat_can_cancel = match email_category {
+                                                3 => false, // instant + registered: auto-delivered, no cancel
+                                                4 => can_cancel, // instant + unregistered: can cancel within 72h
+                                                1 => can_cancel, // future >3 days: can cancel
+                                                2 => can_cancel, // future <=3 days: can cancel (conservative — no registration check available)
+                                                _ => false, // resolved states: no cancel
                                             };
                                             let reclaim_lock_id = entry.tx_id.clone();
                                             let cancel_cascade_for_click = entry_cascade_ids.clone();
@@ -6240,7 +6280,7 @@ fn HistoryPanel(
                                                         view! {
                                                             <span style="color:#d4a84b;font-size:11px;font-weight:700">"Promised \u{2713}"</span>
                                                         }.into_any()
-                                                    } else if can_cancel {
+                                                    } else if cat_can_cancel {
                                                         view! {
                                                             <button class="cancel-btn" style="margin-top:0;font-size:11px;padding:2px 10px"
                                                                 on:click={move |ev: web_sys::MouseEvent| {
@@ -6253,6 +6293,19 @@ fn HistoryPanel(
                                                                 "Cancel"
                                                             </button>
                                                         }.into_any()
+                                                    } else { view! { <span></span> }.into_any() }}
+                                                    // Category subtext (v1.4.97: add "Unregistered" prefix)
+                                                    {if email_category == 4 {
+                                                        view! { <span style="color:#9ca3af;font-size:10px">{format!("{} \u{b7} Recipient has 72 hours to claim", t("en", "unregistered"))}</span> }.into_any()
+                                                    } else if email_category == 2 {
+                                                        let unlock = entry.unlock_date.unwrap_or(0);
+                                                        let remaining = unlock - now_ts;
+                                                        let hours = remaining / 3600;
+                                                        let days = hours / 24;
+                                                        let countdown = if days > 0 { format!("Unlocks in {}d {}h", days, hours % 24) }
+                                                                        else { format!("Unlocks in {}h", hours) };
+                                                        let subtext = format!("{} \u{b7} {}", t("en", "unregistered"), countdown);
+                                                        view! { <span style="color:#9ca3af;font-size:10px">{subtext}</span> }.into_any()
                                                     } else { view! { <span></span> }.into_any() }}
                                                 </div>
                                             }.into_any()

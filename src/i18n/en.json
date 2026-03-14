@@ -165,5 +165,6 @@
   "mobile_confirm_amount": "Amount",
   "mobile_confirm_unlocks": "Unlocks",
   "mobile_confirm_memo": "Memo",
-  "email_disclaimer": "Unregistered recipients have 72 hours to accept. If not accepted, your KX is automatically returned. Registered recipients receive funds immediately. You may cancel this promise from History within your cancellation window only."
+  "email_disclaimer": "Unregistered recipients have 72 hours to accept. If not accepted, your KX is automatically returned. Registered recipients receive funds immediately. You may cancel this promise from History within your cancellation window only.",
+  "unregistered": "Unregistered"
 }

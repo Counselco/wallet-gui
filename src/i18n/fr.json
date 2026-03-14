@@ -165,5 +165,6 @@
   "mobile_confirm_amount": "Montant",
   "mobile_confirm_unlocks": "Déverrouillage",
   "mobile_confirm_memo": "Mémo",
-  "email_disclaimer": "Les destinataires non inscrits ont 72 heures pour accepter. En cas de non-acceptation, vos KX sont automatiquement retournés. Les destinataires inscrits reçoivent les fonds immédiatement. Vous pouvez annuler cette promesse depuis l'Historique uniquement pendant votre fenêtre d'annulation."
+  "email_disclaimer": "Les destinataires non inscrits ont 72 heures pour accepter. En cas de non-acceptation, vos KX sont automatiquement retournés. Les destinataires inscrits reçoivent les fonds immédiatement. Vous pouvez annuler cette promesse depuis l'Historique uniquement pendant votre fenêtre d'annulation.",
+  "unregistered": "Non enregistré"
 }

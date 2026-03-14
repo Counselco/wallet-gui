@@ -165,5 +165,6 @@
   "mobile_confirm_amount": "Betrag",
   "mobile_confirm_unlocks": "Freischaltung",
   "mobile_confirm_memo": "Memo",
-  "email_disclaimer": "Nicht registrierte Empfänger haben 72 Stunden zur Annahme. Bei Nichtannahme werden Ihre KX automatisch zurückgegeben. Registrierte Empfänger erhalten die Mittel sofort. Sie können dieses Versprechen nur innerhalb Ihres Stornierungsfensters im Verlauf stornieren."
+  "email_disclaimer": "Nicht registrierte Empfänger haben 72 Stunden zur Annahme. Bei Nichtannahme werden Ihre KX automatisch zurückgegeben. Registrierte Empfänger erhalten die Mittel sofort. Sie können dieses Versprechen nur innerhalb Ihres Stornierungsfensters im Verlauf stornieren.",
+  "unregistered": "Nicht registriert"
 }
