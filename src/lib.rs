@@ -2376,7 +2376,7 @@ fn AccountPanel(
                         </p>
                         <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
                         <p style="margin-top:8px;font-size:12px">
-                            <a class="exchange-link" href="#" on:click=move |ev| {
+                            <a class={if is_desktop() { "exchange-link" } else { "exchange-link exchange-link-mobile" }} href="#" on:click=move |ev| {
                                 ev.prevent_default();
                                 convert_visible.set(!convert_visible.get_untracked());
                             }>{move || if convert_visible.get() { "\u{25BC} Convert KX \u{2194} USDC" } else { "\u{25B6} Convert KX \u{2194} USDC" }}</a>
@@ -3253,6 +3253,9 @@ fn SendPanel(
     // Contact autocomplete state
     let contact_suggestions: RwSignal<Vec<Contact>> = RwSignal::new(Vec::new());
     let show_contact_dropdown = RwSignal::new(false);
+    // Address book modal (mobile only)
+    let address_book_open = RwSignal::new(false);
+    let address_book_contacts: RwSignal<Vec<Contact>> = RwSignal::new(Vec::new());
     // Mobile time picker: 0=Send Now, 1=1h, 2=24h, 3=1w, 4=1m, 5=3m, 6=6m, 7=1y
     let mobile_time_option = RwSignal::new(0u8);
     // Mobile confirmation screen
@@ -3923,6 +3926,22 @@ fn SendPanel(
                 1 => {
                     view! {
                         <div class="field" style="position:relative">
+                            // Address Book button (mobile only)
+                            {if !is_desktop() {
+                                view! {
+                                    <button class="address-book-btn"
+                                        on:click=move |_| {
+                                            spawn_local(async move {
+                                                if let Ok(list) = call::<Vec<Contact>>("get_contacts", no_args()).await {
+                                                    address_book_contacts.set(list);
+                                                }
+                                                address_book_open.set(true);
+                                            });
+                                        }>
+                                        "\u{1f4cb} Address Book"
+                                    </button>
+                                }.into_any()
+                            } else { view! { <span></span> }.into_any() }}
                             <label>"Recipient Email Address"</label>
                             <input type="email" placeholder="recipient@example.com"
                                 prop:value=move || email.get()
@@ -4410,15 +4429,17 @@ fn SendPanel(
                                 </div>
                             }
                         }).collect::<Vec<_>>()}
-                        <button class="pill" style="width:100%;margin:8px 0;color:#d4a84b;border-color:#d4a84b"
-                            disabled=move || sending.get() || (series_entries.get().len() >= 9)
-                            on:click=move |_| {
-                                series_entries.update(|v| {
-                                    v.push((RwSignal::new(String::new()), RwSignal::new(String::new()), RwSignal::new(String::new())));
-                                });
-                            }>
-                            "+ Add Another Payment"
-                        </button>
+                        {if is_desktop() { view! {
+                            <button class="pill" style="width:100%;margin:8px 0;color:#d4a84b;border-color:#d4a84b;font-weight:600"
+                                disabled=move || sending.get() || (series_entries.get().len() >= 9)
+                                on:click=move |_| {
+                                    series_entries.update(|v| {
+                                        v.push((RwSignal::new(String::new()), RwSignal::new(String::new()), RwSignal::new(String::new())));
+                                    });
+                                }>
+                                "+ Add Another Payment"
+                            </button>
+                        }.into_any() } else { view! { <span></span> }.into_any() }}
                     </div>
                 }.into_any()
             }}
@@ -4557,6 +4578,60 @@ fn SendPanel(
                 }.into_any()
             }}
         </div>
+        // Address Book modal (mobile only)
+        {move || if address_book_open.get() {
+            let list = address_book_contacts.get();
+            view! {
+                <div class="address-book-modal" on:click=move |_| address_book_open.set(false)>
+                    <div class="address-book-sheet" on:click=move |ev| ev.stop_propagation()>
+                        <div class="address-book-header">
+                            <span class="address-book-title">"Address Book"</span>
+                            <button class="address-book-close" on:click=move |_| address_book_open.set(false)>"\u{2715}"</button>
+                        </div>
+                        {if list.is_empty() {
+                            view! { <p class="address-book-empty">"No saved contacts yet."</p> }.into_any()
+                        } else {
+                            view! {
+                                <div>
+                                    {list.into_iter().map(|c| {
+                                        let c_email = c.email.clone().unwrap_or_default();
+                                        let c_name = c.name.clone();
+                                        let fill_email = c_email.clone();
+                                        let del_id = c.id.clone();
+                                        view! {
+                                            <div class="address-book-item">
+                                                <div class="address-book-item-info"
+                                                    on:click=move |_| {
+                                                        email.set(fill_email.clone());
+                                                        address_book_open.set(false);
+                                                    }>
+                                                    <span class="address-book-item-name">{c_name}</span>
+                                                    <span class="address-book-item-email">{c_email}</span>
+                                                </div>
+                                                <button class="address-book-item-delete"
+                                                    on:click=move |ev| {
+                                                        ev.stop_propagation();
+                                                        let id = del_id.clone();
+                                                        spawn_local(async move {
+                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "id": id })).unwrap_or(no_args());
+                                                            let _ = call::<()>("delete_contact", args).await;
+                                                            if let Ok(refreshed) = call::<Vec<Contact>>("get_contacts", no_args()).await {
+                                                                address_book_contacts.set(refreshed);
+                                                            }
+                                                        });
+                                                    }>
+                                                    "\u{2715}"
+                                                </button>
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            }.into_any()
+                        }}
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
         // Email send confirmation modal
         {move || if email_confirm_open.get() {
             let disp_email = email_confirm_email.get();

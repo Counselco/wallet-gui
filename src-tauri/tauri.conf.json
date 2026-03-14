@@ -1,6 +1,6 @@
 {
   "productName": "ChronX Wallet",
-  "version": "1.4.90",
+  "version": "1.4.91",
   "identifier": "com.chronx.wallet",
   "build": {
     "frontendDist": "../dist",
