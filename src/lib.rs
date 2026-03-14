@@ -6306,6 +6306,14 @@ fn HistoryPanel(
                                                                         else { format!("Unlocks in {}h", hours) };
                                                         let subtext = format!("{} \u{b7} {}", t("en", "unregistered"), countdown);
                                                         view! { <span style="color:#9ca3af;font-size:10px">{subtext}</span> }.into_any()
+                                                    } else if email_category == 1 {
+                                                        let unlock = entry.unlock_date.unwrap_or(0);
+                                                        let remaining = unlock - now_ts;
+                                                        let hours = remaining / 3600;
+                                                        let days = hours / 24;
+                                                        let countdown = if days > 0 { format!("Unlocks in {}d {}h", days, hours % 24) }
+                                                                        else { format!("Unlocks in {}h", hours) };
+                                                        view! { <span style="color:#9ca3af;font-size:10px">{countdown}</span> }.into_any()
                                                     } else { view! { <span></span> }.into_any() }}
                                                 </div>
                                             }.into_any()
