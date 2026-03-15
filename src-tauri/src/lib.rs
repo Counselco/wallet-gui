@@ -126,6 +126,9 @@ pub fn run() {
             contacts::delete_contact,
             contacts::record_send_to_contact,
             contacts::check_if_contact,
+            commands::upload_avatar,
+            commands::get_avatar_meta,
+            commands::update_display_name,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

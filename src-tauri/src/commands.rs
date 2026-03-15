@@ -3085,3 +3085,88 @@ pub async fn whitelist_email(email: String, wallet_address: String) -> Result<bo
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
     Ok(body.get("success").and_then(|v| v.as_bool()).unwrap_or(false))
 }
+
+// ── Avatar & Profile ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn upload_avatar(
+    wallet_address: String,
+    image_path: String,
+    display_name: Option<String>,
+) -> Result<String, String> {
+    let file_bytes = std::fs::read(&image_path)
+        .map_err(|e| format!("Failed to read image: {e}"))?;
+
+    let ext = image_path.rsplit('.').next().unwrap_or("png").to_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+
+    let file_part = reqwest::multipart::Part::bytes(file_bytes)
+        .file_name(format!("avatar.{ext}"))
+        .mime_str(mime)
+        .map_err(|e| e.to_string())?;
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("wallet_address", wallet_address)
+        .part("image", file_part);
+
+    if let Some(name) = display_name {
+        form = form.text("display_name", name);
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/avatar/upload", NOTIFY_API_URL))
+        .multipart(form)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Upload failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("Upload failed").to_string());
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
+    Ok(body["avatar_url"].as_str().unwrap_or("").to_string())
+}
+
+#[tauri::command]
+pub async fn get_avatar_meta(wallet_address: String) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/avatar/{}/meta", NOTIFY_API_URL, wallet_address))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
+    let text = resp.text().await.map_err(|e| format!("Read failed: {e}"))?;
+    Ok(text)
+}
+
+#[tauri::command]
+pub async fn update_display_name(
+    wallet_address: String,
+    display_name: String,
+) -> Result<bool, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .patch(format!("{}/avatar/{}/name", NOTIFY_API_URL, wallet_address))
+        .json(&serde_json::json!({ "display_name": display_name }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("Update failed").to_string());
+    }
+    Ok(true)
+}

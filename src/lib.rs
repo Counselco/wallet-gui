@@ -2242,6 +2242,32 @@ fn AccountPanel(
     let claim_reg_msg   = RwSignal::new(String::new());
     let claim_reg_busy  = RwSignal::new(false);
 
+    // Avatar & profile state
+    let avatar_url = RwSignal::new(String::new());
+    let avatar_bust = RwSignal::new(0u32); // cache buster
+    let display_name = RwSignal::new(String::new());
+    let display_name_editing = RwSignal::new(false);
+    let display_name_input = RwSignal::new(String::new());
+    let avatar_msg = RwSignal::new(String::new());
+    let avatar_uploading = RwSignal::new(false);
+
+    // Load avatar meta on mount
+    Effect::new(move |_| {
+        let wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+        if wallet.is_empty() { return; }
+        avatar_url.set(format!("https://api.chronx.io/avatar/{}", wallet));
+        spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": wallet })).unwrap_or(no_args());
+            if let Ok(meta_json) = call::<String>("get_avatar_meta", args).await {
+                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_json) {
+                    if let Some(name) = meta["display_name"].as_str() {
+                        display_name.set(name.to_string());
+                    }
+                }
+            }
+        });
+    });
+
     // Convert block state
     let convert_visible   = RwSignal::new(false);
     let convert_amount    = RwSignal::new(String::new());
@@ -2344,6 +2370,182 @@ fn AccountPanel(
         // ── Receive tab content ──────────────────────────────────────────────
         <div>
             <div class="card">
+                // ── Avatar + Profile ─────────────────────────────────────────
+                <div style="text-align:center;margin-bottom:12px">
+                    <div style="position:relative;display:inline-block">
+                        <img
+                            src={move || {
+                                let base = avatar_url.get();
+                                if base.is_empty() { return String::new(); }
+                                let bust = avatar_bust.get();
+                                if bust > 0 { format!("{}?t={}", base, bust) } else { base }
+                            }}
+                            style="width:80px;height:80px;border-radius:50%;border:2px solid #d4a84b;cursor:pointer;object-fit:cover;background:#1a1a2e"
+                            on:click=move |_| {
+                                // Trigger file input click
+                                if let Some(w) = web_sys::window() {
+                                    if let Some(d) = w.document() {
+                                        if let Some(el) = d.get_element_by_id("avatar-file-input") {
+                                            let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
+                                        }
+                                    }
+                                }
+                            }
+                        />
+                        <div style="position:absolute;bottom:0;right:0;background:#d4a84b;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px"
+                            on:click=move |_| {
+                                if let Some(w) = web_sys::window() {
+                                    if let Some(d) = w.document() {
+                                        if let Some(el) = d.get_element_by_id("avatar-file-input") {
+                                            let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
+                                        }
+                                    }
+                                }
+                            }>
+                            "\u{1F4F7}"
+                        </div>
+                    </div>
+                    // Hidden file input for avatar upload
+                    <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp"
+                        style="display:none"
+                        on:change=move |ev| {
+                            let target = event_target::<web_sys::HtmlInputElement>(&ev);
+                            let files = target.files();
+                            if let Some(file_list) = files {
+                                if let Some(file) = file_list.get(0) {
+                                    let wallet = info.get_untracked().map(|a| a.account_id.clone()).unwrap_or_default();
+                                    if wallet.is_empty() { return; }
+                                    avatar_uploading.set(true);
+                                    avatar_msg.set(String::new());
+                                    // Read file as data URL → extract base64 → save to temp path
+                                    // For Tauri, we use the file name path directly
+                                    let file_name = file.name();
+                                    spawn_local(async move {
+                                        // On web/WASM we can't get the real file path from input
+                                        // Use JS to read as ArrayBuffer and upload via fetch
+                                        let reader = web_sys::FileReader::new().unwrap();
+                                        let reader_clone = reader.clone();
+                                        let (tx, rx) = futures::channel::oneshot::channel::<Vec<u8>>();
+                                        let tx = std::cell::RefCell::new(Some(tx));
+                                        let onload = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+                                            if let Ok(result) = reader_clone.result() {
+                                                let arr = js_sys::Uint8Array::new(&result);
+                                                let bytes = arr.to_vec();
+                                                if let Some(sender) = tx.borrow_mut().take() {
+                                                    let _ = sender.send(bytes);
+                                                }
+                                            }
+                                        }) as Box<dyn FnMut()>);
+                                        reader.set_onloadend(Some(onload.as_ref().unchecked_ref()));
+                                        let _ = reader.read_as_array_buffer(&file);
+                                        onload.forget();
+
+                                        if let Ok(bytes) = rx.await {
+                                            // Build FormData and upload via JS fetch
+                                            let form = web_sys::FormData::new().unwrap();
+                                            let blob_parts = js_sys::Array::new();
+                                            let uint8 = js_sys::Uint8Array::from(bytes.as_slice());
+                                            blob_parts.push(&uint8.buffer());
+                                            let blob = web_sys::Blob::new_with_u8_array_sequence(&blob_parts).unwrap();
+                                            let _ = form.append_with_blob_and_filename("image", &blob, &file_name);
+                                            let _ = form.append_with_str("wallet_address", &wallet);
+                                            let dn = display_name.get_untracked();
+                                            if !dn.is_empty() {
+                                                let _ = form.append_with_str("display_name", &dn);
+                                            }
+                                            let opts = web_sys::RequestInit::new();
+                                            opts.set_method("POST");
+                                            opts.set_body(&form);
+                                            let request = web_sys::Request::new_with_str_and_init(
+                                                "https://api.chronx.io/avatar/upload", &opts
+                                            ).unwrap();
+                                            if let Some(w) = web_sys::window() {
+                                                match JsFuture::from(w.fetch_with_request(&request)).await {
+                                                    Ok(resp) => {
+                                                        let resp: web_sys::Response = resp.unchecked_into();
+                                                        if resp.ok() {
+                                                            avatar_bust.set(js_sys::Date::now() as u32);
+                                                            avatar_msg.set("\u{2713} Profile photo saved".to_string());
+                                                        } else {
+                                                            avatar_msg.set("Upload failed".to_string());
+                                                        }
+                                                    }
+                                                    Err(_) => avatar_msg.set("Upload failed".to_string()),
+                                                }
+                                            }
+                                        }
+                                        avatar_uploading.set(false);
+                                        delay_ms(3000).await;
+                                        avatar_msg.set(String::new());
+                                    });
+                                }
+                            }
+                            // Reset input so re-selecting same file triggers change
+                            target.set_value("");
+                        }
+                    />
+                    // Uploading indicator
+                    {move || if avatar_uploading.get() {
+                        view! { <p style="font-size:11px;color:#d4a84b;margin-top:4px">"Uploading..."</p> }.into_any()
+                    } else {
+                        let msg = avatar_msg.get();
+                        if msg.is_empty() {
+                            view! { <span></span> }.into_any()
+                        } else {
+                            let color = if msg.contains('\u{2713}') { "#22c55e" } else { "#ef4444" };
+                            view! { <p style={format!("font-size:11px;color:{color};margin-top:4px")}>{msg}</p> }.into_any()
+                        }
+                    }}
+                    // Display name
+                    {move || {
+                        if display_name_editing.get() {
+                            view! {
+                                <div style="margin-top:6px;display:flex;align-items:center;justify-content:center;gap:4px">
+                                    <input type="text" maxlength="32" placeholder="Your name"
+                                        style="width:140px;padding:4px 8px;font-size:12px;background:#1a1a2e;border:1px solid #d4a84b;color:#fff;border-radius:4px"
+                                        prop:value=move || display_name_input.get()
+                                        on:input=move |ev| display_name_input.set(event_target_value(&ev))
+                                    />
+                                    <button style="padding:4px 8px;font-size:11px;background:#d4a84b;color:#0a0a0a;border:none;border-radius:4px;cursor:pointer;font-weight:700"
+                                        on:click=move |_| {
+                                            let name = display_name_input.get_untracked();
+                                            let wallet = info.get_untracked().map(|a| a.account_id.clone()).unwrap_or_default();
+                                            display_name.set(name.clone());
+                                            display_name_editing.set(false);
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                    "walletAddress": wallet,
+                                                    "displayName": name,
+                                                })).unwrap_or(no_args());
+                                            let _ = call::<bool>("update_display_name", args).await;
+                                            });
+                                        }>"Save"</button>
+                                    <button style="padding:4px 8px;font-size:11px;background:transparent;color:#6b7280;border:1px solid #6b7280;border-radius:4px;cursor:pointer"
+                                        on:click=move |_| display_name_editing.set(false)>"Cancel"</button>
+                                </div>
+                            }.into_any()
+                        } else {
+                            let dn = display_name.get();
+                            if dn.is_empty() {
+                                view! {
+                                    <p style="font-size:12px;color:#6b7280;margin-top:4px;cursor:pointer"
+                                        on:click=move |_| {
+                                            display_name_input.set(String::new());
+                                            display_name_editing.set(true);
+                                        }>"+ Add your name"</p>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <p style="font-size:13px;color:#d4a84b;font-weight:700;margin-top:4px;cursor:pointer"
+                                        on:click=move |_| {
+                                            display_name_input.set(display_name.get_untracked());
+                                            display_name_editing.set(true);
+                                        }>{dn}</p>
+                                }.into_any()
+                            }
+                        }
+                    }}
+                </div>
                 // ── Balance + Refresh ────────────────────────────────────────
                 <div class="row">
                     <div>
@@ -6371,6 +6573,17 @@ fn HistoryPanel(
                                     }.into_any());
                                 }
 
+                                // Avatar URL for counterparty
+                                let avatar_addr = if is_email_send {
+                                    String::new() // no avatar for email sends
+                                } else {
+                                    entry.counterparty.clone().unwrap_or_default()
+                                };
+                                let has_avatar = !avatar_addr.is_empty() && avatar_addr.len() > 10;
+                                let avatar_src = if has_avatar {
+                                    format!("https://api.chronx.io/avatar/{}", avatar_addr)
+                                } else { String::new() };
+
                                 Some(view! {
                                     <div class="history-row"
                                         on:click=move |_| {
@@ -6381,18 +6594,42 @@ fn HistoryPanel(
                                                 expanded.set(Some(tx_id_for_toggle.clone()));
                                             }
                                         }>
-                                        <div class="history-row-top">
-                                            <span class="history-type">
-                                                {type_icon} " " {entry.tx_type.clone()}
-                                            </span>
-                                            <span class={label_class} style="font-size:9px;padding:1px 6px;border-radius:4px;font-weight:700;letter-spacing:0.5px;margin-left:6px">
-                                                {type_label}
-                                            </span>
-                                            <span class={amount_class}>{amount_display}</span>
-                                        </div>
-                                        <div class="history-row-bottom">
-                                            <span class="history-addr">{addr_display}</span>
-                                            <span class="history-date">{date_display}</span>
+                                        <div style="display:flex;align-items:flex-start;gap:8px">
+                                            {if has_avatar {
+                                                view! {
+                                                    <img src={avatar_src}
+                                                        style="width:32px;height:32px;border-radius:50%;border:1px solid #d4a84b;flex-shrink:0;object-fit:cover;background:#1a1a2e"
+                                                        on:error=|ev| {
+                                                            let target = ev.target().unwrap();
+                                                            let el: web_sys::HtmlElement = target.unchecked_into();
+                                                            let _ = el.style().set_property("display", "none");
+                                                        }
+                                                    />
+                                                }.into_any()
+                                            } else if is_email_send {
+                                                view! {
+                                                    <div style="width:32px;height:32px;border-radius:50%;border:1px solid #6b7280;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#1a1a2e;font-size:16px">
+                                                        "\u{2709}"
+                                                    </div>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                            <div style="flex:1;min-width:0">
+                                                <div class="history-row-top">
+                                                    <span class="history-type">
+                                                        {type_icon} " " {entry.tx_type.clone()}
+                                                    </span>
+                                                    <span class={label_class} style="font-size:9px;padding:1px 6px;border-radius:4px;font-weight:700;letter-spacing:0.5px;margin-left:6px">
+                                                        {type_label}
+                                                    </span>
+                                                    <span class={amount_class}>{amount_display}</span>
+                                                </div>
+                                                <div class="history-row-bottom">
+                                                    <span class="history-addr">{addr_display}</span>
+                                                    <span class="history-date">{date_display}</span>
+                                                </div>
+                                            </div>
                                         </div>
                                         // Email send status badge + inline Cancel/Reclaim for email sends
                                         {if is_email_send {
