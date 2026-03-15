@@ -52,6 +52,13 @@ use std::collections::HashMap;
 
 const LOGO_PNG: &[u8] = include_bytes!("../assets/chronx-logo.png");
 
+const RELAY_WALLET: &str = "8Nodc3F2HwUjPMLaFfTJ6WKuSvjEa4fTeopLUK52y5EE";
+const RELAY_WALLET_LEGACY: &str = "9Vjh83mQHBEf5aMgz4emA3FaFygacDodWWLKeS31hp6m";
+
+fn is_relay_wallet(addr: &str) -> bool {
+    addr == RELAY_WALLET || addr == RELAY_WALLET_LEGACY
+}
+
 // ── i18n translation system ──────────────────────────────────────────────────
 
 static I18N_EN: &str = include_str!("i18n/en.json");
@@ -299,6 +306,15 @@ struct TxHistoryEntry {
     /// Memo text attached to the transaction (if any).
     #[serde(default)]
     memo: Option<String>,
+    /// Original sender wallet (for relay-delivered transactions).
+    #[serde(default)]
+    sender_wallet: Option<String>,
+    /// Original sender email (for relay-delivered transactions).
+    #[serde(default)]
+    sender_email: Option<String>,
+    /// Original sender display name (for relay-delivered transactions).
+    #[serde(default)]
+    sender_display: Option<String>,
 }
 
 /// Returned by `create_email_timelock` — carries the on-chain TxId and
@@ -6240,6 +6256,9 @@ fn HistoryPanel(
                         },
                         recipient_registered: None,
                         memo: lock.memo.clone(),
+                        sender_wallet: None,
+                        sender_email: None,
+                        sender_display: None,
                     });
                 }
 
@@ -6435,10 +6454,20 @@ fn HistoryPanel(
                                         }
                                     } else { from }
                                 } else if is_incoming {
-                                    // Show "From: <shortened account>" for incoming entries
-                                    entry.counterparty.as_deref()
-                                        .map(|a| format!("From {}", shorten_addr(a)))
-                                        .unwrap_or_default()
+                                    let cp = entry.counterparty.as_deref().unwrap_or("");
+                                    if is_relay_wallet(cp) {
+                                        if let Some(ref se) = entry.sender_email {
+                                            format!("From: {}", se)
+                                        } else if let Some(ref sd) = entry.sender_display {
+                                            format!("From: {}", sd)
+                                        } else {
+                                            "Email delivery".to_string()
+                                        }
+                                    } else {
+                                        entry.counterparty.as_deref()
+                                            .map(|a| format!("From {}", shorten_addr(a)))
+                                            .unwrap_or_default()
+                                    }
                                 } else if is_cascade_early {
                                     // Cascade "Promise Sent": show email from sibling Email Send entry
                                     entry.claim_secret_hash.as_ref()
@@ -6612,11 +6641,20 @@ fn HistoryPanel(
                                 }
 
                                 // Avatar URL for counterparty
-                                let avatar_addr = if is_email_send {
-                                    String::new() // no avatar for email sends
+                                let cp_str = entry.counterparty.as_deref().unwrap_or("");
+                                let is_from_relay = is_incoming && is_relay_wallet(cp_str);
+                                let avatar_addr = if is_email_send || is_from_relay {
+                                    String::new() // no avatar for email sends or relay deliveries
                                 } else {
                                     entry.counterparty.clone().unwrap_or_default()
                                 };
+                                let relay_initial = if is_from_relay {
+                                    entry.sender_email.as_deref()
+                                        .or(entry.sender_display.as_deref())
+                                        .and_then(|s| s.chars().next())
+                                        .map(|c| c.to_uppercase().next().unwrap_or('\u{2709}'))
+                                        .unwrap_or('\u{2709}')
+                                } else { ' ' };
                                 let has_avatar = !avatar_addr.is_empty() && avatar_addr.len() > 10;
                                 let avatar_src = if has_avatar {
                                     format!("https://api.chronx.io/avatar/{}", avatar_addr)
@@ -6643,6 +6681,12 @@ fn HistoryPanel(
                                                             let _ = el.style().set_property("display", "none");
                                                         }
                                                     />
+                                                }.into_any()
+                                            } else if is_from_relay {
+                                                view! {
+                                                    <div style="width:32px;height:32px;border-radius:50%;background:#d4a84b;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#000;flex-shrink:0">
+                                                        {relay_initial.to_string()}
+                                                    </div>
                                                 }.into_any()
                                             } else if is_email_send {
                                                 view! {

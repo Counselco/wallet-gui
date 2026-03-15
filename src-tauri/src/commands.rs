@@ -552,6 +552,9 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
         claim_secret_hash: None,
         recipient_registered: None,
         memo: None,
+        sender_wallet: None,
+        sender_email: None,
+        sender_display: None,
     });
     Ok(txid)
 }
@@ -1443,6 +1446,15 @@ pub struct TxHistoryEntry {
     /// Memo text attached to the transaction (if any).
     #[serde(default)]
     pub memo: Option<String>,
+    /// Original sender wallet (for relay-delivered transactions).
+    #[serde(default)]
+    pub sender_wallet: Option<String>,
+    /// Original sender email (for relay-delivered transactions).
+    #[serde(default)]
+    pub sender_email: Option<String>,
+    /// Original sender display name (for relay-delivered transactions).
+    #[serde(default)]
+    pub sender_display: Option<String>,
 }
 
 /// Fetch full transaction history for this wallet.
@@ -1569,6 +1581,9 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                 claim_secret_hash,
                 recipient_registered,
                 memo: v["memo"].as_str().map(|s| s.to_string()),
+                sender_wallet: None,
+                sender_email: None,
+                sender_display: None,
             }
         })
         .collect();
@@ -1612,6 +1627,9 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             claim_secret_hash: None,
             recipient_registered: None,
             memo: v["memo"].as_str().map(|s| s.to_string()),
+            sender_wallet: None,
+            sender_email: None,
+            sender_display: None,
         });
     }
 
@@ -1649,6 +1667,9 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             claim_secret_hash: None,
             recipient_registered: None,
             memo: None,
+            sender_wallet: None,
+            sender_email: None,
+            sender_display: None,
         });
     }
 
@@ -2812,6 +2833,9 @@ pub async fn convert_kx_to_usdc(
         claim_secret_hash: None,
         recipient_registered: None,
         memo: None,
+        sender_wallet: None,
+        sender_email: None,
+        sender_display: None,
     });
 
     Ok(txid)
