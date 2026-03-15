@@ -127,6 +127,7 @@ pub fn run() {
             contacts::record_send_to_contact,
             contacts::check_if_contact,
             commands::upload_avatar,
+            commands::upload_avatar_bytes,
             commands::get_avatar_meta,
             commands::update_display_name,
         ])

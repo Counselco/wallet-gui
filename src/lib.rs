@@ -2458,35 +2458,23 @@ fn AccountPanel(
                                     let _ = reader.read_as_array_buffer(&file);
                                     onload.forget();
                                     if let Ok(bytes) = rx.await {
-                                        let form = web_sys::FormData::new().unwrap();
-                                        let blob_parts = js_sys::Array::new();
-                                        let uint8 = js_sys::Uint8Array::from(bytes.as_slice());
-                                        blob_parts.push(&uint8.buffer());
-                                        let blob = web_sys::Blob::new_with_u8_array_sequence(&blob_parts).unwrap();
-                                        let _ = form.append_with_blob_and_filename("image", &blob, &file_name);
-                                        let _ = form.append_with_str("wallet_address", &wallet);
+                                        // Base64-encode and upload via Tauri command (avoids CORS)
+                                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                                         let dn = display_name.get_untracked();
-                                        if !dn.is_empty() {
-                                            let _ = form.append_with_str("display_name", &dn);
-                                        }
-                                        let opts = web_sys::RequestInit::new();
-                                        opts.set_method("POST");
-                                        opts.set_body(&form);
-                                        let request = web_sys::Request::new_with_str_and_init(
-                                            "https://api.chronx.io/avatar/upload", &opts
-                                        ).unwrap();
-                                        if let Some(w) = web_sys::window() {
-                                            match JsFuture::from(w.fetch_with_request(&request)).await {
-                                                Ok(resp) => {
-                                                    let resp: web_sys::Response = resp.unchecked_into();
-                                                    if resp.ok() {
-                                                        avatar_bust.set(js_sys::Date::now() as u32);
-                                                        avatar_msg.set("\u{2713} Photo saved".to_string());
-                                                    } else {
-                                                        avatar_msg.set("Upload failed".to_string());
-                                                    }
-                                                }
-                                                Err(_) => avatar_msg.set("Upload failed".to_string()),
+                                        let dn_val = if dn.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(dn) };
+                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                            "walletAddress": wallet,
+                                            "imageBase64": b64,
+                                            "fileName": file_name,
+                                            "displayName": dn_val,
+                                        })).unwrap_or(no_args());
+                                        match call::<String>("upload_avatar_bytes", args).await {
+                                            Ok(_) => {
+                                                avatar_bust.set(js_sys::Date::now() as u32);
+                                                avatar_msg.set("\u{2713} Photo saved".to_string());
+                                            }
+                                            Err(e) => {
+                                                avatar_msg.set(format!("Upload failed: {}", e));
                                             }
                                         }
                                     }
