@@ -551,6 +551,7 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
         claim_code: None,
         claim_secret_hash: None,
         recipient_registered: None,
+        memo: None,
     });
     Ok(txid)
 }
@@ -1439,6 +1440,9 @@ pub struct TxHistoryEntry {
     /// Whether the recipient email is registered (verified) in the system.
     #[serde(default)]
     pub recipient_registered: Option<bool>,
+    /// Memo text attached to the transaction (if any).
+    #[serde(default)]
+    pub memo: Option<String>,
 }
 
 /// Fetch full transaction history for this wallet.
@@ -1564,6 +1568,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
                 claim_code,
                 claim_secret_hash,
                 recipient_registered,
+                memo: v["memo"].as_str().map(|s| s.to_string()),
             }
         })
         .collect();
@@ -1606,6 +1611,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             claim_code: None,
             claim_secret_hash: None,
             recipient_registered: None,
+            memo: v["memo"].as_str().map(|s| s.to_string()),
         });
     }
 
@@ -1642,6 +1648,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
             claim_code: None,
             claim_secret_hash: None,
             recipient_registered: None,
+            memo: None,
         });
     }
 
@@ -2804,6 +2811,7 @@ pub async fn convert_kx_to_usdc(
         claim_code: None,
         claim_secret_hash: None,
         recipient_registered: None,
+        memo: None,
     });
 
     Ok(txid)

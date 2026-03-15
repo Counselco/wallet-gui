@@ -296,6 +296,9 @@ struct TxHistoryEntry {
     /// Whether the recipient email is registered (verified) in the system.
     #[serde(default)]
     recipient_registered: Option<bool>,
+    /// Memo text attached to the transaction (if any).
+    #[serde(default)]
+    memo: Option<String>,
 }
 
 /// Returned by `create_email_timelock` — carries the on-chain TxId and
@@ -6202,6 +6205,7 @@ fn HistoryPanel(
                             None
                         },
                         recipient_registered: None,
+                        memo: lock.memo.clone(),
                     });
                 }
 
@@ -6312,6 +6316,13 @@ fn HistoryPanel(
                                     "Incoming Promise" => "\u{1f4e5}",
                                     _ => "\u{2197}",
                                 };
+                                // Founding member badge from memo
+                                let member_badge: Option<(&str, &str, &str)> = entry.memo.as_deref().and_then(|m| {
+                                    if m.contains("FOUNDING_MEMBER") { Some(("#7c3aed", "#fff", "\u{1f451} Founder")) }
+                                    else if m.contains("GENESIS_MEMBER") { Some(("#d4a84b", "#000", "\u{1f48e} Genesis")) }
+                                    else if m.contains("PROTOCOL_PATRON") { Some(("#e2e8f0", "#1a1a2e", "\u{26a1} Patron")) }
+                                    else { None }
+                                });
                                 // Type label badge
                                 let now_ts = (js_sys::Date::now() / 1000.0) as i64;
                                 let is_scheduled = matches!(entry.tx_type.as_str(), "Promise Sent" | "TimeLockCreate")
@@ -6623,6 +6634,13 @@ fn HistoryPanel(
                                                     <span class={label_class} style="font-size:9px;padding:1px 6px;border-radius:4px;font-weight:700;letter-spacing:0.5px;margin-left:6px">
                                                         {type_label}
                                                     </span>
+                                                    {if let Some((bg, fg, text)) = member_badge {
+                                                        view! {
+                                                            <span style={format!("display:inline-block;padding:2px 8px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700;margin-left:6px")}>{text}</span>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! { <span></span> }.into_any()
+                                                    }}
                                                     <span class={amount_class}>{amount_display}</span>
                                                 </div>
                                                 <div class="history-row-bottom">
