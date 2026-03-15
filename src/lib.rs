@@ -921,6 +921,7 @@ fn App() -> impl IntoView {
     let avatar_msg = RwSignal::new(String::new());
     let avatar_uploading = RwSignal::new(false);
     let show_profile_modal = RwSignal::new(false);
+    let badge_signal = RwSignal::new(String::new());
 
     // Load avatar URL + display name whenever account info becomes available
     Effect::new(move |_| {
@@ -934,6 +935,11 @@ fn App() -> impl IntoView {
                 if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_json) {
                     if let Some(name) = meta["display_name"].as_str() {
                         g_display_name.set(name.to_string());
+                    }
+                    if let Some(b) = meta["badge"].as_str() {
+                        if !b.is_empty() {
+                            badge_signal.set(b.to_string());
+                        }
                     }
                 }
             }
@@ -1627,7 +1633,7 @@ fn App() -> impl IntoView {
                             match tab {
                                 // Tab 0: Receive (was part of AccountPanel)
                                 0 => view! {
-                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal />
+                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal />
                                 }.into_any(),
                                 // Tab 1: Send (Simple or Cascade on desktop)
                                 1 => view! {
@@ -2249,6 +2255,7 @@ fn AccountPanel(
     avatar_msg: RwSignal<String>,
     avatar_uploading: RwSignal<bool>,
     show_profile_modal: RwSignal<bool>,
+    badge: RwSignal<String>,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
@@ -2410,7 +2417,14 @@ fn AccountPanel(
                         {move || {
                             let dn = display_name.get();
                             if !dn.is_empty() {
-                                view! { <p style="font-size:13px;color:#d4a84b;font-weight:700;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{dn}</p> }.into_any()
+                                view! { <p style="font-size:13px;color:#d4a84b;font-weight:700;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{dn}
+                                    {move || match badge.get().as_str() {
+                                        "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#7c3aed;color:white;font-size:11px;font-weight:700;margin-left:4px">{"\u{1f451} Founder"}</span> }.into_any(),
+                                        "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#d4a84b;color:black;font-size:11px;font-weight:700;margin-left:4px">{"\u{1f48e} Genesis"}</span> }.into_any(),
+                                        "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#e2e8f0;color:#1a1a2e;font-size:11px;font-weight:700;margin-left:4px">{"\u{26a1} Patron"}</span> }.into_any(),
+                                        _ => view! { <span></span> }.into_any(),
+                                    }}
+                                </p> }.into_any()
                             } else {
                                 view! { <span></span> }.into_any()
                             }
@@ -3207,6 +3221,13 @@ fn AccountPanel(
                                     </div>
                                 }.into_any()
                             }
+                        }}
+                        // Badge in profile modal
+                        {move || match badge.get().as_str() {
+                            "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#7c3aed;color:white;font-size:13px;font-weight:700;margin-top:4px">{"\u{1f451} Founding Member"}</span> }.into_any(),
+                            "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#d4a84b;color:black;font-size:13px;font-weight:700;margin-top:4px">{"\u{1f48e} Genesis Member"}</span> }.into_any(),
+                            "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#e2e8f0;color:#1a1a2e;font-size:13px;font-weight:700;margin-top:4px">{"\u{26a1} Protocol Patron"}</span> }.into_any(),
+                            _ => view! { <span></span> }.into_any(),
                         }}
                         // QR code (gold on dark, using existing make_qr_svg)
                         <div style="background:#0d0d1a;border:1px solid #333;border-radius:12px;padding:16px">
@@ -6329,13 +6350,6 @@ fn HistoryPanel(
                                     "Incoming Promise" => "\u{1f4e5}",
                                     _ => "\u{2197}",
                                 };
-                                // Founding member badge from memo
-                                let member_badge: Option<(&str, &str, &str)> = entry.memo.as_deref().and_then(|m| {
-                                    if m.contains("FOUNDING_MEMBER") { Some(("#7c3aed", "#fff", "\u{1f451} Founder")) }
-                                    else if m.contains("GENESIS_MEMBER") { Some(("#d4a84b", "#000", "\u{1f48e} Genesis")) }
-                                    else if m.contains("PROTOCOL_PATRON") { Some(("#e2e8f0", "#1a1a2e", "\u{26a1} Patron")) }
-                                    else { None }
-                                });
                                 // Type label badge
                                 let now_ts = (js_sys::Date::now() / 1000.0) as i64;
                                 let is_scheduled = matches!(entry.tx_type.as_str(), "Promise Sent" | "TimeLockCreate")
@@ -6647,13 +6661,6 @@ fn HistoryPanel(
                                                     <span class={label_class} style="font-size:9px;padding:1px 6px;border-radius:4px;font-weight:700;letter-spacing:0.5px;margin-left:6px">
                                                         {type_label}
                                                     </span>
-                                                    {if let Some((bg, fg, text)) = member_badge {
-                                                        view! {
-                                                            <span style={format!("display:inline-block;padding:2px 8px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700;margin-left:6px")}>{text}</span>
-                                                        }.into_any()
-                                                    } else {
-                                                        view! { <span></span> }.into_any()
-                                                    }}
                                                     <span class={amount_class}>{amount_display}</span>
                                                 </div>
                                                 <div class="history-row-bottom">
