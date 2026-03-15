@@ -468,14 +468,25 @@ fn shorten_addr(addr: &str) -> String {
 
 fn format_utc_ts(ts: i64) -> String {
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
-        d.get_utc_full_year(),
-        d.get_utc_month() + 1,
-        d.get_utc_date(),
-        d.get_utc_hours(),
-        d.get_utc_minutes()
-    )
+    let now_secs = (js_sys::Date::now() / 1000.0) as i64;
+    let diff = now_secs - ts;
+    let month = match d.get_month() {
+        0 => "Jan", 1 => "Feb", 2 => "Mar", 3 => "Apr",
+        4 => "May", 5 => "Jun", 6 => "Jul", 7 => "Aug",
+        8 => "Sep", 9 => "Oct", 10 => "Nov", _ => "Dec",
+    };
+    let day = d.get_date();
+    let hours = d.get_hours();
+    let mins = d.get_minutes();
+    let ampm = if hours >= 12 { "PM" } else { "AM" };
+    let h12 = if hours % 12 == 0 { 12 } else { hours % 12 };
+    if diff < 86400 {
+        format!("{}:{:02} {}", h12, mins, ampm)
+    } else if diff < 86400 * 365 {
+        format!("{} {}", month, day)
+    } else {
+        format!("{} {} {}", month, day, d.get_full_year())
+    }
 }
 
 // ── QR code generation ────────────────────────────────────────────────────────
