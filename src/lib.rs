@@ -912,6 +912,16 @@ fn App() -> impl IntoView {
     let restore_msg    = RwSignal::new(String::new());
     let restore_busy   = RwSignal::new(false);
 
+    // Avatar & profile (persist across tab navigation)
+    let avatar_url = RwSignal::new(String::new());
+    let avatar_bust = RwSignal::new(0u32);
+    let g_display_name = RwSignal::new(String::new());
+    let g_display_name_editing = RwSignal::new(false);
+    let g_display_name_input = RwSignal::new(String::new());
+    let avatar_msg = RwSignal::new(String::new());
+    let avatar_uploading = RwSignal::new(false);
+    let show_profile_modal = RwSignal::new(false);
+
     // Notices & update check
     let notices        = RwSignal::new(Vec::<Notice>::new());
     let seen_ids       = RwSignal::new(Vec::<String>::new());
@@ -1599,7 +1609,7 @@ fn App() -> impl IntoView {
                             match tab {
                                 // Tab 0: Receive (was part of AccountPanel)
                                 0 => view! {
-                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab deep_link_code=deep_link_code lang=lang />
+                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal />
                                 }.into_any(),
                                 // Tab 1: Send (Simple or Cascade on desktop)
                                 1 => view! {
@@ -2213,6 +2223,14 @@ fn AccountPanel(
     active_tab: RwSignal<u8>,
     deep_link_code: RwSignal<String>,
     lang: RwSignal<String>,
+    avatar_url: RwSignal<String>,
+    avatar_bust: RwSignal<u32>,
+    display_name: RwSignal<String>,
+    display_name_editing: RwSignal<bool>,
+    display_name_input: RwSignal<String>,
+    avatar_msg: RwSignal<String>,
+    avatar_uploading: RwSignal<bool>,
+    show_profile_modal: RwSignal<bool>,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
@@ -2245,15 +2263,7 @@ fn AccountPanel(
     let claim_reg_msg   = RwSignal::new(String::new());
     let claim_reg_busy  = RwSignal::new(false);
 
-    // Avatar & profile state
-    let avatar_url = RwSignal::new(String::new());
-    let avatar_bust = RwSignal::new(0u32); // cache buster
-    let display_name = RwSignal::new(String::new());
-    let display_name_editing = RwSignal::new(false);
-    let display_name_input = RwSignal::new(String::new());
-    let avatar_msg = RwSignal::new(String::new());
-    let avatar_uploading = RwSignal::new(false);
-    let show_profile_modal = RwSignal::new(false);
+    // Avatar & profile state (signals passed from parent App to persist across tab nav)
 
     // Load avatar meta on mount
     Effect::new(move |_| {
