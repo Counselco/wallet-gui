@@ -922,6 +922,24 @@ fn App() -> impl IntoView {
     let avatar_uploading = RwSignal::new(false);
     let show_profile_modal = RwSignal::new(false);
 
+    // Load avatar URL + display name whenever account info becomes available
+    Effect::new(move |_| {
+        let wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+        if wallet.is_empty() { return; }
+        avatar_url.set(format!("https://api.chronx.io/avatar/{}", wallet));
+        avatar_bust.set(js_sys::Date::now() as u32); // cache bust on every load
+        spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": wallet })).unwrap_or(no_args());
+            if let Ok(meta_json) = call::<String>("get_avatar_meta", args).await {
+                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_json) {
+                    if let Some(name) = meta["display_name"].as_str() {
+                        g_display_name.set(name.to_string());
+                    }
+                }
+            }
+        });
+    });
+
     // Notices & update check
     let notices        = RwSignal::new(Vec::<Notice>::new());
     let seen_ids       = RwSignal::new(Vec::<String>::new());
@@ -2263,24 +2281,7 @@ fn AccountPanel(
     let claim_reg_msg   = RwSignal::new(String::new());
     let claim_reg_busy  = RwSignal::new(false);
 
-    // Avatar & profile state (signals passed from parent App to persist across tab nav)
-
-    // Load avatar meta on mount
-    Effect::new(move |_| {
-        let wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
-        if wallet.is_empty() { return; }
-        avatar_url.set(format!("https://api.chronx.io/avatar/{}", wallet));
-        spawn_local(async move {
-            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": wallet })).unwrap_or(no_args());
-            if let Ok(meta_json) = call::<String>("get_avatar_meta", args).await {
-                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_json) {
-                    if let Some(name) = meta["display_name"].as_str() {
-                        display_name.set(name.to_string());
-                    }
-                }
-            }
-        });
-    });
+    // Avatar & profile state (signals passed from parent App — loading Effect is in App())
 
     // Convert block state
     let convert_visible   = RwSignal::new(false);
