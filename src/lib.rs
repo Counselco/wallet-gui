@@ -914,7 +914,7 @@ fn App() -> impl IntoView {
 
     // Avatar & profile (persist across tab navigation)
     let avatar_url = RwSignal::new(String::new());
-    let avatar_bust = RwSignal::new(0u32);
+    let avatar_bust = RwSignal::new(0.0f64);
     let g_display_name = RwSignal::new(String::new());
     let g_display_name_editing = RwSignal::new(false);
     let g_display_name_input = RwSignal::new(String::new());
@@ -927,7 +927,7 @@ fn App() -> impl IntoView {
         let wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
         if wallet.is_empty() { return; }
         avatar_url.set(format!("https://api.chronx.io/avatar/{}", wallet));
-        avatar_bust.set(js_sys::Date::now() as u32); // cache bust on every load
+        avatar_bust.set(js_sys::Date::now()); // cache bust on every load
         spawn_local(async move {
             let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": wallet })).unwrap_or(no_args());
             if let Ok(meta_json) = call::<String>("get_avatar_meta", args).await {
@@ -2242,7 +2242,7 @@ fn AccountPanel(
     deep_link_code: RwSignal<String>,
     lang: RwSignal<String>,
     avatar_url: RwSignal<String>,
-    avatar_bust: RwSignal<u32>,
+    avatar_bust: RwSignal<f64>,
     display_name: RwSignal<String>,
     display_name_editing: RwSignal<bool>,
     display_name_input: RwSignal<String>,
@@ -2396,7 +2396,7 @@ fn AccountPanel(
                                     let base = avatar_url.get();
                                     if base.is_empty() { return String::new(); }
                                     let bust = avatar_bust.get();
-                                    if bust > 0 { format!("{}?t={}", base, bust) } else { base }
+                                    if bust > 0.0 { format!("{}?t={:.0}", base, bust) } else { base }
                                 }}
                                 style="width:56px;height:56px;border-radius:50%;border:2px solid #d4a84b;object-fit:cover;display:block;background:#1a1a2e"
                             />
@@ -2476,8 +2476,11 @@ fn AccountPanel(
                                         })).unwrap_or(no_args());
                                         match call::<String>("upload_avatar_bytes", args).await {
                                             Ok(_) => {
-                                                avatar_bust.set(js_sys::Date::now() as u32);
+                                                avatar_bust.set(js_sys::Date::now());
                                                 avatar_msg.set("\u{2713} Photo saved".to_string());
+                                                show_profile_modal.set(false);
+                                                delay_ms(500).await;
+                                                show_profile_modal.set(true);
                                             }
                                             Err(e) => {
                                                 avatar_msg.set(format!("Upload failed: {}", e));
@@ -3154,7 +3157,7 @@ fn AccountPanel(
                                 let base = avatar_url.get();
                                 if base.is_empty() { return String::new(); }
                                 let bust = avatar_bust.get();
-                                if bust > 0 { format!("{}?t={}", base, bust) } else { base }
+                                if bust > 0.0 { format!("{}?t={:.0}", base, bust) } else { base }
                             }}
                             style="width:120px;height:120px;border-radius:50%;border:3px solid #d4a84b;object-fit:cover;background:#1a1a2e"
                         />
