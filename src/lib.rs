@@ -232,6 +232,9 @@ struct TimeLockInfo {
     claim_secret_hash: Option<String>,
     #[serde(default)]
     cancellation_window_secs: Option<u32>,
+    /// BLAKE3(recipient_email) — only present on email locks (0xC5 marker).
+    #[serde(default)]
+    recipient_email_hash: Option<String>,
     /// Direction: "incoming" or "outgoing". Set by get_all_promises.
     #[serde(default)]
     direction: Option<String>,
@@ -5989,7 +5992,13 @@ fn HistoryPanel(
                         cancellation_window_secs: lock.cancellation_window_secs,
                         created_at: Some(lock.created_at),
                         claim_code: None,
-                        claim_secret_hash: lock.claim_secret_hash.clone(),
+                        // Only propagate claim_secret_hash for email locks (have recipient_email_hash).
+                        // Wallet-to-wallet timelocks may have claim_secret_hash but no email hash.
+                        claim_secret_hash: if lock.recipient_email_hash.is_some() {
+                            lock.claim_secret_hash.clone()
+                        } else {
+                            None
+                        },
                         recipient_registered: None,
                     });
                 }
