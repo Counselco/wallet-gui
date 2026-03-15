@@ -6158,6 +6158,65 @@ fn HistoryPanel(
     Effect::new(move |_| { h_sort.get(); h_filter.get(); h_page.set(0); });
     let on_refresh = move |_: web_sys::MouseEvent| { h_page.set(0); reload(); };
 
+    // Sender info cache for relay-delivered transactions
+    // Key: tx_id, Value: (sender_display, sender_wallet, avatar_url)
+    let sender_cache: RwSignal<HashMap<String, (String, String, String)>> = RwSignal::new(HashMap::new());
+    // Badge cache for counterparty wallets
+    let badge_cache: RwSignal<HashMap<String, String>> = RwSignal::new(HashMap::new());
+
+    // Look up sender info for relay-delivered incoming transactions
+    Effect::new(move |_| {
+        let all = entries.get();
+        let my_wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+        if my_wallet.is_empty() { return; }
+        let already = sender_cache.get_untracked();
+        for entry in &all {
+            let cp = entry.counterparty.as_deref().unwrap_or("");
+            let is_incoming_type = matches!(entry.tx_type.as_str(),
+                "Transfer Received" | "Email Claimed" | "Promise Kept");
+            if !is_relay_wallet(cp) || !is_incoming_type { continue; }
+            if already.contains_key(&entry.tx_id) { continue; }
+            let tx_id = entry.tx_id.clone();
+            let wallet = my_wallet.clone();
+            let amount_kx: f64 = entry.amount_chronos.as_deref()
+                .and_then(|c| c.parse::<f64>().ok())
+                .map(|c| c / 1_000_000.0)
+                .unwrap_or(0.0);
+            spawn_local(async move {
+                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                    "walletAddress": wallet,
+                    "amountKx": amount_kx,
+                })).unwrap_or(no_args());
+                if let Ok(resp) = call::<String>("get_sender_info", args).await {
+                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&resp) {
+                        if data["found"].as_bool().unwrap_or(false) {
+                            let display = data["sender_display"].as_str().unwrap_or("Unknown").to_string();
+                            let sw = data["sender_wallet"].as_str().unwrap_or("").to_string();
+                            let avatar_url = if !sw.is_empty() {
+                                format!("https://api.chronx.io/avatar/{}", sw)
+                            } else { String::new() };
+                            sender_cache.update(|m| { m.insert(tx_id.clone(), (display, sw.clone(), avatar_url)); });
+                            // Fetch badge for sender wallet
+                            if !sw.is_empty() {
+                                let sw2 = sw.clone();
+                                let args2 = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": sw2 })).unwrap_or(no_args());
+                                if let Ok(meta_json) = call::<String>("get_avatar_meta", args2).await {
+                                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_json) {
+                                        if let Some(b) = meta["badge"].as_str() {
+                                            if !b.is_empty() {
+                                                badge_cache.update(|m| { m.insert(sw, b.to_string()); });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+
     view! {
         <div class="card">
             <div class="row">
@@ -6456,13 +6515,7 @@ fn HistoryPanel(
                                 } else if is_incoming {
                                     let cp = entry.counterparty.as_deref().unwrap_or("");
                                     if is_relay_wallet(cp) {
-                                        if let Some(ref se) = entry.sender_email {
-                                            format!("From: {}", se)
-                                        } else if let Some(ref sd) = entry.sender_display {
-                                            format!("From: {}", sd)
-                                        } else {
-                                            "Email delivery".to_string()
-                                        }
+                                        "Email delivery".to_string() // placeholder — replaced reactively below
                                     } else {
                                         entry.counterparty.as_deref()
                                             .map(|a| format!("From {}", shorten_addr(a)))
@@ -6643,18 +6696,12 @@ fn HistoryPanel(
                                 // Avatar URL for counterparty
                                 let cp_str = entry.counterparty.as_deref().unwrap_or("");
                                 let is_from_relay = is_incoming && is_relay_wallet(cp_str);
+                                let relay_tx_id = if is_from_relay { entry.tx_id.clone() } else { String::new() };
                                 let avatar_addr = if is_email_send || is_from_relay {
-                                    String::new() // no avatar for email sends or relay deliveries
+                                    String::new()
                                 } else {
                                     entry.counterparty.clone().unwrap_or_default()
                                 };
-                                let relay_initial = if is_from_relay {
-                                    entry.sender_email.as_deref()
-                                        .or(entry.sender_display.as_deref())
-                                        .and_then(|s| s.chars().next())
-                                        .map(|c| c.to_uppercase().next().unwrap_or('\u{2709}'))
-                                        .unwrap_or('\u{2709}')
-                                } else { ' ' };
                                 let has_avatar = !avatar_addr.is_empty() && avatar_addr.len() > 10;
                                 let avatar_src = if has_avatar {
                                     format!("https://api.chronx.io/avatar/{}", avatar_addr)
@@ -6683,10 +6730,30 @@ fn HistoryPanel(
                                                     />
                                                 }.into_any()
                                             } else if is_from_relay {
+                                                let rtx = relay_tx_id.clone();
                                                 view! {
-                                                    <div style="width:32px;height:32px;border-radius:50%;background:#d4a84b;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#000;flex-shrink:0">
-                                                        {relay_initial.to_string()}
-                                                    </div>
+                                                    {move || {
+                                                        let cache = sender_cache.get();
+                                                        if let Some((_, _, ref av)) = cache.get(&rtx) {
+                                                            if !av.is_empty() {
+                                                                return view! {
+                                                                    <img src={av.clone()}
+                                                                        style="width:32px;height:32px;border-radius:50%;border:1px solid #d4a84b;flex-shrink:0;object-fit:cover;background:#1a1a2e"
+                                                                        on:error=|ev| {
+                                                                            let target = ev.target().unwrap();
+                                                                            let el: web_sys::HtmlElement = target.unchecked_into();
+                                                                            let _ = el.style().set_property("display", "none");
+                                                                        }
+                                                                    />
+                                                                }.into_any();
+                                                            }
+                                                        }
+                                                        view! {
+                                                            <div style="width:32px;height:32px;border-radius:50%;background:#d4a84b;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#000;flex-shrink:0">
+                                                                {"\u{2709}"}
+                                                            </div>
+                                                        }.into_any()
+                                                    }}
                                                 }.into_any()
                                             } else if is_email_send {
                                                 view! {
@@ -6708,7 +6775,40 @@ fn HistoryPanel(
                                                     <span class={amount_class}>{amount_display}</span>
                                                 </div>
                                                 <div class="history-row-bottom">
-                                                    <span class="history-addr">{addr_display}</span>
+                                                    {if is_from_relay {
+                                                        let rtx2 = relay_tx_id.clone();
+                                                        let rtx3 = relay_tx_id.clone();
+                                                        view! {
+                                                            <span class="history-addr">{move || {
+                                                                let cache = sender_cache.get();
+                                                                if let Some((ref disp, _, _)) = cache.get(&rtx2) {
+                                                                    format!("From: {}", disp)
+                                                                } else {
+                                                                    addr_display.clone()
+                                                                }
+                                                            }}</span>
+                                                            {move || {
+                                                                let cache = sender_cache.get();
+                                                                let badges = badge_cache.get();
+                                                                if let Some((_, ref sw, _)) = cache.get(&rtx3) {
+                                                                    if let Some(b) = badges.get(sw) {
+                                                                        let (bg, fg, text) = match b.as_str() {
+                                                                            "FOUNDING_MEMBER" => ("#7c3aed", "white", "\u{1f451} Founder"),
+                                                                            "GENESIS_MEMBER" => ("#d4a84b", "black", "\u{1f48e} Genesis"),
+                                                                            "PROTOCOL_PATRON" => ("#e2e8f0", "#1a1a2e", "\u{26a1} Patron"),
+                                                                            _ => return view! { <span></span> }.into_any(),
+                                                                        };
+                                                                        return view! {
+                                                                            <span style={format!("display:inline-block;padding:1px 6px;border-radius:4px;background:{bg};color:{fg};font-size:10px;font-weight:700;margin-left:4px")}>{text}</span>
+                                                                        }.into_any();
+                                                                    }
+                                                                }
+                                                                view! { <span></span> }.into_any()
+                                                            }}
+                                                        }.into_any()
+                                                    } else {
+                                                        view! { <span class="history-addr">{addr_display}</span> }.into_any()
+                                                    }}
                                                     <span class="history-date">{date_display}</span>
                                                 </div>
                                             </div>

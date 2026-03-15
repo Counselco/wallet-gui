@@ -130,6 +130,7 @@ pub fn run() {
             commands::upload_avatar_bytes,
             commands::get_avatar_meta,
             commands::update_display_name,
+            commands::get_sender_info,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

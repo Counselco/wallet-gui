@@ -3090,6 +3090,25 @@ pub async fn get_claim_info(claim_code: String) -> Result<ClaimInfo, String> {
     Ok(info)
 }
 
+/// Look up the original sender for a relay-delivered transaction.
+#[tauri::command]
+pub async fn get_sender_info(wallet_address: String, amount_kx: f64) -> Result<String, String> {
+    let url = format!(
+        "https://api.chronx.io/claim/sender-lookup?wallet_address={}&amount_kx={:.6}",
+        wallet_address, amount_kx
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(&url)
+        .send().await
+        .map_err(|e| e.to_string())?
+        .text().await
+        .map_err(|e| e.to_string())?;
+    Ok(resp)
+}
+
 /// Register the recipient's email in the whitelist (verified_emails) on the notify API.
 #[tauri::command]
 pub async fn whitelist_email(email: String, wallet_address: String) -> Result<bool, String> {
