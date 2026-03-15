@@ -2253,6 +2253,7 @@ fn AccountPanel(
     let display_name_input = RwSignal::new(String::new());
     let avatar_msg = RwSignal::new(String::new());
     let avatar_uploading = RwSignal::new(false);
+    let show_profile_modal = RwSignal::new(false);
 
     // Load avatar meta on mount
     Effect::new(move |_| {
@@ -2375,28 +2376,22 @@ fn AccountPanel(
             <div class="card">
                 // ── Avatar + Balance + Refresh (combined row) ──────────────
                 <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px">
-                    // Avatar circle (left)
-                    <div style="position:relative;flex-shrink:0;cursor:pointer"
-                        on:click=move |_| {
-                            if let Some(w) = web_sys::window() {
-                                if let Some(d) = w.document() {
-                                    if let Some(el) = d.get_element_by_id("avatar-file-input") {
-                                        let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
-                                    }
-                                }
-                            }
-                        }>
-                        <img
-                            src={move || {
-                                let base = avatar_url.get();
-                                if base.is_empty() { return String::new(); }
-                                let bust = avatar_bust.get();
-                                if bust > 0 { format!("{}?t={}", base, bust) } else { base }
-                            }}
-                            style="width:56px;height:56px;border-radius:50%;border:2px solid #d4a84b;object-fit:cover;display:block;background:#1a1a2e"
-                        />
-                        <div style="position:absolute;bottom:0;right:0;background:#d4a84b;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:11px;line-height:1">
-                            "\u{1F4F7}"
+                    // Avatar circle (left) — click opens profile modal
+                    <div style="flex-shrink:0">
+                        <div style="position:relative;cursor:pointer"
+                            on:click=move |_| show_profile_modal.set(true)>
+                            <img
+                                src={move || {
+                                    let base = avatar_url.get();
+                                    if base.is_empty() { return String::new(); }
+                                    let bust = avatar_bust.get();
+                                    if bust > 0 { format!("{}?t={}", base, bust) } else { base }
+                                }}
+                                style="width:56px;height:56px;border-radius:50%;border:2px solid #d4a84b;object-fit:cover;display:block;background:#1a1a2e"
+                            />
+                            <div style="position:absolute;bottom:0;right:0;background:#d4a84b;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:11px;line-height:1">
+                                "\u{1F4F7}"
+                            </div>
                         </div>
                     </div>
                     // Name + Balance (middle)
@@ -2920,34 +2915,6 @@ fn AccountPanel(
 
                 <hr style="border:none;border-top:1px solid #1e2130;margin:14px 0" />
 
-                // ── Section B: QR Code (inline toggle) ──────────────────────
-                <div>
-                    <button style="font-size:13px;padding:8px 16px;border:1px solid #d4a84b;background:transparent;color:#d4a84b;border-radius:6px;cursor:pointer;width:100%"
-                        on:click=on_toggle_qr>
-                        {move || if qr_visible.get() { "Hide QR Code" } else { "Show QR Code" }}
-                    </button>
-                    {move || if qr_visible.get() {
-                        let svg = qr_svg.get();
-                        view! {
-                            <div class="modal-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:1000;display:flex;align-items:center;justify-content:center"
-                                on:click=move |_| qr_visible.set(false)>
-                                <div style="background:#fff;border-radius:12px;padding:24px;text-align:center;max-width:320px" on:click=move |ev| ev.stop_propagation()>
-                                    <div inner_html=svg style="display:inline-block"></div>
-                                    <p style="color:#555;font-size:11px;margin-top:8px">
-                                        "Others scan this to send KX to you"
-                                    </p>
-                                    <button style="margin-top:12px;padding:8px 24px;background:#d4a84b;color:#0a0a0a;border:none;border-radius:6px;cursor:pointer;font-weight:700"
-                                        on:click=move |_| qr_visible.set(false)>{t(&lang.get(), "close")}</button>
-                                </div>
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! { <span></span> }.into_any()
-                    }}
-                </div>
-
-                <hr style="border:none;border-top:1px solid #1e2130;margin:14px 0" />
-
                 // ── Claim Code ───────────────────────────────────────────────
                 <div style="border:1px solid rgba(212,168,75,0.3);border-radius:8px;padding:12px;margin-top:0">
                     <p style="font-size:15px;font-weight:700;color:#d4a84b;margin:0 0 6px">"Got a claim code?"</p>
@@ -3157,7 +3124,107 @@ fn AccountPanel(
 
         </div>
 
-        // Send is now a standalone tab — removed from AccountPanel
+        // ── Profile modal ────────────────────────────────────────────────
+        {move || if show_profile_modal.get() {
+            let account_id = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+            let qr = make_qr_svg(&account_id);
+            view! {
+                <div style="position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:1000"
+                    on:click=move |_| show_profile_modal.set(false)>
+                    <div style="background:#1a1a2e;border:1px solid #d4a84b;border-radius:16px;padding:32px;display:flex;flex-direction:column;align-items:center;gap:16px;max-width:340px;width:90%;position:relative"
+                        on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                        // Close button
+                        <button on:click=move |_| show_profile_modal.set(false)
+                            style="position:absolute;top:12px;right:12px;background:none;border:none;color:#888;font-size:20px;cursor:pointer;line-height:1">
+                            "\u{00d7}"
+                        </button>
+                        // Large avatar
+                        <img src={move || {
+                                let base = avatar_url.get();
+                                if base.is_empty() { return String::new(); }
+                                let bust = avatar_bust.get();
+                                if bust > 0 { format!("{}?t={}", base, bust) } else { base }
+                            }}
+                            style="width:120px;height:120px;border-radius:50%;border:3px solid #d4a84b;object-fit:cover;background:#1a1a2e"
+                        />
+                        // Display name (editable)
+                        {move || {
+                            if display_name_editing.get() {
+                                view! {
+                                    <div style="display:flex;gap:8px;align-items:center">
+                                        <input type="text" maxlength="32" placeholder="Your name"
+                                            prop:value=move || display_name_input.get()
+                                            on:input=move |ev| display_name_input.set(event_target_value(&ev))
+                                            style="background:#0d0d1a;border:1px solid #d4a84b;color:#fff;padding:6px 10px;border-radius:6px;font-size:14px;width:160px"
+                                        />
+                                        <button on:click=move |_| {
+                                                let name = display_name_input.get_untracked();
+                                                let wallet = info.get_untracked().map(|a| a.account_id.clone()).unwrap_or_default();
+                                                display_name.set(name.clone());
+                                                display_name_editing.set(false);
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                        "walletAddress": wallet,
+                                                        "displayName": name,
+                                                    })).unwrap_or(no_args());
+                                                    let _ = call::<bool>("update_display_name", args).await;
+                                                });
+                                            }
+                                            style="background:#d4a84b;color:#000;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:13px">
+                                            "Save"</button>
+                                        <button on:click=move |_| display_name_editing.set(false)
+                                            style="background:none;border:1px solid #444;color:#888;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:13px">
+                                            "Cancel"</button>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                let dn = display_name.get();
+                                view! {
+                                    <div style="display:flex;align-items:center;gap:8px">
+                                        <span style="font-size:18px;font-weight:700;color:#fff">
+                                            {if dn.is_empty() { "Add your name".to_string() } else { dn }}
+                                        </span>
+                                        <button on:click=move |_| {
+                                                display_name_input.set(display_name.get_untracked());
+                                                display_name_editing.set(true);
+                                            }
+                                            style="background:none;border:none;color:#d4a84b;cursor:pointer;font-size:14px;padding:0">
+                                            "\u{270f}\u{fe0f}"</button>
+                                    </div>
+                                }.into_any()
+                            }
+                        }}
+                        // QR code (gold on dark, using existing make_qr_svg)
+                        <div style="background:#0d0d1a;border:1px solid #333;border-radius:12px;padding:16px">
+                            <div inner_html=qr style="display:inline-block"></div>
+                        </div>
+                        // Wallet address (truncated)
+                        <div style="font-size:11px;color:#555;font-family:monospace;text-align:center;word-break:break-all">
+                            {move || {
+                                let a = info.get().map(|i| i.account_id.clone()).unwrap_or_default();
+                                if a.len() > 20 { format!("{}...{}", &a[..10], &a[a.len()-10..]) } else { a }
+                            }}
+                        </div>
+                        // Change Photo button
+                        <button on:click=move |_| {
+                                show_profile_modal.set(false);
+                                if let Some(w) = web_sys::window() {
+                                    if let Some(d) = w.document() {
+                                        if let Some(el) = d.get_element_by_id("avatar-file-input") {
+                                            let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
+                                        }
+                                    }
+                                }
+                            }
+                            style="background:none;border:1px solid #444;color:#888;padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px;width:100%">
+                            "\u{1f4f7} Change Photo"
+                        </button>
+                    </div>
+                </div>
+            }.into_any()
+        } else {
+            view! { <span></span> }.into_any()
+        }}
 
         // ── Whitelist popup (shown after successful claim) ───────────────────
         {move || if wl_show.get() {
