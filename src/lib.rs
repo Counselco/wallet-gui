@@ -2373,9 +2373,19 @@ fn AccountPanel(
         // ── Receive tab content ──────────────────────────────────────────────
         <div>
             <div class="card">
-                // ── Avatar + Profile ─────────────────────────────────────────
-                <div style="text-align:center;margin-bottom:12px">
-                    <div style="position:relative;display:inline-block">
+                // ── Avatar + Balance + Refresh (combined row) ──────────────
+                <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px">
+                    // Avatar circle (left)
+                    <div style="position:relative;flex-shrink:0;cursor:pointer"
+                        on:click=move |_| {
+                            if let Some(w) = web_sys::window() {
+                                if let Some(d) = w.document() {
+                                    if let Some(el) = d.get_element_by_id("avatar-file-input") {
+                                        let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
+                                    }
+                                }
+                            }
+                        }>
                         <img
                             src={move || {
                                 let base = avatar_url.get();
@@ -2383,177 +2393,24 @@ fn AccountPanel(
                                 let bust = avatar_bust.get();
                                 if bust > 0 { format!("{}?t={}", base, bust) } else { base }
                             }}
-                            style="width:80px;height:80px;border-radius:50%;border:2px solid #d4a84b;cursor:pointer;object-fit:cover;background:#1a1a2e"
-                            on:click=move |_| {
-                                // Trigger file input click
-                                if let Some(w) = web_sys::window() {
-                                    if let Some(d) = w.document() {
-                                        if let Some(el) = d.get_element_by_id("avatar-file-input") {
-                                            let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
-                                        }
-                                    }
-                                }
-                            }
+                            style="width:56px;height:56px;border-radius:50%;border:2px solid #d4a84b;object-fit:cover;display:block;background:#1a1a2e"
                         />
-                        <div style="position:absolute;bottom:0;right:0;background:#d4a84b;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px"
-                            on:click=move |_| {
-                                if let Some(w) = web_sys::window() {
-                                    if let Some(d) = w.document() {
-                                        if let Some(el) = d.get_element_by_id("avatar-file-input") {
-                                            let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
-                                        }
-                                    }
-                                }
-                            }>
+                        <div style="position:absolute;bottom:0;right:0;background:#d4a84b;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:11px;line-height:1">
                             "\u{1F4F7}"
                         </div>
                     </div>
-                    // Hidden file input for avatar upload
-                    <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp"
-                        style="display:none"
-                        on:change=move |ev| {
-                            let target = event_target::<web_sys::HtmlInputElement>(&ev);
-                            let files = target.files();
-                            if let Some(file_list) = files {
-                                if let Some(file) = file_list.get(0) {
-                                    let wallet = info.get_untracked().map(|a| a.account_id.clone()).unwrap_or_default();
-                                    if wallet.is_empty() { return; }
-                                    avatar_uploading.set(true);
-                                    avatar_msg.set(String::new());
-                                    // Read file as data URL → extract base64 → save to temp path
-                                    // For Tauri, we use the file name path directly
-                                    let file_name = file.name();
-                                    spawn_local(async move {
-                                        // On web/WASM we can't get the real file path from input
-                                        // Use JS to read as ArrayBuffer and upload via fetch
-                                        let reader = web_sys::FileReader::new().unwrap();
-                                        let reader_clone = reader.clone();
-                                        let (tx, rx) = futures::channel::oneshot::channel::<Vec<u8>>();
-                                        let tx = std::cell::RefCell::new(Some(tx));
-                                        let onload = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
-                                            if let Ok(result) = reader_clone.result() {
-                                                let arr = js_sys::Uint8Array::new(&result);
-                                                let bytes = arr.to_vec();
-                                                if let Some(sender) = tx.borrow_mut().take() {
-                                                    let _ = sender.send(bytes);
-                                                }
-                                            }
-                                        }) as Box<dyn FnMut()>);
-                                        reader.set_onloadend(Some(onload.as_ref().unchecked_ref()));
-                                        let _ = reader.read_as_array_buffer(&file);
-                                        onload.forget();
-
-                                        if let Ok(bytes) = rx.await {
-                                            // Build FormData and upload via JS fetch
-                                            let form = web_sys::FormData::new().unwrap();
-                                            let blob_parts = js_sys::Array::new();
-                                            let uint8 = js_sys::Uint8Array::from(bytes.as_slice());
-                                            blob_parts.push(&uint8.buffer());
-                                            let blob = web_sys::Blob::new_with_u8_array_sequence(&blob_parts).unwrap();
-                                            let _ = form.append_with_blob_and_filename("image", &blob, &file_name);
-                                            let _ = form.append_with_str("wallet_address", &wallet);
-                                            let dn = display_name.get_untracked();
-                                            if !dn.is_empty() {
-                                                let _ = form.append_with_str("display_name", &dn);
-                                            }
-                                            let opts = web_sys::RequestInit::new();
-                                            opts.set_method("POST");
-                                            opts.set_body(&form);
-                                            let request = web_sys::Request::new_with_str_and_init(
-                                                "https://api.chronx.io/avatar/upload", &opts
-                                            ).unwrap();
-                                            if let Some(w) = web_sys::window() {
-                                                match JsFuture::from(w.fetch_with_request(&request)).await {
-                                                    Ok(resp) => {
-                                                        let resp: web_sys::Response = resp.unchecked_into();
-                                                        if resp.ok() {
-                                                            avatar_bust.set(js_sys::Date::now() as u32);
-                                                            avatar_msg.set("\u{2713} Profile photo saved".to_string());
-                                                        } else {
-                                                            avatar_msg.set("Upload failed".to_string());
-                                                        }
-                                                    }
-                                                    Err(_) => avatar_msg.set("Upload failed".to_string()),
-                                                }
-                                            }
-                                        }
-                                        avatar_uploading.set(false);
-                                        delay_ms(3000).await;
-                                        avatar_msg.set(String::new());
-                                    });
-                                }
-                            }
-                            // Reset input so re-selecting same file triggers change
-                            target.set_value("");
-                        }
-                    />
-                    // Uploading indicator
-                    {move || if avatar_uploading.get() {
-                        view! { <p style="font-size:11px;color:#d4a84b;margin-top:4px">"Uploading..."</p> }.into_any()
-                    } else {
-                        let msg = avatar_msg.get();
-                        if msg.is_empty() {
-                            view! { <span></span> }.into_any()
-                        } else {
-                            let color = if msg.contains('\u{2713}') { "#22c55e" } else { "#ef4444" };
-                            view! { <p style={format!("font-size:11px;color:{color};margin-top:4px")}>{msg}</p> }.into_any()
-                        }
-                    }}
-                    // Display name
-                    {move || {
-                        if display_name_editing.get() {
-                            view! {
-                                <div style="margin-top:6px;display:flex;align-items:center;justify-content:center;gap:4px">
-                                    <input type="text" maxlength="32" placeholder="Your name"
-                                        style="width:140px;padding:4px 8px;font-size:12px;background:#1a1a2e;border:1px solid #d4a84b;color:#fff;border-radius:4px"
-                                        prop:value=move || display_name_input.get()
-                                        on:input=move |ev| display_name_input.set(event_target_value(&ev))
-                                    />
-                                    <button style="padding:4px 8px;font-size:11px;background:#d4a84b;color:#0a0a0a;border:none;border-radius:4px;cursor:pointer;font-weight:700"
-                                        on:click=move |_| {
-                                            let name = display_name_input.get_untracked();
-                                            let wallet = info.get_untracked().map(|a| a.account_id.clone()).unwrap_or_default();
-                                            display_name.set(name.clone());
-                                            display_name_editing.set(false);
-                                            spawn_local(async move {
-                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                                                    "walletAddress": wallet,
-                                                    "displayName": name,
-                                                })).unwrap_or(no_args());
-                                            let _ = call::<bool>("update_display_name", args).await;
-                                            });
-                                        }>"Save"</button>
-                                    <button style="padding:4px 8px;font-size:11px;background:transparent;color:#6b7280;border:1px solid #6b7280;border-radius:4px;cursor:pointer"
-                                        on:click=move |_| display_name_editing.set(false)>"Cancel"</button>
-                                </div>
-                            }.into_any()
-                        } else {
+                    // Name + Balance (middle)
+                    <div style="flex:1;min-width:0">
+                        {move || {
                             let dn = display_name.get();
-                            if dn.is_empty() {
-                                view! {
-                                    <p style="font-size:12px;color:#6b7280;margin-top:4px;cursor:pointer"
-                                        on:click=move |_| {
-                                            display_name_input.set(String::new());
-                                            display_name_editing.set(true);
-                                        }>"+ Add your name"</p>
-                                }.into_any()
+                            if !dn.is_empty() {
+                                view! { <p style="font-size:13px;color:#d4a84b;font-weight:700;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{dn}</p> }.into_any()
                             } else {
-                                view! {
-                                    <p style="font-size:13px;color:#d4a84b;font-weight:700;margin-top:4px;cursor:pointer"
-                                        on:click=move |_| {
-                                            display_name_input.set(display_name.get_untracked());
-                                            display_name_editing.set(true);
-                                        }>{dn}</p>
-                                }.into_any()
+                                view! { <span></span> }.into_any()
                             }
-                        }
-                    }}
-                </div>
-                // ── Balance + Refresh ────────────────────────────────────────
-                <div class="row">
-                    <div>
-                        <p class="label">"Balance"</p>
-                        <p class="balance">
+                        }}
+                        <p class="label" style="margin:0 0 2px">"Balance"</p>
+                        <p class="balance" style="margin:0">
                             {move || {
                                 if loading.get() { "\u{2026}".into() }
                                 else {
@@ -2563,6 +2420,99 @@ fn AccountPanel(
                                 }
                             }}
                         </p>
+                    </div>
+                    // Refresh button (right)
+                    <button on:click=on_refresh disabled=move || loading.get()
+                        style="background:none;border:1px solid #333;color:#888;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:14px;flex-shrink:0">
+                        {move || if loading.get() { "\u{2026}" } else { "\u{21bb}" }}
+                    </button>
+                </div>
+                // Hidden file input for avatar upload
+                <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp"
+                    style="display:none"
+                    on:change=move |ev| {
+                        let target = event_target::<web_sys::HtmlInputElement>(&ev);
+                        let files = target.files();
+                        if let Some(file_list) = files {
+                            if let Some(file) = file_list.get(0) {
+                                let wallet = info.get_untracked().map(|a| a.account_id.clone()).unwrap_or_default();
+                                if wallet.is_empty() { return; }
+                                avatar_uploading.set(true);
+                                avatar_msg.set(String::new());
+                                let file_name = file.name();
+                                spawn_local(async move {
+                                    let reader = web_sys::FileReader::new().unwrap();
+                                    let reader_clone = reader.clone();
+                                    let (tx, rx) = futures::channel::oneshot::channel::<Vec<u8>>();
+                                    let tx = std::cell::RefCell::new(Some(tx));
+                                    let onload = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+                                        if let Ok(result) = reader_clone.result() {
+                                            let arr = js_sys::Uint8Array::new(&result);
+                                            let bytes = arr.to_vec();
+                                            if let Some(sender) = tx.borrow_mut().take() {
+                                                let _ = sender.send(bytes);
+                                            }
+                                        }
+                                    }) as Box<dyn FnMut()>);
+                                    reader.set_onloadend(Some(onload.as_ref().unchecked_ref()));
+                                    let _ = reader.read_as_array_buffer(&file);
+                                    onload.forget();
+                                    if let Ok(bytes) = rx.await {
+                                        let form = web_sys::FormData::new().unwrap();
+                                        let blob_parts = js_sys::Array::new();
+                                        let uint8 = js_sys::Uint8Array::from(bytes.as_slice());
+                                        blob_parts.push(&uint8.buffer());
+                                        let blob = web_sys::Blob::new_with_u8_array_sequence(&blob_parts).unwrap();
+                                        let _ = form.append_with_blob_and_filename("image", &blob, &file_name);
+                                        let _ = form.append_with_str("wallet_address", &wallet);
+                                        let dn = display_name.get_untracked();
+                                        if !dn.is_empty() {
+                                            let _ = form.append_with_str("display_name", &dn);
+                                        }
+                                        let opts = web_sys::RequestInit::new();
+                                        opts.set_method("POST");
+                                        opts.set_body(&form);
+                                        let request = web_sys::Request::new_with_str_and_init(
+                                            "https://api.chronx.io/avatar/upload", &opts
+                                        ).unwrap();
+                                        if let Some(w) = web_sys::window() {
+                                            match JsFuture::from(w.fetch_with_request(&request)).await {
+                                                Ok(resp) => {
+                                                    let resp: web_sys::Response = resp.unchecked_into();
+                                                    if resp.ok() {
+                                                        avatar_bust.set(js_sys::Date::now() as u32);
+                                                        avatar_msg.set("\u{2713} Photo saved".to_string());
+                                                    } else {
+                                                        avatar_msg.set("Upload failed".to_string());
+                                                    }
+                                                }
+                                                Err(_) => avatar_msg.set("Upload failed".to_string()),
+                                            }
+                                        }
+                                    }
+                                    avatar_uploading.set(false);
+                                    delay_ms(3000).await;
+                                    avatar_msg.set(String::new());
+                                });
+                            }
+                        }
+                        target.set_value("");
+                    }
+                />
+                // Upload status message
+                {move || {
+                    if avatar_uploading.get() {
+                        view! { <p style="font-size:11px;color:#d4a84b;text-align:center;margin:4px 0">"Uploading..."</p> }.into_any()
+                    } else {
+                        let msg = avatar_msg.get();
+                        if msg.is_empty() {
+                            view! { <span></span> }.into_any()
+                        } else {
+                            let color = if msg.contains('\u{2713}') { "#22c55e" } else { "#ef4444" };
+                            view! { <p style={format!("font-size:11px;color:{color};text-align:center;margin:4px 0")}>{msg}</p> }.into_any()
+                        }
+                    }
+                }}
                         <p class="label" style="margin-top:4px">
                             "Spendable: "
                             {move || {
@@ -2946,12 +2896,6 @@ fn AccountPanel(
                                 </div>
                             }.into_any()
                         }}
-                    </div>
-                    <button on:click=on_refresh disabled=move || loading.get()>
-                        {move || if loading.get() { "\u{2026}" } else { "\u{21bb} Refresh" }}
-                    </button>
-                </div>
-
                 {move || {
                     let e = err_msg.get();
                     if e.is_empty() { view! { <span></span> }.into_any() }
