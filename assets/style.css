@@ -762,6 +762,12 @@ input[type="datetime-local"] { color-scheme: dark; }
     font-size: 11px;
     color: #4b5563;
     font-family: 'Consolas', 'Monaco', monospace;
+    max-width: 180px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    display: inline-block;
+    vertical-align: middle;
 }
 
 .history-date {
