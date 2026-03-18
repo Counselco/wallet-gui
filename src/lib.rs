@@ -4408,22 +4408,18 @@ fn SendPanel(
                 1 => {
                     view! {
                         <div class="field" style="position:relative">
-                            // Address Book button (mobile only)
-                            {if !is_desktop() {
-                                view! {
-                                    <button class="address-book-btn"
-                                        on:click=move |_| {
-                                            spawn_local(async move {
-                                                if let Ok(list) = call::<Vec<Contact>>("get_contacts", no_args()).await {
-                                                    address_book_contacts.set(list);
-                                                }
-                                                address_book_open.set(true);
-                                            });
-                                        }>
-                                        "\u{1f4cb} Address Book"
-                                    </button>
-                                }.into_any()
-                            } else { view! { <span></span> }.into_any() }}
+                            // Address Book button (all platforms)
+                            <button class="address-book-btn"
+                                on:click=move |_| {
+                                    spawn_local(async move {
+                                        if let Ok(list) = call::<Vec<Contact>>("get_contacts", no_args()).await {
+                                            address_book_contacts.set(list);
+                                        }
+                                        address_book_open.set(true);
+                                    });
+                                }>
+                                "\u{1f4cb} Address Book"
+                            </button>
                             <label>"Recipient Email Address"</label>
                             <div class="email-field-wrap">
                             <input type="email" placeholder="recipient@example.com"
@@ -4432,8 +4428,8 @@ fn SendPanel(
                                     let val = event_target_value(&ev);
                                     email.set(val.clone());
                                     email_save_msg.set(String::new());
-                                    // Check if valid email for save icon (mobile only)
-                                    if !is_desktop() && val.contains('@') && val.contains('.') && val.len() >= 5 {
+                                    // Check if valid email for save icon (all platforms)
+                                    if val.contains('@') && val.contains('.') && val.len() >= 5 {
                                         let check_email = val.clone();
                                         spawn_local(async move {
                                             let chk = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": check_email, "kxAddress": Option::<String>::None })).unwrap_or(no_args());
@@ -4464,6 +4460,21 @@ fn SendPanel(
                                         show_contact_dropdown.set(false);
                                     }
                                 }
+                                on:focus=move |_| {
+                                    // Show all contacts on focus if field is empty or short
+                                    let val = email.get_untracked();
+                                    if val.len() < 2 {
+                                        spawn_local(async move {
+                                            if let Ok(all) = call::<Vec<Contact>>("get_contacts", no_args()).await {
+                                                let with_email: Vec<Contact> = all.into_iter().filter(|c| c.email.is_some()).collect();
+                                                if !with_email.is_empty() {
+                                                    contact_suggestions.set(with_email);
+                                                    show_contact_dropdown.set(true);
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
                                 on:blur=move |_| {
                                     // Delay hide so click on dropdown item registers first
                                     spawn_local(async move {
@@ -4472,9 +4483,8 @@ fn SendPanel(
                                     });
                                 }
                                 disabled=move || sending.get() />
-                            // Inline save icon (mobile only)
+                            // Inline save icon (all platforms)
                             {move || {
-                                if is_desktop() { return view! { <span></span> }.into_any(); }
                                 match email_save_state.get() {
                                     1 => view! {
                                         <button class="email-save-icon" title="Save to Address Book"
@@ -4945,12 +4955,16 @@ fn SendPanel(
                                     }
                                 />
                                 " I have read and accept the "
-                                <a href="https://chronx.io/governance.html#axioms" target="_blank"
+                                <a href="https://chronx.io/governance" target="_blank"
                                    class="axiom-link">"Promise Axioms"</a>
+                                " and the "
+                                <a href="https://chronx.io/terms" target="_blank"
+                                   class="axiom-link">"Terms of Service"</a>
+                                "."
                             </label>
                         </div>
                         {move || if !axiom_consented.get() {
-                            view! { <p class="axiom-required">"Required: accept the Promise Axioms before sending."</p> }.into_any()
+                            view! { <p class="axiom-required">"Required: please accept the Promise Axioms and Terms of Service before sending."</p> }.into_any()
                         } else {
                             view! { <span class="msg success" style="font-size:13px;margin:4px 0">"\u{2705} Axiom consent recorded"</span> }.into_any()
                         }}
@@ -5368,6 +5382,9 @@ fn CascadeSendPanel(
     let msg = RwSignal::new(String::new());
     let spam_warn = RwSignal::new(false);
     let confirm_open = RwSignal::new(false);
+    // Contact autocomplete for cascade send
+    let cascade_contact_suggestions: RwSignal<Vec<Contact>> = RwSignal::new(Vec::new());
+    let cascade_show_dropdown = RwSignal::new(false);
 
     let add_stage = move |_: web_sys::MouseEvent| {
         stages.update(|v| { if v.len() < 10 { v.push(make_stage()); } });
@@ -5505,13 +5522,76 @@ fn CascadeSendPanel(
         <div class="card">
             <div class="cascade-layout">
                 <div class="cascade-form">
-                    // Email
-                    <div class="field">
+                    // Email with contact autocomplete
+                    <div class="field" style="position:relative">
                         <label>"Recipient Email"</label>
                         <input type="email" placeholder="recipient@example.com"
                             prop:value=move || email.get()
-                            on:input=move |ev| email.set(event_target_value(&ev))
+                            on:input=move |ev| {
+                                let val = event_target_value(&ev);
+                                email.set(val.clone());
+                                if val.len() >= 2 {
+                                    let q = val.clone();
+                                    spawn_local(async move {
+                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "query": q })).unwrap_or(no_args());
+                                        if let Ok(results) = call::<Vec<Contact>>("search_contacts", args).await {
+                                            if !results.is_empty() {
+                                                cascade_contact_suggestions.set(results);
+                                                cascade_show_dropdown.set(true);
+                                            } else {
+                                                cascade_show_dropdown.set(false);
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    cascade_show_dropdown.set(false);
+                                }
+                            }
+                            on:focus=move |_| {
+                                let val = email.get_untracked();
+                                if val.len() < 2 {
+                                    spawn_local(async move {
+                                        if let Ok(all) = call::<Vec<Contact>>("get_contacts", no_args()).await {
+                                            let with_email: Vec<Contact> = all.into_iter().filter(|c| c.email.is_some()).collect();
+                                            if !with_email.is_empty() {
+                                                cascade_contact_suggestions.set(with_email);
+                                                cascade_show_dropdown.set(true);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            on:blur=move |_| {
+                                spawn_local(async move {
+                                    delay_ms(200).await;
+                                    cascade_show_dropdown.set(false);
+                                });
+                            }
                             disabled=move || sending.get() />
+                        {move || {
+                            if !cascade_show_dropdown.get() { return view! { <span></span> }.into_any(); }
+                            let suggestions = cascade_contact_suggestions.get();
+                            view! {
+                                <div class="contact-dropdown">
+                                    {suggestions.into_iter().map(|c| {
+                                        let display_email = c.email.clone().unwrap_or_default();
+                                        let display_name = c.name.clone();
+                                        let fill_email = display_email.clone();
+                                        view! {
+                                            <div class="contact-dropdown-item"
+                                                on:mousedown=move |ev| {
+                                                    ev.prevent_default();
+                                                    email.set(fill_email.clone());
+                                                    cascade_show_dropdown.set(false);
+                                                }>
+                                                <span class="contact-dropdown-name">{display_name}</span>
+                                                <span class="contact-dropdown-email">{display_email}</span>
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            }.into_any()
+                        }}
                     </div>
                     // Memo
                     <div class="field">

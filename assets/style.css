@@ -26,6 +26,7 @@ body {
     margin: 0 auto;
     padding: 16px;
     padding-top: max(24px, env(safe-area-inset-top, 24px));
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 16px));
     height: 100%;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -2185,3 +2186,120 @@ input[type="range"].pct-slider {
 }
 
 /* ═══════════════════════════════════════════════════════════ */
+
+/* ── Genesis 8 — Sign of Life Banner ───────────────────────────────────── */
+.sol-banner {
+    background: linear-gradient(135deg, #b8860b22, #daa52022);
+    border: 1px solid #daa520;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.sol-banner:hover { background: linear-gradient(135deg, #b8860b33, #daa52033); }
+.sol-banner-icon { font-size: 1.2em; }
+.sol-banner-text { color: #daa520; font-weight: 500; }
+
+/* ── Genesis 8 — History badges ───────────────────────────────────────── */
+.badge-invoice { background: #00bcd4; color: #000; }
+.badge-paid { background: #4caf50; color: #000; }
+.badge-lapsed { background: #666; color: #ccc; }
+.badge-credit { background: #2196f3; color: #fff; }
+.badge-deposit { background: #9c27b0; color: #fff; }
+.badge-defaulted { background: #f44336; color: #fff; font-weight: 700; }
+.badge-conditional { background: #ff9800; color: #000; }
+.badge-released { background: #4caf50; color: #000; }
+.badge-ledger { background: #daa520; color: #000; }
+.badge-confirmed { background: #4caf50; color: #000; }
+.badge-due-soon { background: #daa520; color: #000; }
+.badge-overdue { background: #ff9800; color: #000; }
+.badge-grace-period { background: #f44336; color: #fff; }
+
+/* ── Genesis 8 — Long-term promise options ────────────────────────────── */
+.long-term-options {
+    border: 1px solid #daa520;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 12px;
+    background: #1a1a2e;
+}
+.long-term-options h4 { color: #daa520; margin: 0 0 12px 0; }
+
+.email-warning {
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-top: 8px;
+    font-size: 0.9em;
+}
+.email-warning.amber-light { background: #b8860b15; border: 1px solid #b8860b44; color: #daa520; }
+.email-warning.amber { background: #ff980020; border: 1px solid #ff9800; color: #ff9800; }
+.email-warning.red { background: #f4433620; border: 1px solid #f44336; color: #f44336; }
+
+/* ── Genesis 8 — Advanced sections (desktop) ─────────────────────────── */
+.advanced-section {
+    border: 1px solid #333;
+    border-radius: 8px;
+    margin-top: 16px;
+    overflow: hidden;
+}
+.advanced-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: #1a1a2e;
+    cursor: pointer;
+    user-select: none;
+}
+.advanced-header:hover { background: #222240; }
+.advanced-tag {
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #333;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.advanced-body { padding: 16px; }
+
+/* ── Genesis 8 — Invoice section ──────────────────────────────────────── */
+.invoice-list { margin-top: 12px; }
+.invoice-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #222;
+}
+.invoice-item:last-child { border-bottom: none; }
+
+/* ── Genesis 8 — Deposit calculator ───────────────────────────────────── */
+.deposit-calc {
+    background: #1a1a2e;
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 8px;
+    text-align: center;
+    font-size: 1.1em;
+    color: #daa520;
+}
+
+/* ── Genesis 8 — Credit / Conditional lists ───────────────────────────── */
+.credit-list, .conditional-list, .deposit-list {
+    margin-top: 12px;
+}
+.credit-item, .conditional-item, .deposit-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #222;
+}
+.credit-item:last-child, .conditional-item:last-child, .deposit-item:last-child {
+    border-bottom: none;
+}
