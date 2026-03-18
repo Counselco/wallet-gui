@@ -684,7 +684,18 @@ pub async fn create_timelock(
         risk_level,
         investment_exclusions: None,
         grantor_intent: grantor_intent.clone(),
-        // sign_of_life fields removed (not in current node)
+        sign_of_life_interval_days: None,
+        sign_of_life_grace_days: None,
+        guardian_pubkey: None,
+        guardian_until: None,
+        alt_guardian_pubkey: None,
+        beneficiary_description: None,
+        beneficiary_description_hash: None,
+        convert_to: None,
+        authorized_claimants: None,
+        succession_group: None,
+        backup_executors: None,
+        executor_threshold: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -834,7 +845,18 @@ pub async fn create_email_timelock(
         risk_level,
         investment_exclusions: None,
         grantor_intent: grantor_intent.clone(),
-        // sign_of_life fields removed (not in current node)
+        sign_of_life_interval_days: None,
+        sign_of_life_grace_days: None,
+        guardian_pubkey: None,
+        guardian_until: None,
+        alt_guardian_pubkey: None,
+        beneficiary_description: None,
+        beneficiary_description_hash: None,
+        convert_to: None,
+        authorized_claimants: None,
+        succession_group: None,
+        backup_executors: None,
+        executor_threshold: None,
     }];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -2509,7 +2531,18 @@ pub async fn create_email_timelock_series(
                 risk_level: None,
                 investment_exclusions: None,
                 grantor_intent: None,
-                // sign_of_life fields removed (not in current node)
+                sign_of_life_interval_days: None,
+        sign_of_life_grace_days: None,
+        guardian_pubkey: None,
+        guardian_until: None,
+        alt_guardian_pubkey: None,
+        beneficiary_description: None,
+        beneficiary_description_hash: None,
+        convert_to: None,
+        authorized_claimants: None,
+        succession_group: None,
+        backup_executors: None,
+        executor_threshold: None,
             }
         })
         .collect();
@@ -3172,7 +3205,18 @@ pub async fn create_freeform_timelock(
         risk_level,
         investment_exclusions: None,
         grantor_intent: grantor_intent.clone(),
-        // sign_of_life fields removed (not in current node)
+        sign_of_life_interval_days: None,
+        sign_of_life_grace_days: None,
+        guardian_pubkey: None,
+        guardian_until: None,
+        alt_guardian_pubkey: None,
+        beneficiary_description: None,
+        beneficiary_description_hash: None,
+        convert_to: None,
+        authorized_claimants: None,
+        succession_group: None,
+        backup_executors: None,
+        executor_threshold: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
