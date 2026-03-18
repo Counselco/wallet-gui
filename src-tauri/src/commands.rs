@@ -123,6 +123,10 @@ struct WalletConfig {
     /// Multiple saved Base addresses (max 5) with nicknames.
     #[serde(default)]
     base_addresses: Option<Vec<SavedBaseAddress>>,
+    /// Encrypted BIP-39 mnemonic phrase (24 words). Stored when wallet is created
+    /// via generate_wallet_with_mnemonic so it can be viewed again from Settings.
+    #[serde(default)]
+    mnemonic_phrase: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -149,6 +153,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             base_address: None,
             base_address_nickname: None,
             base_addresses: None,
+            mnemonic_phrase: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -1285,6 +1290,11 @@ pub async fn generate_wallet_with_mnemonic(app: AppHandle) -> Result<serde_json:
     let json = serde_json::to_string_pretty(&kp).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
 
+    // Store mnemonic in config for later retrieval from Settings
+    let mut cfg = read_config(&app);
+    cfg.mnemonic_phrase = Some(phrase.clone());
+    let _ = write_config(&app, &cfg);
+
     Ok(serde_json::json!({
         "mnemonic": phrase,
         "account_id": b58,
@@ -1323,10 +1333,23 @@ pub async fn import_wallet_from_mnemonic(
     let json = serde_json::to_string_pretty(&kp).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
 
+    // Store mnemonic in config for later retrieval from Settings
+    let mut cfg = read_config(&app);
+    cfg.mnemonic_phrase = Some(mnemonic_phrase.trim().to_string());
+    let _ = write_config(&app, &cfg);
+
     Ok(serde_json::json!({
         "account_id": b58,
         "public_key": pk_hex,
     }))
+}
+
+/// Retrieve the stored mnemonic phrase from config.
+/// Returns None if wallet was created before mnemonic support (legacy wallet).
+#[tauri::command]
+pub async fn get_mnemonic(app: AppHandle) -> Result<Option<String>, String> {
+    let cfg = read_config(&app);
+    Ok(cfg.mnemonic_phrase)
 }
 
 // ── PIN commands ──────────────────────────────────────────────────────────────

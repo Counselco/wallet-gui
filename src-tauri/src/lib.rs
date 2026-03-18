@@ -57,6 +57,7 @@ pub fn run() {
             commands::generate_wallet,
             commands::generate_wallet_with_mnemonic,
             commands::import_wallet_from_mnemonic,
+            commands::get_mnemonic,
             commands::get_pending_incoming,
             commands::get_all_promises,
             commands::check_pin_set,

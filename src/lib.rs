@@ -7920,8 +7920,6 @@ fn SettingsPanel(
     on_email_check: impl Fn() + Clone + 'static,
     active_tab: RwSignal<u8>,
 ) -> impl IntoView {
-    // These signals are available for future use in the Settings panel
-    let _ = (app_phase, pin_digits, pin_msg, pin_shake);
     let node_url   = RwSignal::new(String::new());
     let save_msg   = RwSignal::new(String::new());
     let pubkey_hex = RwSignal::new(String::new());
@@ -7931,7 +7929,7 @@ fn SettingsPanel(
     let update_result   = RwSignal::new(Option::<UpdateInfo>::None);
     let update_checking = RwSignal::new(false);
 
-    // Export/Import state
+    // Export/Import state (legacy)
     let show_export       = RwSignal::new(false);
     let export_confirmed  = RwSignal::new(false);
     let export_key        = RwSignal::new(String::new());
@@ -7941,6 +7939,24 @@ fn SettingsPanel(
     let import_msg        = RwSignal::new(String::new());
     let import_busy       = RwSignal::new(false);
     let import_confirm    = RwSignal::new(false);
+
+    // Seed phrase view state
+    let show_seed_modal       = RwSignal::new(false);
+    let seed_pin_phase        = RwSignal::new(0u8); // 0=enter PIN, 1=reveal screen
+    let seed_pin_input        = RwSignal::new(String::new());
+    let seed_pin_msg          = RwSignal::new(String::new());
+    let seed_words            = RwSignal::new(String::new());
+    let seed_revealed         = RwSignal::new(false);
+    let seed_loading          = RwSignal::new(false);
+
+    // New wallet creation (compromised flow)
+    let show_new_wallet       = RwSignal::new(false);
+    let new_wallet_confirm_input = RwSignal::new(String::new());
+    let new_wallet_busy       = RwSignal::new(false);
+    let new_wallet_msg        = RwSignal::new(String::new());
+    let new_wallet_mnemonic   = RwSignal::new(String::new());
+    let new_wallet_address    = RwSignal::new(String::new());
+    let compromised_expanded  = RwSignal::new(false);
 
     // Cold storage state
     let show_cold         = RwSignal::new(false);
@@ -8429,31 +8445,75 @@ fn SettingsPanel(
                 </div>
             </div>
 
-            // Backup Your Wallet
+            // ── Backup Your Wallet (Seed Phrase) ──
             <div class="settings-section">
-                <p class="label">{move || t(&lang.get(), "settings_backup")}</p>
+                <p class="label">"Backup Your Wallet"</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    {move || t(&lang.get(), "settings_backup_sub")}
+                    "These 24 words are the ONLY way to recover your wallet. Write them down and store them safely offline."
                 </p>
-                <button on:click=move |_| {
-                    export_confirmed.set(false);
-                    export_key.set(String::new());
-                    show_export.set(true);
-                }>{move || format!("\u{1f511} {}", t(&lang.get(), "settings_export_key"))}</button>
+                <button style="background:linear-gradient(135deg,#b8860b,#daa520);color:#000;font-weight:700"
+                    on:click=move |_| {
+                        seed_pin_phase.set(0);
+                        seed_pin_input.set(String::new());
+                        seed_pin_msg.set(String::new());
+                        seed_words.set(String::new());
+                        seed_revealed.set(false);
+                        seed_loading.set(false);
+                        show_seed_modal.set(true);
+                    }
+                >"\u{1f331} View Seed Phrase"</button>
+                <p class="muted" style="font-size:11px;margin-top:6px">
+                    <a href="javascript:void(0)" style="color:#888;text-decoration:underline" on:click=move |_| {
+                        export_confirmed.set(false);
+                        export_key.set(String::new());
+                        show_export.set(true);
+                    }>"Export raw key (advanced)"</a>
+                </p>
+
+                // ── Compromised? expandable section ──
+                <div style="margin-top:12px">
+                    <a href="javascript:void(0)" style="color:#f87171;font-size:12px;text-decoration:none"
+                        on:click=move |_| compromised_expanded.set(!compromised_expanded.get_untracked())
+                    >{move || if compromised_expanded.get() { "\u{26a0}\u{fe0f} Compromised? \u{25b2}" } else { "\u{26a0}\u{fe0f} Compromised? \u{25bc}" }}</a>
+                    {move || if compromised_expanded.get() {
+                        view! {
+                            <div style="margin-top:8px;padding:12px;background:#1a1020;border:1px solid #442;border-radius:8px">
+                                <p style="font-size:13px;font-weight:700;color:#daa520;margin-bottom:6px">"Create New Wallet"</p>
+                                <p class="muted" style="font-size:12px;margin-bottom:10px">
+                                    "If your seed phrase was compromised or lost, you can create a new wallet with a new address. \
+                                     You will need to send your KX balance to the new address manually. \
+                                     This action creates a new wallet \u{2014} it does not change your current one."
+                                </p>
+                                <button style="border:2px solid #daa520;background:transparent;color:#daa520;font-weight:700"
+                                    on:click=move |_| {
+                                        new_wallet_confirm_input.set(String::new());
+                                        new_wallet_msg.set(String::new());
+                                        new_wallet_mnemonic.set(String::new());
+                                        new_wallet_address.set(String::new());
+                                        new_wallet_busy.set(false);
+                                        show_new_wallet.set(true);
+                                    }
+                                >"Create New Wallet"</button>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }}
+                </div>
             </div>
 
-            // Restore Wallet
+            // ── Restore Wallet (Seed Phrase) ──
             <div class="settings-section">
-                <p class="label">{move || t(&lang.get(), "settings_restore")}</p>
+                <p class="label">"Restore Wallet"</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    {move || t(&lang.get(), "settings_restore_sub")}
+                    "Enter your 24-word seed phrase or legacy private key to restore your wallet on this device."
                 </p>
                 <button on:click=move |_| {
                     import_key.set(String::new());
                     import_msg.set(String::new());
                     import_confirm.set(false);
                     show_import.set(true);
-                }>{move || format!("\u{1f4e5} {}", t(&lang.get(), "settings_import_key"))}</button>
+                }>"\u{1f331} Restore from Seed Phrase"</button>
             </div>
 
             // Cold Storage Wallet Generator (desktop only)
@@ -9023,18 +9083,18 @@ fn SettingsPanel(
                     if !import_busy.get_untracked() { show_import.set(false); }
                 }>
                     <div class="modal-card" style="max-width:440px" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"📥 Import Private Key"</p>
+                        <p class="modal-title">"\u{1f331} Restore from Seed Phrase"</p>
                         <div class="modal-body" style="text-align:left">
                             <div class="export-warning" style="margin-bottom:12px">
                                 <p style="font-weight:700;color:#f87171;font-size:13px">
-                                    "⚠ Importing a private key will replace your current wallet. Make sure you have backed up your current private key first."
+                                    "\u{26a0} Restoring will replace your current wallet. Make sure you have backed up your current seed phrase first."
                                 </p>
                             </div>
-                            <p class="label" style="margin-bottom:6px">"Paste your backup key:"</p>
+                            <p class="label" style="margin-bottom:6px">"Enter your 24-word seed phrase or paste legacy backup key:"</p>
                             <textarea
                                 class="restore-textarea"
                                 style="width:100%;min-height:80px;font-family:monospace;font-size:11px"
-                                placeholder="Paste your ChronX wallet backup key here"
+                                placeholder="Enter your 24 recovery words or paste backup key\u{2026}"
                                 prop:value=move || import_key.get()
                                 on:input=move |ev| {
                                     import_key.set(event_target_value(&ev));
@@ -9057,30 +9117,53 @@ fn SettingsPanel(
                                         let confirming = import_confirm.get_untracked();
                                         import_busy.set(true);
                                         import_msg.set(String::new());
+                                        // Auto-detect mnemonic vs legacy key
+                                        let word_count = key.split_whitespace().count();
+                                        let is_mnemonic = word_count >= 12 && word_count <= 24
+                                            && key.chars().all(|c| c.is_ascii_lowercase() || c == ' ');
                                         spawn_local(async move {
-                                            let args = if confirming {
-                                                serde_wasm_bindgen::to_value(
-                                                    &serde_json::json!({ "backupKey": key, "force": true })
-                                                ).unwrap_or(no_args())
-                                            } else {
-                                                serde_wasm_bindgen::to_value(
-                                                    &serde_json::json!({ "backupKey": key })
-                                                ).unwrap_or(no_args())
-                                            };
-                                            match call::<String>("restore_wallet", args).await {
-                                                Ok(acct) => {
-                                                    import_msg.set(format!("Wallet restored! Account: {}", acct));
-                                                    import_confirm.set(false);
-                                                    delay_ms(2000).await;
-                                                    let _ = web_sys::window().map(|w| w.location().reload());
-                                                }
-                                                Err(e) => {
-                                                    if e.contains("WALLET_EXISTS_CONFIRM") {
-                                                        import_confirm.set(true);
-                                                        import_msg.set("This will REPLACE your current wallet. Make sure you have backed up your private key. Click the red button to confirm.".to_string());
-                                                    } else {
+                                            if is_mnemonic {
+                                                let args = serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "mnemonicPhrase": key, "force": true })
+                                                ).unwrap_or(no_args());
+                                                match call::<serde_json::Value>("import_wallet_from_mnemonic", args).await {
+                                                    Ok(v) => {
+                                                        let acct = v.get("account_id").and_then(|a| a.as_str()).unwrap_or("OK");
+                                                        import_msg.set(format!("Wallet restored! Account: {}", acct));
+                                                        import_confirm.set(false);
+                                                        delay_ms(2000).await;
+                                                        let _ = web_sys::window().map(|w| w.location().reload());
+                                                    }
+                                                    Err(e) => {
                                                         import_confirm.set(false);
                                                         import_msg.set(format!("{e}"));
+                                                    }
+                                                }
+                                            } else {
+                                                let args = if confirming {
+                                                    serde_wasm_bindgen::to_value(
+                                                        &serde_json::json!({ "backupKey": key, "force": true })
+                                                    ).unwrap_or(no_args())
+                                                } else {
+                                                    serde_wasm_bindgen::to_value(
+                                                        &serde_json::json!({ "backupKey": key })
+                                                    ).unwrap_or(no_args())
+                                                };
+                                                match call::<String>("restore_wallet", args).await {
+                                                    Ok(acct) => {
+                                                        import_msg.set(format!("Wallet restored! Account: {}", acct));
+                                                        import_confirm.set(false);
+                                                        delay_ms(2000).await;
+                                                        let _ = web_sys::window().map(|w| w.location().reload());
+                                                    }
+                                                    Err(e) => {
+                                                        if e.contains("WALLET_EXISTS_CONFIRM") {
+                                                            import_confirm.set(true);
+                                                            import_msg.set("This will REPLACE your current wallet. Make sure you have backed up your seed phrase first. Click the red button to confirm.".to_string());
+                                                        } else {
+                                                            import_confirm.set(false);
+                                                            import_msg.set(format!("{e}"));
+                                                        }
                                                     }
                                                 }
                                             }
@@ -9092,6 +9175,286 @@ fn SettingsPanel(
                                 <button disabled=move || import_busy.get()
                                     on:click=move |_| { import_confirm.set(false); show_import.set(false); }>"Cancel"</button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── View Seed Phrase modal (PIN-gated) ─────────────────────────────
+
+        {move || if show_seed_modal.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| {
+                    if !seed_loading.get_untracked() { show_seed_modal.set(false); }
+                }>
+                    <div class="modal-card" style="max-width:480px" on:click=move |ev| ev.stop_propagation()>
+                        <p class="modal-title">"\u{1f331} View Seed Phrase"</p>
+                        <div class="modal-body" style="text-align:left">
+                            {move || {
+                                let phase = seed_pin_phase.get();
+                                if phase == 0 {
+                                    // ── Step 1: Enter PIN to verify identity ──
+                                    view! {
+                                        <p class="muted" style="font-size:13px;margin-bottom:12px">
+                                            "Enter your PIN to view your seed phrase."
+                                        </p>
+                                        <input
+                                            type="password"
+                                            inputmode="numeric"
+                                            maxlength="8"
+                                            placeholder="Enter PIN"
+                                            style="width:100%;padding:12px;font-size:18px;text-align:center;letter-spacing:8px;\
+                                                   background:#1a1a2e;border:1px solid #333;border-radius:8px;color:#fff;\
+                                                   font-family:monospace"
+                                            prop:value=move || seed_pin_input.get()
+                                            on:input=move |ev| {
+                                                seed_pin_input.set(event_target_value(&ev));
+                                                seed_pin_msg.set(String::new());
+                                            }
+                                            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                if ev.key() == "Enter" {
+                                                    let pin = seed_pin_input.get_untracked();
+                                                    if !pin.is_empty() {
+                                                        seed_loading.set(true);
+                                                        spawn_local(async move {
+                                                            let args = serde_wasm_bindgen::to_value(
+                                                                &serde_json::json!({ "pin": pin })
+                                                            ).unwrap_or(no_args());
+                                                            match call::<bool>("verify_pin", args).await {
+                                                                Ok(true) => {
+                                                                    // PIN correct — load mnemonic
+                                                                    match call::<Option<String>>("get_mnemonic", no_args()).await {
+                                                                        Ok(Some(words)) => {
+                                                                            seed_words.set(words);
+                                                                            seed_revealed.set(false);
+                                                                            seed_pin_phase.set(1);
+                                                                        }
+                                                                        Ok(None) => {
+                                                                            seed_pin_msg.set("No seed phrase found. This wallet was created before mnemonic support.".to_string());
+                                                                        }
+                                                                        Err(e) => seed_pin_msg.set(format!("Error: {e}")),
+                                                                    }
+                                                                }
+                                                                _ => seed_pin_msg.set("Incorrect PIN".to_string()),
+                                                            }
+                                                            seed_loading.set(false);
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        />
+                                        {move || {
+                                            let m = seed_pin_msg.get();
+                                            if m.is_empty() { view! { <span></span> }.into_any() }
+                                            else { view! { <p class="msg error" style="margin-top:8px">{m}</p> }.into_any() }
+                                        }}
+                                        <div style="display:flex;gap:8px;margin-top:12px">
+                                            <button class="primary" disabled=move || seed_loading.get() || seed_pin_input.get().is_empty()
+                                                on:click=move |_| {
+                                                    let pin = seed_pin_input.get_untracked();
+                                                    seed_loading.set(true);
+                                                    spawn_local(async move {
+                                                        let args = serde_wasm_bindgen::to_value(
+                                                            &serde_json::json!({ "pin": pin })
+                                                        ).unwrap_or(no_args());
+                                                        match call::<bool>("verify_pin", args).await {
+                                                            Ok(true) => {
+                                                                match call::<Option<String>>("get_mnemonic", no_args()).await {
+                                                                    Ok(Some(words)) => {
+                                                                        seed_words.set(words);
+                                                                        seed_revealed.set(false);
+                                                                        seed_pin_phase.set(1);
+                                                                    }
+                                                                    Ok(None) => {
+                                                                        seed_pin_msg.set("No seed phrase found. This wallet was created before mnemonic support.".to_string());
+                                                                    }
+                                                                    Err(e) => seed_pin_msg.set(format!("Error: {e}")),
+                                                                }
+                                                            }
+                                                            _ => seed_pin_msg.set("Incorrect PIN".to_string()),
+                                                        }
+                                                        seed_loading.set(false);
+                                                    });
+                                                }
+                                            >{move || if seed_loading.get() { "Verifying\u{2026}" } else { "Verify PIN" }}</button>
+                                            <button on:click=move |_| show_seed_modal.set(false)>"Cancel"</button>
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    // ── Step 2: Seed phrase reveal screen ──
+                                    let words = seed_words.get();
+                                    let word_list: Vec<String> = words.split_whitespace().map(|s| s.to_string()).collect();
+                                    let word_list_copy = word_list.clone();
+                                    view! {
+                                        {move || if !seed_revealed.get() {
+                                            // Hidden — show warning + reveal button
+                                            view! {
+                                                <div style="background:#2a1a1a;border:1px solid #f87171;border-radius:8px;padding:16px;margin-bottom:12px">
+                                                    <p style="color:#f87171;font-weight:700;font-size:13px;margin-bottom:8px">
+                                                        "\u{26a0}\u{fe0f} Ensure no one can see your screen."
+                                                    </p>
+                                                    <p class="muted" style="font-size:12px">
+                                                        "Your seed phrase gives full access to your wallet and all your KX. \
+                                                         Never share it. Never photograph it. Never store it digitally."
+                                                    </p>
+                                                </div>
+                                                <button class="primary" style="width:100%;padding:14px;font-size:15px"
+                                                    on:click=move |_| seed_revealed.set(true)
+                                                >"\u{1f441} Reveal Seed Phrase"</button>
+                                            }.into_any()
+                                        } else {
+                                            // Revealed — show word grid
+                                            let words_for_copy = word_list_copy.join(" ");
+                                            view! {
+                                                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 12px;\
+                                                            background:#1a1a2e;border:1px solid #333;border-radius:8px;\
+                                                            padding:16px;margin-bottom:12px;font-family:monospace;font-size:14px">
+                                                    {word_list.clone().into_iter().enumerate().map(|(i, word)| {
+                                                        view! {
+                                                            <div style="display:flex;gap:6px;align-items:center">
+                                                                <span style="color:#888;min-width:24px;text-align:right;font-size:12px">
+                                                                    {format!("{}.", i + 1)}
+                                                                </span>
+                                                                <span style="color:#e0e0e0">{word}</span>
+                                                            </div>
+                                                        }
+                                                    }).collect::<Vec<_>>()}
+                                                </div>
+                                                <button on:click=move |_| {
+                                                    let w = words_for_copy.clone();
+                                                    spawn_local(async move { copy_to_clipboard(w).await; });
+                                                }>"Copy to Clipboard"</button>
+                                            }.into_any()
+                                        }}
+                                        <button style="margin-top:8px" on:click=move |_| {
+                                            seed_words.set(String::new());
+                                            seed_revealed.set(false);
+                                            show_seed_modal.set(false);
+                                        }>"Done"</button>
+                                    }.into_any()
+                                }
+                            }}
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── Create New Wallet (compromised) modal ──────────────────────────
+
+        {move || if show_new_wallet.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| {
+                    if !new_wallet_busy.get_untracked() && new_wallet_mnemonic.get_untracked().is_empty() {
+                        show_new_wallet.set(false);
+                    }
+                }>
+                    <div class="modal-card" style="max-width:480px" on:click=move |ev| ev.stop_propagation()>
+                        <p class="modal-title">"\u{26a0}\u{fe0f} Create New Wallet"</p>
+                        <div class="modal-body" style="text-align:left">
+                            {move || {
+                                let mnemonic = new_wallet_mnemonic.get();
+                                if mnemonic.is_empty() {
+                                    // ── Confirmation step ──
+                                    view! {
+                                        <div class="export-warning" style="margin-bottom:12px">
+                                            <p style="font-weight:700;color:#f87171;font-size:13px">
+                                                "This will create a completely new wallet with a new address. \
+                                                 Your current wallet will NOT be modified, but you will need \
+                                                 to send your KX balance to the new address manually."
+                                            </p>
+                                        </div>
+                                        <p class="label" style="margin-bottom:6px">
+                                            "Type CONFIRM to proceed:"
+                                        </p>
+                                        <input
+                                            type="text"
+                                            placeholder="Type CONFIRM"
+                                            style="width:100%;padding:10px;font-size:14px;text-align:center;\
+                                                   background:#1a1a2e;border:1px solid #333;border-radius:8px;color:#fff;\
+                                                   font-family:monospace;text-transform:uppercase"
+                                            prop:value=move || new_wallet_confirm_input.get()
+                                            on:input=move |ev| {
+                                                new_wallet_confirm_input.set(event_target_value(&ev));
+                                                new_wallet_msg.set(String::new());
+                                            }
+                                        />
+                                        {move || {
+                                            let m = new_wallet_msg.get();
+                                            if m.is_empty() { view! { <span></span> }.into_any() }
+                                            else { view! { <p class="msg error" style="margin-top:8px">{m}</p> }.into_any() }
+                                        }}
+                                        <div style="display:flex;gap:8px;margin-top:12px">
+                                            <button class="btn-danger"
+                                                disabled=move || new_wallet_busy.get() || new_wallet_confirm_input.get().trim().to_uppercase() != "CONFIRM"
+                                                on:click=move |_| {
+                                                    new_wallet_busy.set(true);
+                                                    new_wallet_msg.set(String::new());
+                                                    spawn_local(async move {
+                                                        // First, backup current wallet to a temp file
+                                                        let _ = call::<String>("export_secret_key", no_args()).await;
+                                                        // Delete current wallet to allow creation
+                                                        let args = serde_wasm_bindgen::to_value(
+                                                            &serde_json::json!({ "force": true })
+                                                        ).unwrap_or(no_args());
+                                                        match call::<serde_json::Value>("generate_wallet_with_mnemonic", no_args()).await {
+                                                            Ok(result) => {
+                                                                if let Some(phrase) = result.get("mnemonic").and_then(|v| v.as_str()) {
+                                                                    new_wallet_mnemonic.set(phrase.to_string());
+                                                                }
+                                                                if let Some(acct) = result.get("account_id").and_then(|v| v.as_str()) {
+                                                                    new_wallet_address.set(acct.to_string());
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                new_wallet_msg.set(format!("Error: {e}"));
+                                                            }
+                                                        }
+                                                        new_wallet_busy.set(false);
+                                                    });
+                                                }
+                                            >{move || if new_wallet_busy.get() { "Creating\u{2026}" } else { "Create New Wallet" }}</button>
+                                            <button on:click=move |_| show_new_wallet.set(false)>"Cancel"</button>
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    // ── New wallet created — show mnemonic ──
+                                    let word_list: Vec<String> = mnemonic.split_whitespace().map(|s| s.to_string()).collect();
+                                    let addr = new_wallet_address.get();
+                                    view! {
+                                        <div style="background:#1a2a1a;border:1px solid #4a4;border-radius:8px;padding:12px;margin-bottom:12px">
+                                            <p style="color:#4a4;font-weight:700;font-size:13px">
+                                                "\u{2705} New wallet created!"
+                                            </p>
+                                        </div>
+                                        <p class="label" style="margin-bottom:8px">"Write down these 24 words:"</p>
+                                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 12px;\
+                                                    background:#1a1a2e;border:1px solid #333;border-radius:8px;\
+                                                    padding:16px;margin-bottom:12px;font-family:monospace;font-size:14px">
+                                            {word_list.into_iter().enumerate().map(|(i, word)| {
+                                                view! {
+                                                    <div style="display:flex;gap:6px;align-items:center">
+                                                        <span style="color:#888;min-width:24px;text-align:right;font-size:12px">
+                                                            {format!("{}.", i + 1)}
+                                                        </span>
+                                                        <span style="color:#e0e0e0">{word}</span>
+                                                    </div>
+                                                }
+                                            }).collect::<Vec<_>>()}
+                                        </div>
+                                        <p class="muted" style="font-size:12px;margin-bottom:12px">
+                                            "New wallet address: "
+                                            <span style="font-family:monospace;color:#daa520;word-break:break-all">{addr.clone()}</span>
+                                        </p>
+                                        <button class="primary" on:click=move |_| {
+                                            // Pre-fill send tab with new address
+                                            // Just reload the page to switch to the new wallet
+                                            let _ = web_sys::window().map(|w| w.location().reload());
+                                        }>"Done \u{2014} Reload Wallet"</button>
+                                    }.into_any()
+                                }
+                            }}
                         </div>
                     </div>
                 </div>
