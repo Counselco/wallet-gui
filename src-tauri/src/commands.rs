@@ -679,6 +679,14 @@ pub async fn create_timelock(
         risk_level,
         investment_exclusions: None,
         grantor_intent: grantor_intent.clone(),
+        sign_of_life_interval_days: None,
+        sign_of_life_grace_days: None,
+        guardian_pubkey: None,
+        guardian_until: None,
+        alt_guardian_pubkey: None,
+        beneficiary_description: None,
+        beneficiary_description_hash: None,
+                convert_to: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -828,6 +836,14 @@ pub async fn create_email_timelock(
         risk_level,
         investment_exclusions: None,
         grantor_intent: grantor_intent.clone(),
+        sign_of_life_interval_days: None,
+        sign_of_life_grace_days: None,
+        guardian_pubkey: None,
+        guardian_until: None,
+        alt_guardian_pubkey: None,
+        beneficiary_description: None,
+        beneficiary_description_hash: None,
+                convert_to: None,
     }];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -1211,6 +1227,106 @@ pub async fn generate_wallet(app: AppHandle) -> Result<String, String> {
     let json = serde_json::to_string_pretty(&kp).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
     Ok(b58)
+}
+
+// ── Mnemonic (seed phrase) commands ───────────────────────────────────────────
+
+// FFI for deterministic Dilithium2 keygen from seed (compiled from c/seeded_keygen.c)
+extern "C" {
+    fn chronx_dilithium2_seed_keypair(pk: *mut u8, sk: *mut u8, seed: *const u8) -> i32;
+}
+
+/// Deterministic keypair from a 32-byte seed via the C FFI.
+fn keypair_from_seed(seed: &[u8; 32]) -> Result<KeyPair, String> {
+    // Domain-separated seed expansion: BLAKE3("chronx-dilithium2-v1" || seed)
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"chronx-dilithium2-v1");
+    hasher.update(seed);
+    let dilithium_seed = hasher.finalize();
+
+    let mut pk = vec![0u8; 1312]; // PQCLEAN_DILITHIUM2_CLEAN_CRYPTO_PUBLICKEYBYTES
+    let mut sk = vec![0u8; 2560]; // PQCLEAN_DILITHIUM2_CLEAN_CRYPTO_SECRETKEYBYTES
+    let ret = unsafe {
+        chronx_dilithium2_seed_keypair(pk.as_mut_ptr(), sk.as_mut_ptr(), dilithium_seed.as_bytes().as_ptr())
+    };
+    if ret != 0 {
+        return Err("Dilithium2 seeded keygen failed".to_string());
+    }
+    Ok(KeyPair::from_raw(pk, sk))
+}
+
+/// Generate a new wallet backed by a 24-word BIP-39 mnemonic.
+/// Returns { mnemonic, account_id, public_key_hex }.
+#[tauri::command]
+pub async fn generate_wallet_with_mnemonic(app: AppHandle) -> Result<serde_json::Value, String> {
+    let path = keyfile_path(&app);
+    if path.exists() {
+        return Err("Wallet already exists. Import or use the existing wallet.".to_string());
+    }
+
+    // Generate 24-word mnemonic (256 bits of entropy)
+    let mnemonic = bip39::Mnemonic::generate(24)
+        .map_err(|e| format!("Mnemonic generation failed: {e}"))?;
+    let phrase = mnemonic.to_string();
+
+    // BIP-39 seed derivation (no passphrase)
+    let seed = mnemonic.to_seed("");
+    let mut seed32 = [0u8; 32];
+    seed32.copy_from_slice(&seed[..32]);
+
+    let kp = keypair_from_seed(&seed32)?;
+    let b58 = kp.account_id.to_b58();
+    let pk_hex = hex::encode(&kp.public_key.0);
+
+    // Save to disk
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Creating wallet dir: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(&kp).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
+
+    Ok(serde_json::json!({
+        "mnemonic": phrase,
+        "account_id": b58,
+        "public_key": pk_hex,
+    }))
+}
+
+/// Import (restore) a wallet from a 24-word mnemonic phrase.
+/// Derives the same Dilithium2 keypair deterministically.
+/// Returns { account_id, public_key_hex }.
+#[tauri::command]
+pub async fn import_wallet_from_mnemonic(
+    app: AppHandle,
+    mnemonic_phrase: String,
+    force: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let path = keyfile_path(&app);
+    if path.exists() && !force.unwrap_or(false) {
+        return Err("WALLET_EXISTS_CONFIRM".to_string());
+    }
+
+    let mnemonic = bip39::Mnemonic::parse(&mnemonic_phrase)
+        .map_err(|_| "Invalid mnemonic phrase. Please check your 24 words.".to_string())?;
+
+    let seed = mnemonic.to_seed("");
+    let mut seed32 = [0u8; 32];
+    seed32.copy_from_slice(&seed[..32]);
+
+    let kp = keypair_from_seed(&seed32)?;
+    let b58 = kp.account_id.to_b58();
+    let pk_hex = hex::encode(&kp.public_key.0);
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Creating wallet dir: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(&kp).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
+
+    Ok(serde_json::json!({
+        "account_id": b58,
+        "public_key": pk_hex,
+    }))
 }
 
 // ── PIN commands ──────────────────────────────────────────────────────────────
@@ -2384,6 +2500,14 @@ pub async fn create_email_timelock_series(
                 risk_level: None,
                 investment_exclusions: None,
                 grantor_intent: None,
+                sign_of_life_interval_days: None,
+                sign_of_life_grace_days: None,
+                guardian_pubkey: None,
+                guardian_until: None,
+                alt_guardian_pubkey: None,
+                beneficiary_description: None,
+                beneficiary_description_hash: None,
+                convert_to: None,
             }
         })
         .collect();
@@ -3046,6 +3170,14 @@ pub async fn create_freeform_timelock(
         risk_level,
         investment_exclusions: None,
         grantor_intent: grantor_intent.clone(),
+        sign_of_life_interval_days: None,
+        sign_of_life_grace_days: None,
+        guardian_pubkey: None,
+        guardian_until: None,
+        alt_guardian_pubkey: None,
+        beneficiary_description: None,
+        beneficiary_description_hash: None,
+                convert_to: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -3273,4 +3405,714 @@ pub async fn update_display_name(
         return Err(body["error"].as_str().unwrap_or("Update failed").to_string());
     }
     Ok(true)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Genesis 8 — New Transaction Type Commands
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Types ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InvoiceInfo {
+    pub invoice_id: String,
+    pub issuer_pubkey: String,
+    pub payer_pubkey: Option<String>,
+    pub amount_chronos: String,
+    pub amount_kx: String,
+    pub expiry: u64,
+    pub status: String,
+    pub created_at: u64,
+    pub fulfilled_at: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreditInfo {
+    pub credit_id: String,
+    pub grantor_pubkey: String,
+    pub beneficiary_pubkey: String,
+    pub ceiling_chronos: String,
+    pub ceiling_kx: String,
+    pub per_draw_max_chronos: Option<String>,
+    pub expiry: u64,
+    pub drawn_chronos: String,
+    pub drawn_kx: String,
+    pub status: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DepositInfo {
+    pub deposit_id: String,
+    pub depositor_pubkey: String,
+    pub obligor_pubkey: String,
+    pub principal_chronos: String,
+    pub principal_kx: String,
+    pub rate_basis_points: u64,
+    pub term_seconds: u64,
+    pub compounding: String,
+    pub maturity_timestamp: u64,
+    pub total_due_chronos: String,
+    pub total_due_kx: String,
+    pub status: String,
+    pub created_at: u64,
+    pub settled_at: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConditionalInfo {
+    pub type_v_id: String,
+    pub sender_pubkey: String,
+    pub recipient_pubkey: String,
+    pub amount_chronos: String,
+    pub amount_kx: String,
+    pub min_attestors: u32,
+    pub attestations_received: u32,
+    pub valid_until: u64,
+    pub fallback: String,
+    pub status: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SignOfLifeInfo {
+    pub lock_id: String,
+    pub interval_days: u64,
+    pub grace_days: u64,
+    pub last_attestation: u64,
+    pub next_due: u64,
+    pub status: String,
+    pub responsible: String,
+    pub created_at: u64,
+}
+
+// ── Invoice Commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_open_invoices(app: AppHandle) -> Result<Vec<InvoiceInfo>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+    let result = rpc_call(&url, "chronx_getOpenInvoices", serde_json::json!([b58])).await?;
+    let invoices: Vec<InvoiceInfo> = serde_json::from_value(result)
+        .map_err(|e| format!("Parsing invoices: {e}"))?;
+    Ok(invoices)
+}
+
+#[tauri::command]
+pub async fn get_invoice(app: AppHandle, invoice_id_hex: String) -> Result<Option<InvoiceInfo>, String> {
+    let url = rpc_url(&app);
+    let result = rpc_call(&url, "chronx_getInvoice", serde_json::json!([invoice_id_hex])).await?;
+    if result.is_null() { return Ok(None); }
+    let invoice: InvoiceInfo = serde_json::from_value(result)
+        .map_err(|e| format!("Parsing invoice: {e}"))?;
+    Ok(Some(invoice))
+}
+
+#[tauri::command]
+pub async fn create_invoice(
+    app: AppHandle,
+    amount_kx: f64,
+    expiry_days: u64,
+    memo: Option<String>,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let amount_chronos = (amount_kx * CHRONOS_PER_KX as f64) as u64;
+    let now = chrono::Utc::now().timestamp() as u64;
+    let expiry = now + expiry_days * 86400;
+
+    let id_data = bincode::serialize(&(kp.account_id.clone(), now, amount_chronos))
+        .map_err(|e| format!("Serialize: {e}"))?;
+    let invoice_id: [u8; 32] = *blake3::hash(&id_data).as_bytes();
+
+    let encrypted_memo = memo.as_ref().map(|m| m.as_bytes().to_vec());
+    let memo_hash = memo.as_ref().map(|m| *blake3::hash(m.as_bytes()).as_bytes());
+
+    let action = Action::CreateInvoice(chronx_core::transaction::CreateInvoiceAction {
+        issuer_pubkey: kp.public_key.clone(),
+        payer_pubkey: None,
+        amount_chronos,
+        invoice_id,
+        expiry,
+        encrypted_memo,
+        memo_hash,
+    });
+
+    let tx_id = build_sign_mine_submit(&kp, vec![action], &url).await?;
+    Ok(format!("{}|{}", tx_id, hex::encode(invoice_id)))
+}
+
+#[tauri::command]
+pub async fn cancel_invoice(
+    app: AppHandle,
+    invoice_id_hex: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let bytes = hex::decode(&invoice_id_hex).map_err(|e| format!("Bad hex: {e}"))?;
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&bytes);
+
+    let action = Action::CancelInvoice(chronx_core::transaction::CancelInvoiceAction {
+        issuer_pubkey: kp.public_key.clone(),
+        invoice_id: id,
+    });
+
+    build_sign_mine_submit(&kp, vec![action], &url).await
+}
+
+// ── Credit Commands ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_open_credits(app: AppHandle) -> Result<Vec<CreditInfo>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+    let result = rpc_call(&url, "chronx_getOpenCredits", serde_json::json!([b58])).await?;
+    let credits: Vec<CreditInfo> = serde_json::from_value(result)
+        .map_err(|e| format!("Parsing credits: {e}"))?;
+    Ok(credits)
+}
+
+#[tauri::command]
+pub async fn create_credit(
+    app: AppHandle,
+    beneficiary_wallet: String,
+    ceiling_kx: f64,
+    expiry_days: u64,
+    per_draw_max_kx: Option<f64>,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let ceiling_chronos = (ceiling_kx * CHRONOS_PER_KX as f64) as u64;
+    let per_draw_chronos = per_draw_max_kx.map(|v| (v * CHRONOS_PER_KX as f64) as u64);
+    let now = chrono::Utc::now().timestamp() as u64;
+    let expiry = now + expiry_days * 86400;
+
+    let id_data = bincode::serialize(&(kp.account_id.clone(), now, ceiling_chronos))
+        .map_err(|e| format!("Serialize: {e}"))?;
+    let credit_id: [u8; 32] = *blake3::hash(&id_data).as_bytes();
+
+    let action = Action::CreateCredit(chronx_core::transaction::CreateCreditAction {
+        grantor_pubkey: kp.public_key.clone(),
+        beneficiary_pubkey: chronx_core::types::DilithiumPublicKey(Vec::new()),
+        ceiling_chronos,
+        per_draw_max_chronos: per_draw_chronos,
+        expiry,
+        credit_id,
+        encrypted_terms: None,
+    });
+
+    let tx_id = build_sign_mine_submit(&kp, vec![action], &url).await?;
+    Ok(format!("{}|{}", tx_id, hex::encode(credit_id)))
+}
+
+#[tauri::command]
+pub async fn draw_credit(
+    app: AppHandle,
+    credit_id_hex: String,
+    amount_kx: f64,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let amount_chronos = (amount_kx * CHRONOS_PER_KX as f64) as u64;
+    let bytes = hex::decode(&credit_id_hex).map_err(|e| format!("Bad hex: {e}"))?;
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&bytes);
+
+    let action = Action::DrawCredit(chronx_core::transaction::DrawCreditAction {
+        beneficiary_pubkey: kp.public_key.clone(),
+        credit_id: id,
+        amount_chronos,
+    });
+
+    build_sign_mine_submit(&kp, vec![action], &url).await
+}
+
+#[tauri::command]
+pub async fn revoke_credit(
+    app: AppHandle,
+    credit_id_hex: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let bytes = hex::decode(&credit_id_hex).map_err(|e| format!("Bad hex: {e}"))?;
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&bytes);
+
+    let action = Action::RevokeCredit(chronx_core::transaction::RevokeCreditAction {
+        grantor_pubkey: kp.public_key.clone(),
+        credit_id: id,
+    });
+
+    build_sign_mine_submit(&kp, vec![action], &url).await
+}
+
+// ── Deposit Commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_active_deposits(app: AppHandle) -> Result<Vec<DepositInfo>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+    let result = rpc_call(&url, "chronx_getActiveDeposits", serde_json::json!([b58])).await?;
+    let deposits: Vec<DepositInfo> = serde_json::from_value(result)
+        .map_err(|e| format!("Parsing deposits: {e}"))?;
+    Ok(deposits)
+}
+
+#[tauri::command]
+pub async fn create_deposit(
+    app: AppHandle,
+    obligor_wallet: String,
+    amount_kx: f64,
+    rate_bps: u64,
+    term_days: u64,
+    compounding: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let principal_chronos = (amount_kx * CHRONOS_PER_KX as f64) as u64;
+    let term_seconds = term_days * 86400;
+    let now = chrono::Utc::now().timestamp() as u64;
+
+    let id_data = bincode::serialize(&(kp.account_id.clone(), now, principal_chronos))
+        .map_err(|e| format!("Serialize: {e}"))?;
+    let deposit_id: [u8; 32] = *blake3::hash(&id_data).as_bytes();
+
+    let comp = match compounding.as_str() {
+        "daily" | "Daily" => chronx_core::transaction::Compounding::Daily,
+        "monthly" | "Monthly" => chronx_core::transaction::Compounding::Monthly,
+        "annually" | "Annually" => chronx_core::transaction::Compounding::Annually,
+        _ => chronx_core::transaction::Compounding::Simple,
+    };
+
+    let action = Action::CreateDeposit(chronx_core::transaction::CreateDepositAction {
+        depositor_pubkey: kp.public_key.clone(),
+        obligor_pubkey: chronx_core::types::DilithiumPublicKey(Vec::new()),
+        principal_chronos,
+        rate_basis_points: rate_bps,
+        term_seconds,
+        compounding: comp,
+        penalty_basis_points: None,
+        deposit_id,
+    });
+
+    let tx_id = build_sign_mine_submit(&kp, vec![action], &url).await?;
+    Ok(format!("{}|{}", tx_id, hex::encode(deposit_id)))
+}
+
+#[tauri::command]
+pub async fn settle_deposit(
+    app: AppHandle,
+    deposit_id_hex: String,
+    amount_kx: f64,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let amount_chronos = (amount_kx * CHRONOS_PER_KX as f64) as u64;
+    let bytes = hex::decode(&deposit_id_hex).map_err(|e| format!("Bad hex: {e}"))?;
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&bytes);
+
+    let action = Action::SettleDeposit(chronx_core::transaction::SettleDepositAction {
+        obligor_pubkey: kp.public_key.clone(),
+        deposit_id: id,
+        amount_chronos,
+    });
+
+    build_sign_mine_submit(&kp, vec![action], &url).await
+}
+
+// ── Conditional Payment Commands ────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_pending_conditionals(app: AppHandle) -> Result<Vec<ConditionalInfo>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+    // No dedicated RPC for wallet conditionals yet — return empty for now
+    let _ = (url, b58);
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+pub async fn create_conditional(
+    app: AppHandle,
+    recipient_wallet: String,
+    amount_kx: f64,
+    min_attestors: u32,
+    expiry_days: u64,
+    fallback: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let amount_chronos = (amount_kx * CHRONOS_PER_KX as f64) as u64;
+    let now = chrono::Utc::now().timestamp() as u64;
+    let valid_until = now + expiry_days * 86400;
+
+    let id_data = bincode::serialize(&(kp.account_id.clone(), now, amount_chronos))
+        .map_err(|e| format!("Serialize: {e}"))?;
+    let type_v_id: [u8; 32] = *blake3::hash(&id_data).as_bytes();
+
+    let fb = match fallback.as_str() {
+        "void" | "Void" => chronx_core::transaction::ConditionalFallback::Void,
+        "escrow" | "Escrow" => chronx_core::transaction::ConditionalFallback::Escrow,
+        _ => chronx_core::transaction::ConditionalFallback::Return,
+    };
+
+    let action = Action::CreateConditional(chronx_core::transaction::CreateConditionalAction {
+        sender_pubkey: kp.public_key.clone(),
+        recipient_pubkey: chronx_core::types::DilithiumPublicKey(Vec::new()),
+        amount_chronos,
+        attestor_pubkeys: Vec::new(),
+        min_attestors,
+        attestation_memo: None,
+        valid_until,
+        fallback: fb,
+        encrypted_terms: None,
+        type_v_id,
+    });
+
+    let tx_id = build_sign_mine_submit(&kp, vec![action], &url).await?;
+    Ok(format!("{}|{}", tx_id, hex::encode(type_v_id)))
+}
+
+#[tauri::command]
+pub async fn attest_conditional(
+    app: AppHandle,
+    type_v_id_hex: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let bytes = hex::decode(&type_v_id_hex).map_err(|e| format!("Bad hex: {e}"))?;
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&bytes);
+
+    let action = Action::AttestConditional(chronx_core::transaction::AttestConditionalAction {
+        attestor_pubkey: kp.public_key.clone(),
+        type_v_id: id,
+        attestation_memo: None,
+    });
+
+    build_sign_mine_submit(&kp, vec![action], &url).await
+}
+
+// ── Ledger Entry & Sign of Life Commands ────────────────────────────────────
+
+#[tauri::command]
+pub async fn create_ledger_entry(
+    app: AppHandle,
+    promise_id_hex: String,
+    entry_type: String,
+    content_hash_hex: String,
+    summary: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let now = chrono::Utc::now().timestamp() as u64;
+
+    let pid_bytes = hex::decode(&promise_id_hex).map_err(|e| format!("Bad promise_id hex: {e}"))?;
+    let mut pid = [0u8; 32];
+    pid.copy_from_slice(&pid_bytes);
+
+    let ch_bytes = hex::decode(&content_hash_hex).map_err(|e| format!("Bad content_hash hex: {e}"))?;
+    let mut ch = [0u8; 32];
+    ch.copy_from_slice(&ch_bytes);
+
+    let id_data = bincode::serialize(&(kp.account_id.clone(), now, &promise_id_hex))
+        .map_err(|e| format!("Serialize: {e}"))?;
+    let entry_id: [u8; 32] = *blake3::hash(&id_data).as_bytes();
+
+    let et = match entry_type.as_str() {
+        "decision" => chronx_core::transaction::LedgerEntryType::Decision,
+        "summary" => chronx_core::transaction::LedgerEntryType::Summary,
+        "sign-of-life" | "SignOfLife" => chronx_core::transaction::LedgerEntryType::SignOfLife,
+        "beneficiary-identified" => chronx_core::transaction::LedgerEntryType::BeneficiaryIdentified,
+        "audit" => chronx_core::transaction::LedgerEntryType::Audit,
+        "milestone" => chronx_core::transaction::LedgerEntryType::Milestone,
+        _ => chronx_core::transaction::LedgerEntryType::Summary,
+    };
+
+    let action = Action::CreateLedgerEntry(chronx_core::transaction::CreateLedgerEntryAction {
+        author_pubkey: kp.public_key.clone(),
+        mandate_id: None,
+        promise_id: Some(pid),
+        entry_type: et,
+        content_hash: ch,
+        content_summary: summary.into_bytes(),
+        promise_chain_hash: None,
+        external_ref: None,
+        entry_id,
+    });
+
+    let tx_id = build_sign_mine_submit(&kp, vec![action], &url).await?;
+    Ok(format!("{}|{}", tx_id, hex::encode(entry_id)))
+}
+
+#[tauri::command]
+pub async fn get_sign_of_life_status(
+    app: AppHandle,
+    lock_id: String,
+) -> Result<Option<SignOfLifeInfo>, String> {
+    let url = rpc_url(&app);
+    let result = rpc_call(&url, "chronx_getSignOfLifeStatus", serde_json::json!([lock_id])).await?;
+    if result.is_null() { return Ok(None); }
+    let info: SignOfLifeInfo = serde_json::from_value(result)
+        .map_err(|e| format!("Parsing sign of life: {e}"))?;
+    Ok(Some(info))
+}
+
+#[tauri::command]
+pub async fn submit_sign_of_life(
+    app: AppHandle,
+    promise_id_hex: String,
+) -> Result<String, String> {
+    // Sign of Life confirmation is a TYPE L ledger entry with type SignOfLife
+    let content_hash_hex = hex::encode(blake3::hash(b"sign-of-life-confirmation").as_bytes());
+    let summary = "Sign of life confirmed".to_string();
+    create_ledger_entry(app, promise_id_hex, "sign-of-life".to_string(), content_hash_hex, summary).await
+}
+
+#[tauri::command]
+pub async fn get_promises_needing_sign_of_life(
+    app: AppHandle,
+) -> Result<Vec<SignOfLifeInfo>, String> {
+    // Query all promises with sign of life and filter for due/overdue
+    // For now, return empty — the node sweep creates records when SOL is enabled
+    let url = rpc_url(&app);
+    let _ = url;
+    Ok(Vec::new())
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v2.2.2 — Verified Identity + KXGO Badges + Commitments
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Feature 1: Verified Identity Checkmark ──────────────────────────────────
+//
+// Queries the notify API for a wallet's verified identity.
+// Returns display_name + verified flag so the frontend can show
+// a gold checkmark ✓ and human-readable name instead of truncated address.
+// Results are cached client-side (60s) to avoid hammering the server.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IdentityRecord {
+    pub wallet_address: String,
+    pub display_name: String,
+    pub verified: bool,
+}
+
+#[tauri::command]
+pub async fn get_verified_identity(wallet_address: String) -> Result<Option<IdentityRecord>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/avatar/{}/meta", NOTIFY_API_URL, wallet_address);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Identity lookup failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        // Not found or server error — treat as unverified
+        return Ok(None);
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {e}"))?;
+
+    let display_name = body["display_name"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let badge = body["badge"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // Consider "verified" if they have a display name AND a badge
+    if display_name.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(IdentityRecord {
+        wallet_address,
+        display_name,
+        verified: !badge.is_empty(),
+    }))
+}
+
+// ── Feature 2: KXGO Badges ──────────────────────────────────────────────────
+//
+// Fetches badge list from the notify API for a wallet address.
+// Returns badge types (FOUNDER, KXGO_BRONZE, KXGO_SILVER, KXGO_GOLD)
+// so the frontend can display colored pills in the wallet header.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WalletBadge {
+    #[serde(rename = "type")]
+    pub badge_type: String,
+    pub color: Option<String>,
+    pub issued_by: Option<String>,
+    pub issued_at: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_wallet_badges(wallet_address: String) -> Result<Vec<WalletBadge>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("{}/wallet/badges/{}", NOTIFY_API_URL, wallet_address);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Badge fetch failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {e}"))?;
+
+    let badges: Vec<WalletBadge> = body["badges"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(badges)
+}
+
+// ── Feature 3: Commitments ──────────────────────────────────────────────────
+//
+// Fetches all active TYPE V conditionals, TYPE C credits, and TYPE Y deposits
+// that the wallet has. Allows cancellation/revocation.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CommitmentsData {
+    pub active_locks: Vec<ConditionalRecord>,
+    pub active_credits: Vec<CreditRecord>,
+    pub active_deposits: Vec<DepositRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConditionalRecord {
+    pub conditional_id: String,
+    pub amount_chronos: String,
+    pub attestor: String,
+    pub valid_until: Option<i64>,
+    pub description: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreditRecord {
+    pub credit_id: String,
+    pub beneficiary: String,
+    pub ceiling_chronos: String,
+    pub drawn_chronos: String,
+    pub expires_at: Option<i64>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DepositRecord {
+    pub deposit_id: String,
+    pub obligor: String,
+    pub total_due_chronos: String,
+    pub paid_chronos: String,
+    pub matures_at: Option<i64>,
+    pub status: String,
+}
+
+#[tauri::command]
+pub async fn get_commitments(app: AppHandle) -> Result<CommitmentsData, String> {
+    let url = rpc_url(&app);
+
+    // Fetch TYPE V conditionals
+    let conditionals_result = rpc_call(&url, "chronx_getPendingConditionals", serde_json::json!([])).await;
+    let active_locks: Vec<ConditionalRecord> = match conditionals_result {
+        Ok(val) => serde_json::from_value(val).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+
+    // Fetch TYPE C credits (granted by me)
+    let credits_result = rpc_call(&url, "chronx_getOpenCredits", serde_json::json!([])).await;
+    let active_credits: Vec<CreditRecord> = match credits_result {
+        Ok(val) => serde_json::from_value(val).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+
+    // Fetch TYPE Y deposits (owed to me)
+    let deposits_result = rpc_call(&url, "chronx_getActiveDeposits", serde_json::json!([])).await;
+    let active_deposits: Vec<DepositRecord> = match deposits_result {
+        Ok(val) => serde_json::from_value(val).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+
+    Ok(CommitmentsData {
+        active_locks,
+        active_credits,
+        active_deposits,
+    })
+}
+
+#[tauri::command]
+pub async fn cancel_commitment(
+    commitment_id: String,
+    commitment_type: String,
+    wallet_address: String,
+    reason: Option<String>,
+) -> Result<String, String> {
+    match commitment_type.as_str() {
+        "TYPE_V" => {
+            // TYPE V is irrevocable on-chain. Send cancellation REQUEST to attestor
+            // via notify API. Attestor then chooses not to attest, allowing
+            // valid_until fallback to trigger and return funds.
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .map_err(|e| e.to_string())?;
+
+            let resp = client
+                .post(format!("{}/wallet/commitment-cancel", NOTIFY_API_URL))
+                .json(&serde_json::json!({
+                    "wallet": wallet_address,
+                    "commitment_id": commitment_id,
+                    "commitment_type": commitment_type,
+                    "reason": reason.unwrap_or_default(),
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("Cancel request failed: {e}"))?;
+
+            if !resp.status().is_success() {
+                return Err("Failed to send cancellation request".to_string());
+            }
+
+            Ok("Cancellation request sent to attestor".to_string())
+        }
+        "TYPE_C" => {
+            // TYPE C: revoke credit on-chain immediately
+            // This just wraps the existing revoke_credit function
+            Err("Use revoke_credit command directly for TYPE C".to_string())
+        }
+        _ => Err(format!("Cannot cancel commitment type: {}", commitment_type)),
+    }
 }

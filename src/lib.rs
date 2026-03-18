@@ -247,6 +247,58 @@ struct TimeLockInfo {
     direction: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct InvoiceInfo {
+    invoice_id: String,
+    amount_kx: String,
+    amount_chronos: String,
+    expiry: u64,
+    status: String,
+    created_at: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct CreditInfo {
+    credit_id: String,
+    ceiling_kx: String,
+    drawn_kx: String,
+    expiry: u64,
+    status: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct DepositInfo {
+    deposit_id: String,
+    principal_kx: String,
+    total_due_kx: String,
+    maturity_timestamp: u64,
+    status: String,
+    compounding: String,
+    rate_basis_points: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct ConditionalInfo {
+    type_v_id: String,
+    amount_kx: String,
+    min_attestors: u32,
+    attestations_received: u32,
+    valid_until: u64,
+    fallback: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct SignOfLifeInfo {
+    lock_id: String,
+    interval_days: u64,
+    grace_days: u64,
+    next_due: u64,
+    status: String,
+    responsible: String,
+}
+
+
 /// Returned by `create_email_timelock_series`.
 #[derive(Clone, Deserialize, Default)]
 struct EmailSeriesResult {
@@ -323,6 +375,84 @@ struct TxHistoryEntry {
 struct EmailLockResult {
     tx_id: String,
     claim_code: String,
+}
+
+// ── v2.2.2 types ────────────────────────────────────────────────────────────
+
+/// Verified identity record for a wallet address.
+/// Used to show gold checkmark ✓ + display name instead of truncated address.
+#[derive(Clone, Deserialize, Default)]
+struct IdentityRecord {
+    wallet_address: String,
+    display_name: String,
+    verified: bool,
+}
+
+/// Badge earned by a wallet (KXGO Bronze/Silver/Gold, Founder, etc.)
+#[derive(Clone, Deserialize, Default)]
+struct WalletBadge {
+    #[serde(rename = "type")]
+    badge_type: String,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default)]
+    issued_by: Option<String>,
+}
+
+/// Active commitments — TYPE V conditionals, TYPE C credits, TYPE Y deposits.
+#[derive(Clone, Deserialize, Default)]
+struct CommitmentsData {
+    #[serde(default)]
+    active_locks: Vec<ConditionalRecord>,
+    #[serde(default)]
+    active_credits: Vec<CreditRecord>,
+    #[serde(default)]
+    active_deposits: Vec<DepositRecord>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct ConditionalRecord {
+    conditional_id: String,
+    #[serde(default)]
+    amount_chronos: String,
+    #[serde(default)]
+    attestor: String,
+    #[serde(default)]
+    valid_until: Option<i64>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    status: String,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct CreditRecord {
+    credit_id: String,
+    #[serde(default)]
+    beneficiary: String,
+    #[serde(default)]
+    ceiling_chronos: String,
+    #[serde(default)]
+    drawn_chronos: String,
+    #[serde(default)]
+    expires_at: Option<i64>,
+    #[serde(default)]
+    status: String,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct DepositRecord {
+    deposit_id: String,
+    #[serde(default)]
+    obligor: String,
+    #[serde(default)]
+    total_due_chronos: String,
+    #[serde(default)]
+    paid_chronos: String,
+    #[serde(default)]
+    matures_at: Option<i64>,
+    #[serde(default)]
+    status: String,
 }
 
 // ── Server-pushed types ───────────────────────────────────────────────────────
@@ -463,6 +593,22 @@ fn shorten_addr(addr: &str) -> String {
         format!("{}…{}", &addr[..8], &addr[addr.len()-8..])
     } else {
         addr.to_string()
+    }
+}
+
+/// Returns the verified display name with a gold ✓ if the address has a
+/// known identity in the cache, otherwise falls back to `shorten_addr`.
+fn identity_or_short(addr: &str, cache: &std::collections::HashMap<String, IdentityRecord>) -> String {
+    if let Some(rec) = cache.get(addr) {
+        if rec.verified {
+            format!("\u{2713} {}", rec.display_name)
+        } else if !rec.display_name.is_empty() {
+            rec.display_name.clone()
+        } else {
+            shorten_addr(addr)
+        }
+    } else {
+        shorten_addr(addr)
     }
 }
 
@@ -935,6 +1081,7 @@ fn App() -> impl IntoView {
     let welcome_msg   = RwSignal::new(String::new());
     let backup_key_str = RwSignal::new(String::new());
     let backup_copied  = RwSignal::new(false);
+    let mnemonic_words = RwSignal::new(String::new()); // 24-word recovery phrase
     let restore_input  = RwSignal::new(String::new());
     let restore_msg    = RwSignal::new(String::new());
     let restore_busy   = RwSignal::new(false);
@@ -1263,21 +1410,17 @@ fn App() -> impl IntoView {
         spawn_local(async move {
             welcome_busy.set(true);
             welcome_msg.set(String::new());
-            match call::<String>("generate_wallet", no_args()).await {
-                Ok(_account_id) => {
-                    // Fetch backup key and show it before PIN setup
-                    match call::<String>("export_secret_key", no_args()).await {
-                        Ok(key) => {
-                            backup_key_str.set(key);
-                            backup_copied.set(false);
-                            app_phase.set(AppPhase::BackupKey);
-                        }
-                        Err(e) => {
-                            // Backup key fetch failed — still proceed to PIN setup
-                            welcome_msg.set(format!("Warning: could not export backup key: {e}"));
-                            app_phase.set(AppPhase::PinSetup);
-                        }
+            match call::<serde_json::Value>("generate_wallet_with_mnemonic", no_args()).await {
+                Ok(result) => {
+                    if let Some(phrase) = result.get("mnemonic").and_then(|v| v.as_str()) {
+                        mnemonic_words.set(phrase.to_string());
                     }
+                    // Also fetch backup key for legacy display
+                    if let Ok(key) = call::<String>("export_secret_key", no_args()).await {
+                        backup_key_str.set(key);
+                    }
+                    backup_copied.set(false);
+                    app_phase.set(AppPhase::BackupKey);
                 }
                 Err(e) => welcome_msg.set(format!("Error: {e}")),
             }
@@ -1437,11 +1580,13 @@ fn App() -> impl IntoView {
             AppPhase::BackupKey => view! {
                 <BackupKeyScreen
                     backup_key=backup_key_str
+                    mnemonic=mnemonic_words
                     copied=backup_copied
                     on_copy=move |_: web_sys::MouseEvent| {
-                        let key = backup_key_str.get_untracked();
+                        let words = mnemonic_words.get_untracked();
+                        let to_copy = if words.is_empty() { backup_key_str.get_untracked() } else { words };
                         spawn_local(async move {
-                            copy_to_clipboard(key).await;
+                            copy_to_clipboard(to_copy).await;
                             backup_copied.set(true);
                             delay_ms(2000).await;
                             backup_copied.set(false);
@@ -1464,23 +1609,41 @@ fn App() -> impl IntoView {
                     on_restore=move |_: web_sys::MouseEvent| {
                         let key = restore_input.get_untracked();
                         if key.trim().is_empty() {
-                            restore_msg.set("Please paste your backup key.".to_string());
+                            restore_msg.set("Please enter your recovery phrase or backup key.".to_string());
                             return;
                         }
                         spawn_local(async move {
                             restore_busy.set(true);
                             restore_msg.set(String::new());
                             let trimmed = key.trim().to_string();
-                            let args = serde_wasm_bindgen::to_value(
-                                &serde_json::json!({ "backupKey": trimmed, "force": true })
-                            ).unwrap_or(no_args());
-                            match call::<String>("restore_wallet", args).await {
-                                Ok(_account_id) => {
-                                    pin_digits.set(String::new());
-                                    pin_msg.set(String::new());
-                                    app_phase.set(AppPhase::PinSetup);
+                            // Detect mnemonic: 24 lowercase words separated by spaces
+                            let word_count = trimmed.split_whitespace().count();
+                            let is_mnemonic = word_count >= 12 && word_count <= 24
+                                && trimmed.chars().all(|c| c.is_ascii_lowercase() || c == ' ');
+                            if is_mnemonic {
+                                let args = serde_wasm_bindgen::to_value(
+                                    &serde_json::json!({ "mnemonicPhrase": trimmed, "force": true })
+                                ).unwrap_or(no_args());
+                                match call::<serde_json::Value>("import_wallet_from_mnemonic", args).await {
+                                    Ok(_) => {
+                                        pin_digits.set(String::new());
+                                        pin_msg.set(String::new());
+                                        app_phase.set(AppPhase::PinSetup);
+                                    }
+                                    Err(e) => restore_msg.set(format!("Error: {e}")),
                                 }
-                                Err(e) => restore_msg.set(format!("Error: {e}")),
+                            } else {
+                                let args = serde_wasm_bindgen::to_value(
+                                    &serde_json::json!({ "backupKey": trimmed, "force": true })
+                                ).unwrap_or(no_args());
+                                match call::<String>("restore_wallet", args).await {
+                                    Ok(_) => {
+                                        pin_digits.set(String::new());
+                                        pin_msg.set(String::new());
+                                        app_phase.set(AppPhase::PinSetup);
+                                    }
+                                    Err(e) => restore_msg.set(format!("Error: {e}")),
+                                }
                             }
                             restore_busy.set(false);
                         });
@@ -2173,6 +2336,7 @@ fn WelcomeScreen(
 #[component]
 fn BackupKeyScreen(
     backup_key: RwSignal<String>,
+    mnemonic: RwSignal<String>,
     copied: RwSignal<bool>,
     on_copy: impl Fn(web_sys::MouseEvent) + 'static,
     on_confirm: impl Fn(web_sys::MouseEvent) + 'static,
@@ -2183,27 +2347,60 @@ fn BackupKeyScreen(
                 <img src=logo_src() alt="ChronX" style="height:44px;width:auto;display:inline-block" />
             </div>
             <div class="backup-screen">
-                <p class="section-title">"Save Your Backup Key"</p>
-                <div class="backup-warning">
-                    "\u{26a0} Save this backup key now. Anyone who has it can access your wallet. \
-                     If you lose it and forget your PIN, your wallet cannot be recovered."
-                </div>
-                <textarea
-                    class="backup-key-box"
-                    readonly
-                    rows="5"
-                    prop:value=move || backup_key.get()
-                />
+                {move || {
+                    let words = mnemonic.get();
+                    if !words.is_empty() {
+                        // ── Mnemonic backup (new wallets) ──
+                        let word_list: Vec<String> = words.split_whitespace().map(|s| s.to_string()).collect();
+                        view! {
+                            <p class="section-title">"Back Up Your Recovery Phrase"</p>
+                            <div class="backup-warning">
+                                "\u{26a0}\u{fe0f} Write these 24 words down on paper. \
+                                 They are the ONLY way to recover your wallet. \
+                                 Never share them with anyone."
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 12px;\
+                                        background:#1a1a2e;border:1px solid #333;border-radius:8px;\
+                                        padding:16px;margin:8px 0;font-family:monospace;font-size:14px">
+                                {word_list.into_iter().enumerate().map(|(i, word)| {
+                                    view! {
+                                        <div style="display:flex;gap:6px;align-items:center">
+                                            <span style="color:#888;min-width:24px;text-align:right;font-size:12px">
+                                                {format!("{}.", i + 1)}
+                                            </span>
+                                            <span style="color:#e0e0e0">{word}</span>
+                                        </div>
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                        }.into_any()
+                    } else {
+                        // ── Legacy backup key ──
+                        view! {
+                            <p class="section-title">"Save Your Backup Key"</p>
+                            <div class="backup-warning">
+                                "\u{26a0} Save this backup key now. Anyone who has it can access your wallet. \
+                                 If you lose it and forget your PIN, your wallet cannot be recovered."
+                            </div>
+                            <textarea
+                                class="backup-key-box"
+                                readonly
+                                rows="5"
+                                prop:value=move || backup_key.get()
+                            />
+                        }.into_any()
+                    }
+                }}
                 <div style="display:flex;gap:8px">
                     <button on:click=on_copy style="flex:1">
-                        {move || if copied.get() { "\u{2713} Copied!" } else { "\u{1f4cb} Copy to Clipboard" }}
+                        {move || if copied.get() { "\u{2713} Copied!" } else { "Copy to Clipboard" }}
                     </button>
                 </div>
                 <button class="primary" on:click=on_confirm style="margin-top:8px">
-                    "I've saved my backup key \u{2192}"
+                    "I've written them down \u{2192}"
                 </button>
                 <p class="muted" style="font-size:11px;text-align:center">
-                    "Store it in a password manager or secure offline location."
+                    "Store on paper in a safe place. Never store digitally."
                 </p>
             </div>
         </div>
@@ -2227,11 +2424,11 @@ fn RestoreWalletScreen(
             </div>
             <div class="restore-screen">
                 <p class="section-title">"Restore Existing Wallet"</p>
-                <p class="label">"Paste your ChronX wallet backup key below:"</p>
+                <p class="label">"Enter your 24-word recovery phrase or paste your backup key:"</p>
                 <textarea
                     class="restore-textarea"
                     rows="5"
-                    placeholder="Paste your backup key here\u{2026}"
+                    placeholder="Enter your 24 recovery words or paste backup key\u{2026}"
                     on:input=move |ev| {
                         use wasm_bindgen::JsCast;
                         if let Some(el) = ev.target()
@@ -2289,6 +2486,22 @@ fn AccountPanel(
     let inc_loading  = RwSignal::new(false);
     let qr_svg       = RwSignal::new(String::new());
     let qr_visible   = RwSignal::new(false);
+
+    // v2.2.2: KXGO badges — fetched from notify API alongside existing badge
+    let kxgo_badges: RwSignal<Vec<WalletBadge>> = RwSignal::new(Vec::new());
+    Effect::new(move |_| {
+        if let Some(acct) = info.get() {
+            let wallet = acct.account_id.clone();
+            spawn_local(async move {
+                let args = serde_wasm_bindgen::to_value(
+                    &serde_json::json!({ "walletAddress": wallet })
+                ).unwrap_or(JsValue::NULL);
+                if let Ok(badges) = call::<Vec<WalletBadge>>("get_wallet_badges", args).await {
+                    kxgo_badges.set(badges);
+                }
+            });
+        }
+    });
 
     // Claim code on Receive tab (pre-fill from deep link — reactive Effect)
     let home_claim_code = RwSignal::new(String::new());
@@ -2450,6 +2663,23 @@ fn AccountPanel(
                                         "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#d4a84b;color:black;font-size:11px;font-weight:700;margin-left:4px">{"\u{1f48e} Genesis"}</span> }.into_any(),
                                         "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#e2e8f0;color:#1a1a2e;font-size:11px;font-weight:700;margin-left:4px">{"\u{26a1} Patron"}</span> }.into_any(),
                                         _ => view! { <span></span> }.into_any(),
+                                    }}
+                                    // v2.2.2: KXGO badges (Bronze/Silver/Gold)
+                                    {move || {
+                                        let badges = kxgo_badges.get();
+                                        view! {
+                                            {badges.into_iter().filter_map(|b| {
+                                                let (bg, fg, label) = match b.badge_type.as_str() {
+                                                    "KXGO_BRONZE" => ("#CD7F32", "white", "\u{1f3c6} KXGO Bronze"),
+                                                    "KXGO_SILVER" => ("#C0C0C0", "#1a1a2e", "\u{1f3c6} KXGO Silver"),
+                                                    "KXGO_GOLD"   => ("#D4A84B", "black", "\u{1f3c6} KXGO Gold"),
+                                                    _ => return None,
+                                                };
+                                                Some(view! {
+                                                    <span style={format!("display:inline-block;padding:2px 10px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700;margin-left:4px")}>{label}</span>
+                                                })
+                                            }).collect_view()}
+                                        }
                                     }}
                                 </p> }.into_any()
                             } else {
@@ -5455,6 +5685,22 @@ fn CascadeSendPanel(
 // ── PromisesPanel — shows both incoming and outgoing with filters ─────────────
 
 #[component]
+
+fn email_duration_warning(unlock_unix: i64) -> Option<(&'static str, &'static str)> {
+    let now = (js_sys::Date::now() / 1000.0) as i64;
+    let years = (unlock_unix - now) / (365 * 86400);
+    if years >= 20 {
+        Some(("red", "Email addresses are unlikely to survive this long. We strongly recommend a wallet address."))
+    } else if years >= 5 {
+        Some(("amber", "This promise unlocks in many years. Consider using a wallet address for more reliable long-term delivery."))
+    } else if years >= 2 {
+        Some(("amber-light", "Email addresses sometimes change over years. Consider a wallet address for longer promises."))
+    } else {
+        None
+    }
+}
+
+#[component]
 fn PromisesPanel(
     info: RwSignal<Option<AccountInfo>>,
     lang: RwSignal<String>,
@@ -5465,10 +5711,29 @@ fn PromisesPanel(
     let sort_by = RwSignal::new("date".to_string());       // "date" | "amount"
     let sort_asc = RwSignal::new(false);                   // false = newest/largest first
 
+    // v2.2.2: identity cache — maps wallet_address -> IdentityRecord
+    let identity_cache: RwSignal<std::collections::HashMap<String, IdentityRecord>> =
+        RwSignal::new(std::collections::HashMap::new());
+
     let reload = move || {
         spawn_local(async move {
             loading.set(true);
             if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_all_promises", no_args()).await {
+                // v2.2.2: look up identities for unique sender/recipient addresses
+                let mut addrs = std::collections::HashSet::new();
+                for lock in &locks {
+                    addrs.insert(lock.sender.clone());
+                    addrs.insert(lock.recipient_account_id.clone());
+                }
+                for addr in addrs {
+                    if addr.is_empty() || identity_cache.get_untracked().contains_key(&addr) { continue; }
+                    let args = serde_wasm_bindgen::to_value(
+                        &serde_json::json!({ "walletAddress": addr })
+                    ).unwrap_or(JsValue::NULL);
+                    if let Ok(Some(rec)) = call::<Option<IdentityRecord>>("get_verified_identity", args).await {
+                        identity_cache.update(|c| { c.insert(rec.wallet_address.clone(), rec); });
+                    }
+                }
                 all_promises.set(locks);
             }
             loading.set(false);
@@ -5484,6 +5749,28 @@ fn PromisesPanel(
                 delay_ms(30_000).await;
                 if let Ok(locks) = call::<Vec<TimeLockInfo>>("get_all_promises", no_args()).await {
                     all_promises.set(locks);
+                }
+            }
+        });
+    });
+
+    // v2.2.2: Commitments — TYPE V, TYPE C, TYPE Y
+    let commitments = RwSignal::new(CommitmentsData::default());
+    let cancel_msg = RwSignal::new(String::new());
+    Effect::new(move |_| {
+        spawn_local(async move {
+            if let Ok(data) = call::<CommitmentsData>("get_commitments", no_args()).await {
+                commitments.set(data);
+            }
+        });
+    });
+    // Refresh commitments alongside promises (every 30s)
+    Effect::new(move |_| {
+        spawn_local(async move {
+            loop {
+                delay_ms(60_000).await;
+                if let Ok(data) = call::<CommitmentsData>("get_commitments", no_args()).await {
+                    commitments.set(data);
                 }
             }
         });
@@ -5550,6 +5837,126 @@ fn PromisesPanel(
                 </div>
             </div>
 
+            // ── v2.2.2: Commitments section (hidden when empty) ────────────
+            {move || {
+                let cm = commitments.get();
+                let has_any = !cm.active_locks.is_empty() || !cm.active_credits.is_empty() || !cm.active_deposits.is_empty();
+                if !has_any {
+                    return view! { <span></span> }.into_any();
+                }
+                let now = (js_sys::Date::now() / 1000.0) as i64;
+                let id_cache = identity_cache.get();
+                view! {
+                    <div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #333">
+                        <h3 class="section-title" style="margin-top:12px">
+                            "\u{1f512} Commitments"
+                        </h3>
+                        // TYPE V conditionals (game locks)
+                        {cm.active_locks.iter().map(|lock| {
+                            let lid = lock.conditional_id.clone();
+                            let desc = lock.description.clone().unwrap_or_else(|| "Locked funds".to_string());
+                            let amt = format_kx(&lock.amount_chronos);
+                            let countdown = lock.valid_until.map(|vu| {
+                                let diff = vu - now;
+                                if diff <= 0 { "Expired".to_string() }
+                                else if diff < 300 { format!("{}m {}s remaining", diff / 60, diff % 60) }
+                                else if diff < 1800 { format!("{}m remaining", diff / 60) }
+                                else if diff < 86400 { format!("{}h {}m remaining", diff / 3600, (diff % 3600) / 60) }
+                                else { format!("{}d remaining", diff / 86400) }
+                            }).unwrap_or_default();
+                            let countdown_color = lock.valid_until.map(|vu| {
+                                let diff = vu - now;
+                                if diff < 300 { "#e74c3c" } else if diff < 1800 { "#f39c12" } else { "#9ca3af" }
+                            }).unwrap_or("#9ca3af");
+                            let lid_cancel = lid.clone();
+                            view! {
+                                <div class="timelock-item" style="border-left:3px solid #D4A84B;padding-left:10px">
+                                    <div class="tl-row">
+                                        <span style="font-size:13px;font-weight:600">"\u{1f512} " {desc}</span>
+                                    </div>
+                                    <div class="tl-row" style="justify-content:space-between">
+                                        <span style="color:#5cb8ff;font-size:13px;font-weight:700">{amt}" KX"</span>
+                                        <span style={format!("color:{countdown_color};font-size:11px")}>{countdown}</span>
+                                    </div>
+                                    <button style="margin-top:6px;padding:4px 12px;background:rgba(231,76,60,0.15);color:#e74c3c;border:1px solid rgba(231,76,60,0.3);border-radius:6px;font-size:11px;cursor:pointer"
+                                        on:click=move |_| {
+                                            let lid = lid_cancel.clone();
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                    "commitmentId": lid,
+                                                    "commitmentType": "TYPE_V",
+                                                    "walletAddress": "",
+                                                    "reason": "Player requested cancellation"
+                                                })).unwrap_or(JsValue::NULL);
+                                                match call::<String>("cancel_commitment", args).await {
+                                                    Ok(msg) => cancel_msg.set(msg),
+                                                    Err(e) => cancel_msg.set(format!("Error: {e}")),
+                                                }
+                                            });
+                                        }>"Cancel"</button>
+                                </div>
+                            }
+                        }).collect_view()}
+                        // TYPE C credits
+                        {cm.active_credits.iter().map(|credit| {
+                            let cid = credit.credit_id.clone();
+                            let drawn = format_kx(&credit.drawn_chronos);
+                            let ceiling = format_kx(&credit.ceiling_chronos);
+                            let beneficiary = identity_or_short(&credit.beneficiary, &id_cache);
+                            let exp = credit.expires_at.map(|ts| format!("Expires {}", unix_to_date_str(ts))).unwrap_or_default();
+                            let cid_revoke = cid.clone();
+                            view! {
+                                <div class="timelock-item" style="border-left:3px solid #3498db;padding-left:10px">
+                                    <div class="tl-row">
+                                        <span style="font-size:13px;font-weight:600">"\u{1f91d} Credit: " {beneficiary}</span>
+                                    </div>
+                                    <div class="tl-row" style="justify-content:space-between">
+                                        <span style="color:#5cb8ff;font-size:13px">{drawn}" / "{ceiling}" KX drawn"</span>
+                                        <span style="color:#9ca3af;font-size:11px">{exp}</span>
+                                    </div>
+                                    <button style="margin-top:6px;padding:4px 12px;background:rgba(231,76,60,0.15);color:#e74c3c;border:1px solid rgba(231,76,60,0.3);border-radius:6px;font-size:11px;cursor:pointer"
+                                        on:click=move |_| {
+                                            let cid = cid_revoke.clone();
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                    "creditId": cid
+                                                })).unwrap_or(JsValue::NULL);
+                                                let _ = call::<String>("revoke_credit", args).await;
+                                            });
+                                        }>"Revoke"</button>
+                                </div>
+                            }
+                        }).collect_view()}
+                        // TYPE Y deposits
+                        {cm.active_deposits.iter().map(|dep| {
+                            let obligor = identity_or_short(&dep.obligor, &id_cache);
+                            let total = format_kx(&dep.total_due_chronos);
+                            let mat = dep.matures_at.map(|ts| format!("Matures {}", unix_to_date_str(ts))).unwrap_or_default();
+                            view! {
+                                <div class="timelock-item" style="border-left:3px solid #27ae60;padding-left:10px">
+                                    <div class="tl-row">
+                                        <span style="font-size:13px;font-weight:600">"\u{1f4cb} Deposit: " {obligor}" owes me"</span>
+                                    </div>
+                                    <div class="tl-row" style="justify-content:space-between">
+                                        <span style="color:#5cb8ff;font-size:13px;font-weight:700">{total}" KX"</span>
+                                        <span style="color:#9ca3af;font-size:11px">{mat}</span>
+                                    </div>
+                                </div>
+                            }
+                        }).collect_view()}
+                        // Cancel message toast
+                        {move || {
+                            let msg = cancel_msg.get();
+                            if msg.is_empty() {
+                                view! { <span></span> }.into_any()
+                            } else {
+                                view! { <p style="font-size:11px;color:#D4A84B;margin-top:8px;padding:6px 10px;background:rgba(212,168,75,0.1);border-radius:6px">{msg}</p> }.into_any()
+                            }
+                        }}
+                    </div>
+                }.into_any()
+            }}
+
             // ── Section 1: KX Promised To You (incoming) ────────────────────
             <h3 class="section-title" style="margin-top:12px">
                 {move || t(&lang.get(), "promises_incoming_header")}
@@ -5572,7 +5979,8 @@ fn PromisesPanel(
                         <div class="timelock-list">
                             {locks.into_iter().map(|lock| {
                                 let now = (js_sys::Date::now() / 1000.0) as i64;
-                                let peer_label = format!("{}: {}", t(&lang_val, "from"), shorten_addr(&lock.sender));
+                                let id_cache = identity_cache.get();
+                                let peer_label = format!("{}: {}", t(&lang_val, "from"), identity_or_short(&lock.sender, &id_cache));
                                 let status_label = {
                                     let diff = lock.unlock_at - now;
                                     if diff <= 0 {
@@ -5634,7 +6042,8 @@ fn PromisesPanel(
                         <div class="timelock-list">
                             {locks.into_iter().map(|lock| {
                                 let now = (js_sys::Date::now() / 1000.0) as i64;
-                                let peer_label = format!("{}: {}", t(&lang_val, "to"), shorten_addr(&lock.recipient_account_id));
+                                let id_cache_out = identity_cache.get();
+                                let peer_label = format!("{}: {}", t(&lang_val, "to"), identity_or_short(&lock.recipient_account_id, &id_cache_out));
                                 let status_label = {
                                     let diff = lock.unlock_at - now;
                                     if diff <= 0 {

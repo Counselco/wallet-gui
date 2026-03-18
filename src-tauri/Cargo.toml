@@ -3,7 +3,7 @@
 
 [package]
 name = "chronx-wallet-gui"
-version = "2.1.1"
+version = "2.3.0"
 edition = "2021"
 
 [features]
@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [dependencies]
 tauri       = { version = "2", features = [] }
@@ -41,5 +42,6 @@ tauri-plugin-opener = "2"
 x25519-dalek       = { version = "2", features = ["static_secrets"] }
 chacha20poly1305   = "0.10"
 hkdf               = "0.12"
+bip39         = { version = "2", features = ["rand"] }
 chronx-core   = { path = "../../crates/chronx-core" }
 chronx-crypto = { path = "../../crates/chronx-crypto" }

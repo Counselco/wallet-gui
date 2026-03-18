@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 fn main() {
     // Create a minimal placeholder icon if one doesn't exist yet.
     let icon_dir = std::path::Path::new("icons");
@@ -7,7 +9,41 @@ fn main() {
         std::fs::write(&icon_path, minimal_ico()).expect("writing placeholder icon");
     }
 
+    // Compile the seeded Dilithium2 keygen C code.
+    // It links against PQClean internal functions already provided by
+    // pqcrypto-dilithium. We only need the header files for types/constants.
+    let (dilithium_headers, common_headers) = find_pqclean_headers();
+    cc::Build::new()
+        .file("c/seeded_keygen.c")
+        .include(&dilithium_headers)
+        .include(&common_headers)
+        .compile("chronx_seeded_keygen");
+
     tauri_build::build()
+}
+
+/// Locate the PQClean header directories inside the cargo registry.
+fn find_pqclean_headers() -> (PathBuf, PathBuf) {
+    let cargo_home = std::env::var("CARGO_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| ".".to_string());
+        format!("{}/.cargo", home)
+    });
+    let registry = Path::new(&cargo_home).join("registry").join("src");
+    if let Ok(entries) = std::fs::read_dir(&registry) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("pqcrypto-dilithium-0.5.0");
+            if candidate.exists() {
+                let clean = candidate.join("pqclean/crypto_sign/dilithium2/clean");
+                let common = candidate.join("pqclean/common");
+                if clean.exists() && common.exists() {
+                    return (clean, common);
+                }
+            }
+        }
+    }
+    panic!("pqcrypto-dilithium-0.5.0 headers not found in cargo registry");
 }
 
 /// Generate a minimal valid 16×16 32bpp ICO file (dark-blue square).
