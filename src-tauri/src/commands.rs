@@ -1271,10 +1271,14 @@ fn keypair_from_seed(seed: &[u8; 32]) -> Result<KeyPair, String> {
 /// Generate a new wallet backed by a 24-word BIP-39 mnemonic.
 /// Returns { mnemonic, account_id, public_key_hex }.
 #[tauri::command]
-pub async fn generate_wallet_with_mnemonic(app: AppHandle) -> Result<serde_json::Value, String> {
+pub async fn generate_wallet_with_mnemonic(app: AppHandle, force: Option<bool>) -> Result<serde_json::Value, String> {
     let path = keyfile_path(&app);
     if path.exists() {
-        return Err("Wallet already exists. Import or use the existing wallet.".to_string());
+        if force.unwrap_or(false) {
+            std::fs::remove_file(&path).map_err(|e| format!("Removing old wallet: {e}"))?;
+        } else {
+            return Err("Wallet already exists. Import or use the existing wallet.".to_string());
+        }
     }
 
     // Generate 24-word mnemonic (256 bits of entropy)

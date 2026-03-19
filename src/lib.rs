@@ -9478,7 +9478,7 @@ fn SettingsPanel(
                                                         let args = serde_wasm_bindgen::to_value(
                                                             &serde_json::json!({ "force": true })
                                                         ).unwrap_or(no_args());
-                                                        match call::<serde_json::Value>("generate_wallet_with_mnemonic", no_args()).await {
+                                                        match call::<serde_json::Value>("generate_wallet_with_mnemonic", args).await {
                                                             Ok(result) => {
                                                                 if let Some(phrase) = result.get("mnemonic").and_then(|v| v.as_str()) {
                                                                     new_wallet_mnemonic.set(phrase.to_string());
