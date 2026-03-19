@@ -2508,7 +2508,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.7"
+                    "ChronX Wallet v2.4.8"
                 </p>
             </div>
         </div>
@@ -8929,6 +8929,17 @@ fn SettingsPanel(
     let show_mobile_history = RwSignal::new(false);
     // Rewards sub-view for mobile
     let show_mobile_rewards = RwSignal::new(false);
+    // Collapsible section states (v2.4.8)
+    let sec_notices_open = RwSignal::new(false);
+    let sec_privacy_open = RwSignal::new(false);
+    let sec_security_open = RwSignal::new(false);
+    // Auto-open Notices if unread notices exist
+    Effect::new(move |_| {
+        let unread = notices.get().iter()
+            .filter(|n| n.severity != "urgent" && !seen_ids.get().contains(&n.id))
+            .count();
+        if unread > 0 { sec_notices_open.set(true); }
+    });
 
     view! {
         // Mobile History full-screen view
@@ -9154,9 +9165,24 @@ fn SettingsPanel(
                 }}
             </div>
 
-            // Notices
-            <div class="settings-section" style="order:6">
-                <p class="label">{move || t(&lang.get(), "settings_notices")}</p>
+            // Notices (collapsible)
+            <div class="settings-section" style="order:2">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
+                    on:click=move |_| sec_notices_open.set(!sec_notices_open.get_untracked())>
+                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f514} Notices"}</span>
+                    <div style="display:flex;align-items:center;gap:6px">
+                        {move || {
+                            let unread = notices.get().iter()
+                                .filter(|n| n.severity != "urgent" && !seen_ids.get().contains(&n.id))
+                                .count();
+                            if unread > 0 {
+                                view! { <span class="notice-badge" style="background:#d4a84b;font-size:10px">{unread}</span> }.into_any()
+                            } else { view! { <span></span> }.into_any() }
+                        }}
+                        <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_notices_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
+                    </div>
+                </div>
+                <div style:display=move || if sec_notices_open.get() { "" } else { "none" }>
                 {move || if update_available.get() {
                     view! {
                         <div class="update-card" style="background:rgba(201,168,76,0.1);border:1px solid rgba(201,168,76,0.3);border-radius:8px;padding:12px;margin-bottom:8px">
@@ -9232,11 +9258,17 @@ fn SettingsPanel(
                         }.into_any()
                     }
                 }}
+                </div> // close notices collapsible
             </div>
 
-            // Security
-            <div class="settings-section" style="order:5">
-                <p class="label">{move || t(&lang.get(), "settings_security")}</p>
+            // Security (collapsible)
+            <div class="settings-section" style="order:4">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
+                    on:click=move |_| sec_security_open.set(!sec_security_open.get_untracked())>
+                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f510} Security"}</span>
+                    <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_security_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
+                </div>
+                <div style:display=move || if sec_security_open.get() { "" } else { "none" }>
 
                 // Login Method toggle
                 <p class="muted" style="font-size:12px;margin-bottom:6px">"Login Method"</p>
@@ -9353,10 +9385,26 @@ fn SettingsPanel(
                         }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
                     }.into_any()
                 }}
+
+                // ── My Emails section (inside Security collapsible) ──
+                <hr style="border:none;border-top:1px solid #2d3748;margin:12px 0" />
+                </div> // close security collapsible
             </div>
 
-            // ── Privacy section: KX Request Permissions ──
-            <div class="settings-section" style="order:3">
+            // My Emails for KX Claims — visually part of Security, but ordered separately for CSS
+            // We handle it as its own order:4 section right after Security
+
+            // ── Privacy collapsible header ──
+            <div class="settings-section" style="order:3;padding-bottom:0">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
+                    on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
+                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f512} Privacy"}</span>
+                    <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_privacy_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
+                </div>
+            </div>
+            // ── KX Request Permissions (inside Privacy) ──
+            <div class="settings-section" style="order:3;padding-top:0;margin-top:-8px"
+                 style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
                 <p class="muted" style="font-size:12px;margin-bottom:6px">"Who can request KX from me?"</p>
                 // Note: request_permission state will use inline spawn_local
                 // to keep this section self-contained
@@ -9422,7 +9470,7 @@ fn SettingsPanel(
                                 let mut pills = Vec::new();
                                 for b in &wb {
                                     let (bg, fg, label) = match b.badge_type.as_str() {
-                                        "FOUNDING_MEMBER" => ("#7c3aed".to_string(), "white".to_string(), "\u{1f451} Founding Member".to_string()),
+                                        "FOUNDING_MEMBER" | "FOUNDER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f451} Founder".to_string()),
                                         "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f48e} Genesis Member".to_string()),
                                         "KXGO_BRONZE" => ("#CD7F32".to_string(), "white".to_string(), "KXGO Bronze".to_string()),
                                         "KXGO_SILVER" => ("#C0C0C0".to_string(), "#1a1a2e".to_string(), "KXGO Silver".to_string()),
@@ -9453,8 +9501,8 @@ fn SettingsPanel(
                             return view! { <span></span> }.into_any();
                         }
                         view! {
-                            <div class="settings-section" style="order:2">
-                                <p class="label">"Privacy"</p>
+                            <div class="settings-section" style="order:3;padding-top:0;margin-top:-8px"
+                                 style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
                                 <p class="muted" style="font-size:12px;margin-bottom:6px">"Your badges:"</p>
                                 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
                                     {kxgo.into_iter().map(|(bg, fg, label)| {
@@ -9635,8 +9683,9 @@ fn SettingsPanel(
                 }
             </div> // close Wallet Management section
 
-            // My Emails for KX Claims (with verification)
-            <div class="settings-section" style="order:4">
+            // My Emails for KX Claims — inside Security (collapsed with it)
+            <div class="settings-section" style="order:5;padding-top:0;margin-top:-8px"
+                 style:display=move || if sec_security_open.get() { "" } else { "none" }>
                 <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
                     {move || t(&lang.get(), "settings_claim_emails_sub_v2")}
@@ -9874,13 +9923,18 @@ fn SettingsPanel(
                 }}
             </div>
 
-            // About & Updates
-            <div class="settings-section" style="order:9">
-                <p class="label">{move || t(&lang.get(), "settings_about")}</p>
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    <button on:click=move |_| show_about.set(true)>{move || format!("\u{2139} {}", t(&lang.get(), "settings_about_chronx"))}</button>
-                    <button on:click=move |_| show_updates.set(true)>{move || format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</button>
+            // About (no section label — just centered buttons)
+            <div style="order:99;text-align:center;padding:12px 0 4px">
+                <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:8px">
+                    <button on:click=move |_| show_about.set(true) style="font-size:13px">{move || format!("\u{2139}\u{fe0f} {}", t(&lang.get(), "settings_about_chronx"))}</button>
+                    <button on:click=move |_| show_updates.set(true) style="font-size:13px">{move || format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</button>
                 </div>
+                {move || {
+                    let version = app_version.get();
+                    view! {
+                        <p style="font-size:11px;color:#555;margin:0">"ChronX Wallet v" {version}</p>
+                    }
+                }}
             </div>
         </div>
 
