@@ -2513,7 +2513,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.1"
+                    "ChronX Wallet v2.5.2"
                 </p>
             </div>
         </div>
@@ -8842,23 +8842,28 @@ fn SettingsPanel(
             // Load privacy settings
             settings_badges_on.set(call::<bool>("get_show_badges", no_args()).await.unwrap_or(true));
             settings_identity_on.set(call::<bool>("get_show_identity", no_args()).await.unwrap_or(true));
-            // Load badges (with delay for wallet address readiness)
-            delay_ms(500).await;
-            if let Ok(acct) = call::<AccountInfo>("get_account_info", no_args()).await {
-                if !acct.account_id.is_empty() {
-                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": acct.account_id })).unwrap_or(no_args());
-                    if let Ok(wb) = call::<Vec<WalletBadge>>("get_wallet_badges", args).await {
-                        let pills: Vec<(String, String, String)> = wb.iter().map(|b| {
-                            match b.badge_type.as_str() {
-                                "FOUNDING_MEMBER" | "FOUNDER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f3c5} Founder".to_string()),
-                                "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f48e} Genesis Member".to_string()),
-                                "KXGO_BRONZE" => ("#CD7F32".to_string(), "white".to_string(), "KXGO Bronze".to_string()),
-                                "KXGO_SILVER" => ("#C0C0C0".to_string(), "#1a1a2e".to_string(), "KXGO Silver".to_string()),
-                                "KXGO_GOLD" => ("#D4A84B".to_string(), "black".to_string(), "KXGO Gold".to_string()),
-                                _ => ("#555".to_string(), "white".to_string(), b.badge_type.clone()),
+            // Load badges — fetch immediately, retry after 2s
+            for attempt in 0..2u8 {
+                if attempt > 0 { delay_ms(2000).await; }
+                if let Ok(acct) = call::<AccountInfo>("get_account_info", no_args()).await {
+                    if !acct.account_id.is_empty() {
+                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": acct.account_id })).unwrap_or(no_args());
+                        if let Ok(wb) = call::<Vec<WalletBadge>>("get_wallet_badges", args).await {
+                            let pills: Vec<(String, String, String)> = wb.iter().map(|b| {
+                                match b.badge_type.as_str() {
+                                    "FOUNDING_MEMBER" | "FOUNDER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f3c5} Founder".to_string()),
+                                    "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f48e} Genesis Member".to_string()),
+                                    "KXGO_BRONZE" => ("#CD7F32".to_string(), "white".to_string(), "KXGO Bronze".to_string()),
+                                    "KXGO_SILVER" => ("#C0C0C0".to_string(), "#1a1a2e".to_string(), "KXGO Silver".to_string()),
+                                    "KXGO_GOLD" => ("#D4A84B".to_string(), "black".to_string(), "KXGO Gold".to_string()),
+                                    _ => ("#555".to_string(), "white".to_string(), b.badge_type.clone()),
+                                }
+                            }).collect();
+                            if !pills.is_empty() {
+                                settings_badge_list.set(pills);
+                                break;
                             }
-                        }).collect();
-                        settings_badge_list.set(pills);
+                        }
                     }
                 }
             }
