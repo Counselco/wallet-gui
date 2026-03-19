@@ -2508,7 +2508,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.4"
+                    "ChronX Wallet v2.4.5"
                 </p>
             </div>
         </div>
@@ -8977,7 +8977,7 @@ fn SettingsPanel(
                 "none"
             } else { "" }
         }>
-        <div class="card">
+        <div class="card settings-content-wrap">
             <p class="section-title">{move || t(&lang.get(), "tab_settings")}</p>
 
             // Language picker
@@ -9378,18 +9378,18 @@ fn SettingsPanel(
                         });
                     };
                     view! {
-                        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin-bottom:12px">
-                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb">
+                        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:12px;width:100%;margin-bottom:12px">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
                                 <input type="radio" name="req_perm" prop:checked=move || rp.get() == "anyone"
                                     on:change=move |_| set_perm("anyone") style="accent-color:#d4a84b" />
                                 "Anyone"
                             </label>
-                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
                                 <input type="radio" name="req_perm" prop:checked=move || rp.get() == "address_book"
                                     on:change=move |_| set_perm("address_book") style="accent-color:#d4a84b" />
-                                "Only people in my Address Book"
+                                "My Address Book only"
                             </label>
-                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
                                 <input type="radio" name="req_perm" prop:checked=move || rp.get() == "nobody"
                                     on:change=move |_| set_perm("nobody") style="accent-color:#d4a84b" />
                                 "Nobody"
@@ -9404,7 +9404,8 @@ fn SettingsPanel(
                 let priv_badges = RwSignal::new(Vec::<(String, String, String)>::new()); // (type, bg, label)
                 let priv_main_badge = RwSignal::new(String::new());
                 let badges_on = RwSignal::new(true);
-                Effect::new(move |_| {
+                // Load badge data with retry (wallet address may not be ready immediately)
+                let load_badges = move || {
                     spawn_local(async move {
                         let v = call::<bool>("get_show_badges", no_args()).await.unwrap_or(true);
                         badges_on.set(v);
@@ -9414,13 +9415,16 @@ fn SettingsPanel(
                                 priv_main_badge.set(b.to_string());
                             }
                         }
-                        // Fetch KXGO badges
+                        // Fetch KXGO / Founder badges
                         if let Ok(acct) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            if acct.account_id.is_empty() { return; }
                             let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": acct.account_id })).unwrap_or(no_args());
                             if let Ok(wb) = call::<Vec<WalletBadge>>("get_wallet_badges", args).await {
                                 let mut pills = Vec::new();
                                 for b in &wb {
                                     let (bg, fg, label) = match b.badge_type.as_str() {
+                                        "FOUNDING_MEMBER" => ("#7c3aed".to_string(), "white".to_string(), "\u{1f451} Founding Member".to_string()),
+                                        "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f48e} Genesis Member".to_string()),
                                         "KXGO_BRONZE" => ("#CD7F32".to_string(), "white".to_string(), "KXGO Bronze".to_string()),
                                         "KXGO_SILVER" => ("#C0C0C0".to_string(), "#1a1a2e".to_string(), "KXGO Silver".to_string()),
                                         "KXGO_GOLD"   => ("#D4A84B".to_string(), "black".to_string(), "KXGO Gold".to_string()),
@@ -9432,12 +9436,20 @@ fn SettingsPanel(
                             }
                         }
                     });
+                };
+                Effect::new(move |_| {
+                    load_badges();
+                    // Retry after 2s in case wallet info wasn't ready
+                    spawn_local(async move {
+                        delay_ms(2000).await;
+                        load_badges();
+                    });
                 });
                 view! {
                     {move || {
-                        let main = priv_main_badge.get();
+                        let _main = priv_main_badge.get();
                         let kxgo = priv_badges.get();
-                        let has_any = !main.is_empty() || !kxgo.is_empty();
+                        let has_any = !kxgo.is_empty();
                         if !has_any {
                             return view! { <span></span> }.into_any();
                         }
@@ -9446,17 +9458,6 @@ fn SettingsPanel(
                                 <p class="label">"Privacy"</p>
                                 <p class="muted" style="font-size:12px;margin-bottom:6px">"Your badges:"</p>
                                 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
-                                    {if !main.is_empty() {
-                                        let (bg, fg, label): (&str, &str, String) = match main.as_str() {
-                                            "FOUNDING_MEMBER" => ("#7c3aed", "white", "\u{1f451} Founding Member".to_string()),
-                                            "GENESIS_MEMBER" => ("#d4a84b", "black", "\u{1f48e} Genesis Member".to_string()),
-                                            "PROTOCOL_PATRON" => ("#e2e8f0", "#1a1a2e", "\u{26a1} Protocol Patron".to_string()),
-                                            _ => ("#555", "white", main.clone()),
-                                        };
-                                        view! {
-                                            <span style={format!("display:inline-block;padding:3px 10px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700")}>{label}</span>
-                                        }.into_any()
-                                    } else { view! { <span></span> }.into_any() }}
                                     {kxgo.into_iter().map(|(bg, fg, label)| {
                                         view! {
                                             <span style={format!("display:inline-block;padding:3px 10px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700")}>{label}</span>
@@ -9867,6 +9868,7 @@ fn SettingsPanel(
                     else {
                         let cls = if msg.starts_with("Error") { "msg error" }
                                   else if msg.contains("Invalid") || msg.contains("expired") { "msg error" }
+                                  else if msg.starts_with("Please") { "msg warning" }
                                   else { "msg success" };
                         view! { <p class=cls>{msg}</p> }.into_any()
                     }

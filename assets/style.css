@@ -2310,3 +2310,10 @@ input[type="range"].pct-slider {
 .credit-item:last-child, .conditional-item:last-child, .deposit-item:last-child {
     border-bottom: none;
 }
+
+/* Settings max-width container */
+.settings-content-wrap {
+    max-width: 680px;
+    margin: 0 auto;
+    width: 100%;
+}
