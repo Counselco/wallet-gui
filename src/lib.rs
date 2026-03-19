@@ -173,6 +173,32 @@ struct PendingPoke {
     verified_sender: bool,
 }
 
+// ── Open tab types (frontend mirrors of backend structs) ─────────────────────
+
+#[derive(Clone, Deserialize, Default)]
+struct CommitmentInfo {
+    commitment_id: String,
+    commitment_type: String,
+    status: String,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct SignOfLifeStatus {
+    next_due: Option<i64>,
+    locks_count: u64,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct InvoiceRecord {
+    invoice_id: String,
+    from_wallet: String,
+    from_display: String,
+    amount_kx: f64,
+    created_at: u64,
+    expires_at: Option<u64>,
+    memo: Option<String>,
+}
+
 fn logo_src() -> String {
     format!(
         "data:image/png;base64,{}",
@@ -1064,9 +1090,10 @@ fn App() -> impl IntoView {
     let loading     = RwSignal::new(false);
     let err_msg     = RwSignal::new(String::new());
     let online      = RwSignal::new(false);
-    // Mobile: 0=Receive 1=Send 2=Promises 3=Settings
-    // Desktop: 0=Receive 1=Send 2=Promises 3=Request 4=History 5=Settings
+    // Mobile: 0=Receive 1=Send 2=Activity 3=Settings
+    // Desktop: 0=Receive 1=Send 2=Activity 3=Request 4=Settings
     let active_tab  = RwSignal::new(0u8);
+    let activity_sub = RwSignal::new(0u8); // 0=History, 1=Promises, 2=Open
     let app_version = RwSignal::new("1.0.0".to_string());
     let desktop     = is_desktop();
 
@@ -1769,24 +1796,16 @@ fn App() -> impl IntoView {
                                     </button>
                                     <button class=move || if active_tab.get()==2 {"sidebar-tab active"} else {"sidebar-tab"}
                                         on:click=move |_| active_tab.set(2)>
-                                        {move || t(&lang.get(), "tab_promises")}
+                                        "Activity"
                                     </button>
                                     <button class=move || if active_tab.get()==3 {"sidebar-tab active"} else {"sidebar-tab"}
                                         on:click=move |_| active_tab.set(3)>
                                         {move || t(&lang.get(), "tab_request")}
                                     </button>
-                                    <button class=move || if active_tab.get()==4 {"sidebar-tab active"} else {"sidebar-tab"}
-                                        on:click=move |_| active_tab.set(4)>
-                                        {move || t(&lang.get(), "tab_history")}
-                                    </button>
-                                    <button class=move || if active_tab.get()==5 {"sidebar-tab active"} else {"sidebar-tab"}
-                                        on:click=move |_| active_tab.set(5)>
-                                        {move || t(&lang.get(), "tab_contacts")}
-                                    </button>
                                 </nav>
                                 <div class="sidebar-bottom">
-                                    <button class=move || if active_tab.get()==6 {"sidebar-tab active"} else {"sidebar-tab"}
-                                        on:click=move |_| active_tab.set(6)>
+                                    <button class=move || if active_tab.get()==4 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(4)>
                                         {move || t(&lang.get(), "tab_settings")}
                                         {move || {
                                             let unread = notices.get().iter()
@@ -1842,7 +1861,7 @@ fn App() -> impl IntoView {
                                 </button>
                                 <button class=move || if active_tab.get()==2 {"tab active"} else {"tab"}
                                     on:click=move |_| active_tab.set(2)>
-                                    {move || t(&lang.get(), "tab_promises")}
+                                    "Activity"
                                 </button>
                                 <button class=move || {
                                     if active_tab.get()==3 {"tab active"} else {"tab"}
@@ -1872,11 +1891,11 @@ fn App() -> impl IntoView {
                     <div class=if desktop { "main-body" } else { "" }>
                         {move || {
                             let tab = active_tab.get();
-                            let settings_tab: u8 = if desktop { 6 } else { 3 };
+                            let settings_tab: u8 = if desktop { 4 } else { 3 };
                             match tab {
-                                // Tab 0: Receive (was part of AccountPanel)
+                                // Tab 0: Receive
                                 0 => view! {
-                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal />
+                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal />
                                 }.into_any(),
                                 // Tab 1: Send (Simple or Cascade on desktop)
                                 1 => view! {
@@ -1904,23 +1923,44 @@ fn App() -> impl IntoView {
                                         view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
                                     }}
                                 }.into_any(),
-                                // Tab 2: Promises (incoming only — node auto-delivers)
+                                // Tab 2: Activity (History/Promises/Open sub-tabs)
                                 2 => view! {
-                                    <PromisesPanel info=info lang=lang />
+                                    // Sub-tab pill buttons
+                                    <div style="display:flex;gap:6px;margin-bottom:14px">
+                                        <button
+                                            class=move || if activity_sub.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                                            on:click=move |_| activity_sub.set(0)>
+                                            "History"
+                                        </button>
+                                        <button
+                                            class=move || if activity_sub.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                                            on:click=move |_| activity_sub.set(1)>
+                                            "Promises"
+                                        </button>
+                                        <button
+                                            class=move || if activity_sub.get()==2 { "send-mode-btn active" } else { "send-mode-btn" }
+                                            on:click=move |_| activity_sub.set(2)>
+                                            "Open"
+                                        </button>
+                                    </div>
+                                    // Sub-tab content
+                                    {move || match activity_sub.get() {
+                                        0 => view! {
+                                            <HistoryPanel info=info email_locks=email_locks on_email_check=check_email />
+                                        }.into_any(),
+                                        1 => view! {
+                                            <PromisesPanel info=info lang=lang />
+                                        }.into_any(),
+                                        _ => view! {
+                                            <OpenPanel info=info lang=lang />
+                                        }.into_any(),
+                                    }}
                                 }.into_any(),
                                 // Tab 3: Request (desktop only) OR Settings (mobile)
                                 3 if desktop => view! {
                                     <RequestPanel info=info lang=lang />
                                 }.into_any(),
-                                // Tab 4: History (desktop only)
-                                4 if desktop => view! {
-                                    <HistoryPanel info=info email_locks=email_locks on_email_check=check_email />
-                                }.into_any(),
-                                // Tab 5: Contacts (desktop only)
-                                5 if desktop => view! {
-                                    <ContactsPanel lang=lang active_tab=active_tab email_prefill_from_contact=email_prefill_from_contact />
-                                }.into_any(),
-                                // Settings tab (3 on mobile, 6 on desktop)
+                                // Settings tab (3 on mobile, 4 on desktop)
                                 _ if tab == settings_tab => view! {
                                     <SettingsPanel
                                         online=online
@@ -2391,7 +2431,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.3.7"
+                    "ChronX Wallet v2.4.0"
                 </p>
             </div>
         </div>
@@ -2692,6 +2732,7 @@ fn AccountPanel(
     on_refresh: impl Fn(web_sys::MouseEvent) + 'static,
     pending_email_chronos: RwSignal<u64>,
     active_tab: RwSignal<u8>,
+    activity_sub: RwSignal<u8>,
     deep_link_code: RwSignal<String>,
     lang: RwSignal<String>,
     avatar_url: RwSignal<String>,
@@ -3620,7 +3661,7 @@ fn AccountPanel(
                                 " "
                                 <a href="#" style="color:#d4a84b;text-decoration:underline;cursor:pointer" on:click=move |ev| {
                                     ev.prevent_default();
-                                    active_tab.set(2); // navigate to Promises
+                                    active_tab.set(2); activity_sub.set(1); // navigate to Promises
                                 }>{t(&lang.get(), "view_promises")}</a>
                             </p>
                         }.into_any()
@@ -4058,8 +4099,9 @@ fn SendPanel(
                     &serde_json::json!({ "to": to, "amountKx": amt })
                 ).unwrap_or(no_args());
                 match call::<String>("send_transfer", args).await {
-                    Ok(txid) => {
-                        msg.set(format!("Sent! TxId: {}", &txid[..16.min(txid.len())]));
+                    Ok(_txid) => {
+                        let truncated = if to.len() > 16 { format!("{}...{}", &to[..6], &to[to.len()-6..]) } else { to.clone() };
+                        msg.set(format!("\u{2705} Sent!\n{} KX sent to {}.", amt, truncated));
                         to_addr.set(String::new());
                         amount.set(String::new());
                         // Poll until node confirms
@@ -4217,7 +4259,19 @@ fn SendPanel(
                             "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         match call::<()>("notify_email_recipient", notify_args).await {
-                            Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                            Ok(_) => {
+                                if unlock_unix == 0 {
+                                    msg.set(format!("\u{2705} Delivered!\n{email_str} has been notified.\nThey have 72 hours to claim their KX.\nClaim code: {claim_code}"));
+                                } else {
+                                    let dt = {
+                                        let d = js_sys::Date::new_0();
+                                        d.set_time((unlock_unix as f64) * 1000.0);
+                                        d.to_date_string().as_string().unwrap_or_else(|| "the unlock date".to_string())
+                                    };
+                                    msg.set(format!("\u{2705} Promise created!\n{email_str} has been notified.\nThey'll receive a claim email when it unlocks on {dt}."));
+                                }
+                                spam_warn.set(true);
+                            }
                             Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                         }
                         // If this send was triggered by a poke PAY NOW, confirm payment
@@ -4361,8 +4415,8 @@ fn SendPanel(
                                 "claimCode": claim_code.clone(),
                             })).unwrap_or(no_args());
                             match call::<()>("notify_email_recipient", notify_args).await {
-                                Ok(_) => { msg.set(format!("Series sent! {count} promises created. Claim code: {claim_code}")); spam_warn.set(true); }
-                                Err(_) => { msg.set(format!("Series on-chain! Email failed \u{2014} claim code: {claim_code}")); }
+                                Ok(_) => { msg.set(format!("\u{2705} Series created!\n{count} promises sent. {email_str} has been notified.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                                Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Series on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
                             // Poll for balance update
                             let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
@@ -5724,8 +5778,8 @@ fn CascadeSendPanel(
                         "claimCode": claim_code.clone(),
                     })).unwrap_or(no_args());
                     match call::<()>("notify_email_recipient", notify_args).await {
-                        Ok(_) => { msg.set(format!("Cascade sent! {count} stages created.\nClaim code: {claim_code}")); spam_warn.set(true); }
-                        Err(_) => { msg.set(format!("Cascade on-chain! Email failed.\nClaim code: {claim_code}")); }
+                        Ok(_) => { msg.set(format!("\u{2705} Cascade created!\n{count} stages sent. Recipient has been notified.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                        Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Cascade on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                     }
                     email.set(String::new());
                     memo.set(String::new());
@@ -6822,6 +6876,330 @@ fn ContactsPanel(
                 </div>
             }.into_any()
         } else { view! { <span></span> }.into_any() }}
+    }
+}
+
+// ── OpenPanel ─────────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct OpenItem {
+    id: String,
+    item_type: String,      // "invoice", "poke", "kxgo", "credit", "deposit", "checkin", "misai"
+    icon: &'static str,
+    badge_label: String,
+    badge_color: String,
+    description: String,
+    amount_kx: Option<f64>,
+    time_label: String,
+    can_dismiss: bool,
+    dismiss_tooltip: Option<String>,
+    sort_time: i64,         // for sorting
+}
+
+#[component]
+fn OpenPanel(
+    info: RwSignal<Option<AccountInfo>>,
+    lang: RwSignal<String>,
+) -> impl IntoView {
+    let _ = &lang;
+    let items = RwSignal::new(Vec::<OpenItem>::new());
+    let loading = RwSignal::new(true);
+    let sort_by = RwSignal::new("expiring".to_string()); // "recent", "amount", "type", "expiring"
+    let dismiss_target = RwSignal::new(Option::<OpenItem>::None);
+    let dismiss_busy = RwSignal::new(false);
+
+    // Load items
+    let load = move || {
+        spawn_local(async move {
+            loading.set(true);
+            let mut all = Vec::<OpenItem>::new();
+
+            // 1. Commitments (TYPE V/C/Y)
+            if let Ok(commits) = call::<Vec<CommitmentInfo>>("get_commitments", no_args()).await {
+                for c in commits {
+                    let (icon, badge, color, can_dismiss, tooltip) = match c.commitment_type.as_str() {
+                        "TYPE_V" | "kxgo" => ("\u{1f3ae}", "KXGO".to_string(), "#7c3aed".to_string(), true, None),
+                        "TYPE_C" | "credit" => ("\u{1f91d}", "CREDIT".to_string(), "#22c55e".to_string(), true, None),
+                        "TYPE_Y" | "deposit" => ("\u{1f4cb}", "DEPOSIT".to_string(), "#6b7280".to_string(), true, None),
+                        "sign_of_life" | "checkin" => ("\u{2764}\u{fe0f}", "CHECK-IN".to_string(), "#ef4444".to_string(), false, Some("Promise Check-in cannot be dismissed".to_string())),
+                        "misai" => ("\u{1f916}", "MISAI".to_string(), "#d4a84b".to_string(), false, Some("AI management active".to_string())),
+                        _ => ("\u{1f4cb}", c.commitment_type.clone(), "#6b7280".to_string(), true, None),
+                    };
+                    all.push(OpenItem {
+                        id: c.commitment_id.clone(),
+                        item_type: c.commitment_type.clone(),
+                        icon,
+                        badge_label: badge,
+                        badge_color: color,
+                        description: format!("{} — {}", c.commitment_type, c.status),
+                        amount_kx: None,
+                        time_label: c.status.clone(),
+                        can_dismiss,
+                        dismiss_tooltip: tooltip,
+                        sort_time: 0,
+                    });
+                }
+            }
+
+            // 2. Pending invoices
+            if let Ok(invs) = call::<Vec<InvoiceRecord>>("get_pending_invoices", no_args()).await {
+                for inv in invs {
+                    all.push(OpenItem {
+                        id: inv.invoice_id.clone(),
+                        item_type: "invoice".to_string(),
+                        icon: "\u{1f4c4}",
+                        badge_label: "INVOICE".to_string(),
+                        badge_color: "#d4a84b".to_string(),
+                        description: if inv.from_display.is_empty() {
+                            format!("From {}", &inv.from_wallet[..8.min(inv.from_wallet.len())])
+                        } else {
+                            format!("From {}", inv.from_display)
+                        },
+                        amount_kx: Some(inv.amount_kx),
+                        time_label: inv.memo.clone().unwrap_or_default(),
+                        can_dismiss: true,
+                        dismiss_tooltip: None,
+                        sort_time: inv.created_at as i64,
+                    });
+                }
+            }
+
+            // 3. Pending pokes
+            if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+                let blocked = call::<Vec<String>>("get_blocked_senders", no_args()).await.unwrap_or_default();
+                for em in &emails {
+                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
+                    if let Ok(pokes) = call::<Vec<PendingPoke>>("get_pending_pokes", args).await {
+                        for p in pokes {
+                            let sender = p.from_email.as_deref().unwrap_or("").to_lowercase();
+                            if !sender.is_empty() && blocked.iter().any(|b| b.to_lowercase() == sender) {
+                                continue;
+                            }
+                            all.push(OpenItem {
+                                id: p.request_id.clone(),
+                                item_type: "poke".to_string(),
+                                icon: "\u{1f44b}",
+                                badge_label: "REQUEST".to_string(),
+                                badge_color: "#3b82f6".to_string(),
+                                description: format!("From {}", p.from_email.as_deref().unwrap_or("unknown")),
+                                amount_kx: p.amount_kx.parse::<f64>().ok(),
+                                time_label: p.note.clone().unwrap_or_default(),
+                                can_dismiss: true,
+                                dismiss_tooltip: None,
+                                sort_time: 0,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // 4. Sign of life / Promise check-in
+            if let Ok(sol) = call::<SignOfLifeStatus>("get_sign_of_life_status", no_args()).await {
+                if sol.locks_count > 0 {
+                    let due_label = sol.next_due.map(|ts| {
+                        let d = js_sys::Date::new_0();
+                        d.set_time((ts as f64) * 1000.0);
+                        format!("Next check-in: {}", d.to_date_string().as_string().unwrap_or_else(|| "unknown".to_string()))
+                    }).unwrap_or_else(|| format!("{} promises require check-in", sol.locks_count));
+                    all.push(OpenItem {
+                        id: "sign-of-life".to_string(),
+                        item_type: "checkin".to_string(),
+                        icon: "\u{2764}\u{fe0f}",
+                        badge_label: "CHECK-IN".to_string(),
+                        badge_color: "#ef4444".to_string(),
+                        description: due_label,
+                        amount_kx: None,
+                        time_label: format!("{} promises", sol.locks_count),
+                        can_dismiss: false,
+                        dismiss_tooltip: Some("Promise Check-in cannot be dismissed".to_string()),
+                        sort_time: sol.next_due.unwrap_or(i64::MAX),
+                    });
+                }
+            }
+
+            items.set(all);
+            loading.set(false);
+        });
+    };
+
+    Effect::new(move |_| {
+        let _ = info.get(); // reload when info changes
+        load();
+    });
+
+    view! {
+        <div>
+            // Sort dropdown
+            <div style="display:flex;justify-content:flex-end;margin-bottom:10px;align-items:center;gap:6px">
+                <span style="font-size:12px;color:#888">"Sort:"</span>
+                <select
+                    style="background:#1a1a2e;color:#e5e7eb;border:1px solid #333;border-radius:6px;padding:4px 8px;font-size:12px"
+                    on:change=move |ev| sort_by.set(event_target_value(&ev))
+                    prop:value=move || sort_by.get()
+                >
+                    <option value="expiring">"Expiring Soon"</option>
+                    <option value="recent">"Recent"</option>
+                    <option value="amount">"Amount"</option>
+                    <option value="type">"Type"</option>
+                </select>
+            </div>
+
+            {move || {
+                if loading.get() {
+                    return view! { <p class="muted" style="text-align:center;padding:20px">"Loading\u{2026}"</p> }.into_any();
+                }
+                let mut list = items.get();
+                if list.is_empty() {
+                    return view! {
+                        <div style="text-align:center;padding:40px 20px;color:#666">
+                            <p style="font-size:32px;margin-bottom:8px">{"\u{2713}"}</p>
+                            <p style="font-size:14px">"Nothing open \u{2014} you're all clear"</p>
+                        </div>
+                    }.into_any();
+                }
+
+                // Sort
+                let sort = sort_by.get();
+                match sort.as_str() {
+                    "recent" => list.sort_by(|a, b| b.sort_time.cmp(&a.sort_time)),
+                    "amount" => list.sort_by(|a, b| {
+                        let aa = a.amount_kx.unwrap_or(0.0);
+                        let bb = b.amount_kx.unwrap_or(0.0);
+                        bb.partial_cmp(&aa).unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    "type" => list.sort_by(|a, b| a.item_type.cmp(&b.item_type)),
+                    _ => list.sort_by(|a, b| {
+                        let at = if a.sort_time == 0 { i64::MAX } else { a.sort_time };
+                        let bt = if b.sort_time == 0 { i64::MAX } else { b.sort_time };
+                        at.cmp(&bt)
+                    }),
+                }
+
+                view! {
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                        {list.into_iter().map(|item| {
+                            let item_c = item.clone();
+                            let badge_style = format!("display:inline-block;padding:2px 8px;border-radius:4px;background:{};color:white;font-size:10px;font-weight:700", item.badge_color);
+                            view! {
+                                <div class="card" style="padding:12px;display:flex;align-items:flex-start;gap:10px">
+                                    <span style="font-size:20px;flex-shrink:0;line-height:1">{item.icon}</span>
+                                    <div style="flex:1;min-width:0">
+                                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+                                            <span style=badge_style>{item.badge_label.clone()}</span>
+                                        </div>
+                                        <p style="font-size:13px;color:#e5e7eb;margin:0 0 2px;word-break:break-word">{item.description.clone()}</p>
+                                        <div style="display:flex;gap:8px;font-size:11px;color:#888">
+                                            {if let Some(amt) = item.amount_kx {
+                                                view! { <span style="color:#d4a84b;font-weight:700">{format!("{:.2} KX", amt)}</span> }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                            {if !item.time_label.is_empty() {
+                                                view! { <span>{item.time_label.clone()}</span> }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                        </div>
+                                    </div>
+                                    // Dismiss button or lock icon
+                                    {if item.can_dismiss {
+                                        let ic = item_c.clone();
+                                        view! {
+                                            <button
+                                                style="background:none;border:1px solid #333;color:#888;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center"
+                                                on:click=move |_| dismiss_target.set(Some(ic.clone()))
+                                            >"\u{00d7}"</button>
+                                        }.into_any()
+                                    } else {
+                                        let tip = item.dismiss_tooltip.clone().unwrap_or_default();
+                                        view! {
+                                            <span style="color:#555;font-size:14px;flex-shrink:0" title=tip>"\u{1f512}"</span>
+                                        }.into_any()
+                                    }}
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                }.into_any()
+            }}
+
+            // Dismiss confirmation modal
+            {move || if let Some(item) = dismiss_target.get() {
+                let (title, body, btn_label) = match item.item_type.as_str() {
+                    "invoice" => (
+                        "Decline Invoice",
+                        format!("Decline this invoice from {}?\nThey will be notified by email.", item.description),
+                        "Decline Invoice",
+                    ),
+                    "poke" => (
+                        "Decline Request",
+                        format!("Decline payment request from {}?", item.description),
+                        "Decline",
+                    ),
+                    "TYPE_V" | "kxgo" => (
+                        "Close Game Session",
+                        "Close this game session? KX will be returned to your wallet.".to_string(),
+                        "Yes, close session",
+                    ),
+                    "TYPE_C" | "credit" => (
+                        "Revoke Credit Line",
+                        "Revoke this credit line?\nAny KX already drawn cannot be recalled.\nFuture draws will be blocked immediately.".to_string(),
+                        "Revoke Credit Line",
+                    ),
+                    _ => (
+                        "Dismiss",
+                        format!("Dismiss this {}?", item.badge_label),
+                        "Confirm",
+                    ),
+                };
+                let item_id = item.id.clone();
+                let item_type = item.item_type.clone();
+                view! {
+                    <div class="modal-overlay" on:click=move |_| dismiss_target.set(None)>
+                        <div class="modal-card" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                            <p class="modal-title">{title}</p>
+                            <p class="muted" style="white-space:pre-line;word-break:break-word;margin-bottom:12px">{body}</p>
+                            <div style="display:flex;gap:8px">
+                                <button style="flex:1" on:click=move |_| dismiss_target.set(None)>"Cancel"</button>
+                                <button class="btn-danger" style="flex:1"
+                                    disabled=move || dismiss_busy.get()
+                                    on:click={
+                                        let iid = item_id.clone();
+                                        let itype = item_type.clone();
+                                        move |_| {
+                                            let iid = iid.clone();
+                                            let itype = itype.clone();
+                                            dismiss_busy.set(true);
+                                            spawn_local(async move {
+                                                let result = match itype.as_str() {
+                                                    "invoice" => {
+                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "invoiceId": iid })).unwrap_or(no_args());
+                                                        call::<()>("reject_invoice", args).await.map(|_| ())
+                                                    }
+                                                    "poke" => {
+                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "requestId": iid })).unwrap_or(no_args());
+                                                        call::<()>("decline_poke", args).await.map(|_| ())
+                                                    }
+                                                    "TYPE_V" | "kxgo" | "TYPE_C" | "credit" | "TYPE_Y" | "deposit" => {
+                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "commitmentId": iid, "commitmentType": itype })).unwrap_or(no_args());
+                                                        call::<String>("cancel_commitment", args).await.map(|_| ())
+                                                    }
+                                                    _ => Ok(()),
+                                                };
+                                                let _ = result;
+                                                dismiss_target.set(None);
+                                                dismiss_busy.set(false);
+                                                load();
+                                            });
+                                        }
+                                    }
+                                >{move || if dismiss_busy.get() { "\u{2026}" } else { btn_label }}</button>
+                            </div>
+                        </div>
+                    </div>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
+        </div>
     }
 }
 

@@ -164,6 +164,9 @@ pub fn run() {
             commands::authenticate_biometric,
             commands::reset_pin_with_mnemonic,
             commands::reset_pin_with_key,
+            // v2.4.0 — Invoice rejection
+            commands::get_pending_invoices,
+            commands::reject_invoice,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

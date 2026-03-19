@@ -3702,3 +3702,28 @@ pub async fn cancel_commitment(_app: AppHandle, _commitment_id: String, _commitm
 pub async fn fulfill_invoice(_app: AppHandle, _invoice_id_hex: String) -> Result<String, String> {
     Err("Invoices not yet available in current node version".to_string())
 }
+
+// v2.4.0 — Pending invoices + reject
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InvoiceRecord {
+    pub invoice_id: String,
+    pub from_wallet: String,
+    pub from_display: String,
+    pub amount_kx: f64,
+    pub created_at: u64,
+    pub expires_at: Option<u64>,
+    pub memo: Option<String>,
+}
+
+/// Returns pending invoices where this wallet is recipient (stub — node v9.0 doesn't expose yet).
+#[tauri::command]
+pub async fn get_pending_invoices(_app: AppHandle) -> Result<Vec<InvoiceRecord>, String> {
+    Ok(vec![])
+}
+
+/// Reject an invoice sent to this wallet (stub — awaiting RejectInvoice action on node).
+#[tauri::command]
+pub async fn reject_invoice(_app: AppHandle, _invoice_id: String) -> Result<(), String> {
+    Err("Invoice rejection not yet available in current node version".to_string())
+}

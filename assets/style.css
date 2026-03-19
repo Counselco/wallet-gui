@@ -120,6 +120,8 @@ header {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .setup-card {
@@ -347,8 +349,10 @@ input[type="datetime-local"] { color-scheme: dark; }
 .msg {
     font-size: 12px;
     font-family: 'Consolas', 'Monaco', monospace;
-    word-break: break-all;
+    word-break: break-word;
+    overflow-wrap: break-word;
     white-space: pre-line;
+    hyphens: auto;
     line-height: 1.5;
     padding: 8px 10px;
     border-radius: 6px;
@@ -652,6 +656,9 @@ input[type="datetime-local"] { color-scheme: dark; }
     display: flex;
     flex-direction: column;
     gap: 6px;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    hyphens: auto;
 }
 
 .modal-link {
@@ -997,7 +1004,7 @@ input[type="datetime-local"] { color-scheme: dark; }
 }
 .danger-btn:hover { background: #c0392b; }
 .danger-btn:disabled { opacity: 0.5; cursor: default; }
-.modal-body { color: #9ca3af; font-size: 13px; line-height: 1.5; }
+.modal-body { color: #9ca3af; font-size: 13px; line-height: 1.5; word-break: break-word; overflow-wrap: break-word; }
 
 /* ── Exchange link ──────────────────────────────────────────────────────────── */
 .exchange-link { color: #556677; font-size: 12px; text-decoration: none; }
