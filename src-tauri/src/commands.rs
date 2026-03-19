@@ -1447,42 +1447,29 @@ pub async fn set_auth_method(app: AppHandle, method: String) -> Result<(), Strin
     write_config(&app, &cfg)
 }
 
-/// Authenticate via platform biometric.
-/// Desktop (Windows): Windows Hello via PowerShell UserConsentVerifier.
-/// Mobile: uses tauri-plugin-biometric (handled separately).
+/// Authenticate via platform biometric (Windows Hello).
 #[tauri::command]
 pub async fn authenticate_biometric(app: AppHandle) -> Result<bool, String> {
     let _ = &app;
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let output = std::process::Command::new("powershell")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args([
-                "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
-                r#"
-try {
-    Add-Type -AssemblyName 'Windows.Security.Credentials.UI'
-    $avail = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::CheckAvailabilityAsync().GetAwaiter().GetResult()
-    if ($avail -ne [Windows.Security.Credentials.UI.UserConsentVerifierAvailability]::Available) {
-        Write-Output 'NOT_AVAILABLE'
-        exit
-    }
-    $result = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::RequestVerificationAsync('Unlock ChronX Wallet').GetAwaiter().GetResult()
-    if ($result -eq [Windows.Security.Credentials.UI.UserConsentVerificationResult]::Verified) { Write-Output 'VERIFIED' } else { Write-Output 'FAILED' }
-} catch {
-    Write-Output 'ERROR'
-}
-"#,
-            ])
-            .output()
-            .map_err(|e| format!("Failed to launch Windows Hello: {e}"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        match stdout.as_str() {
-            "VERIFIED" => return Ok(true),
-            "NOT_AVAILABLE" => return Err("Windows Hello is not configured on this device. Please set it up in Windows Settings first.".to_string()),
-            _ => return Err("Biometric authentication failed or cancelled".to_string()),
+        use windows::Security::Credentials::UI::{
+            UserConsentVerifier, UserConsentVerificationResult,
+        };
+        let op = UserConsentVerifier::RequestVerificationAsync(
+            &windows::core::HSTRING::from("Unlock ChronX Wallet"),
+        ).map_err(|e| format!("Windows Hello unavailable: {e}"))?;
+        let result = op.get().map_err(|e| format!("Windows Hello error: {e}"))?;
+        match result {
+            UserConsentVerificationResult::Verified => Ok(true),
+            UserConsentVerificationResult::Canceled => Ok(false),
+            UserConsentVerificationResult::DeviceNotPresent =>
+                Err("Windows Hello not available on this device".to_string()),
+            UserConsentVerificationResult::NotConfiguredForUser =>
+                Err("Please set up Windows Hello in Windows Settings (Settings \u{2192} Accounts \u{2192} Sign-in options) first.".to_string()),
+            UserConsentVerificationResult::DisabledByPolicy =>
+                Err("Windows Hello disabled by policy".to_string()),
+            _ => Ok(false),
         }
     }
     #[cfg(not(windows))]
@@ -1497,26 +1484,23 @@ pub async fn check_biometric_available(app: AppHandle) -> String {
     let _ = &app;
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let output = std::process::Command::new("powershell")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args([
-                "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
-                r#"
-try {
-    Add-Type -AssemblyName 'Windows.Security.Credentials.UI'
-    $avail = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::CheckAvailabilityAsync().GetAwaiter().GetResult()
-    if ($avail -eq [Windows.Security.Credentials.UI.UserConsentVerifierAvailability]::Available) { Write-Output 'available' }
-    elseif ($avail -eq [Windows.Security.Credentials.UI.UserConsentVerifierAvailability]::DeviceNotPresent) { Write-Output 'not_supported' }
-    else { Write-Output 'not_configured' }
-} catch { Write-Output 'not_supported' }
-"#,
-            ])
-            .output();
-        match output {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-            Err(_) => "not_supported".to_string(),
+        use windows::Security::Credentials::UI::{
+            UserConsentVerifier, UserConsentVerifierAvailability,
+        };
+        let op = match UserConsentVerifier::CheckAvailabilityAsync() {
+            Ok(op) => op,
+            Err(_) => return "available".to_string(), // fallback: let auth attempt decide
+        };
+        match op.get() {
+            Ok(avail) => match avail {
+                UserConsentVerifierAvailability::Available => "available".to_string(),
+                UserConsentVerifierAvailability::DeviceBusy => "available".to_string(),
+                UserConsentVerifierAvailability::DeviceNotPresent => "not_supported".to_string(),
+                UserConsentVerifierAvailability::NotConfiguredForUser => "not_configured".to_string(),
+                UserConsentVerifierAvailability::DisabledByPolicy => "not_supported".to_string(),
+                _ => "available".to_string(), // permissive fallback
+            },
+            Err(_) => "available".to_string(), // fallback: let auth attempt decide
         }
     }
     #[cfg(not(windows))]

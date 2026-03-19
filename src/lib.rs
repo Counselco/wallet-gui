@@ -2477,7 +2477,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.1"
+                    "ChronX Wallet v2.4.2"
                 </p>
             </div>
         </div>
@@ -9314,7 +9314,7 @@ fn SettingsPanel(
                         });
                     };
                     view! {
-                        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+                        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin-bottom:12px">
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb">
                                 <input type="radio" name="req_perm" prop:checked=move || rp.get() == "anyone"
                                     on:change=move |_| set_perm("anyone") style="accent-color:#d4a84b" />
