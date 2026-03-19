@@ -1303,8 +1303,12 @@ pub async fn generate_wallet_with_mnemonic(app: AppHandle, force: Option<bool>) 
     std::fs::write(&path, json).map_err(|e| format!("Writing wallet: {e}"))?;
 
     // Store mnemonic in config for later retrieval from Settings
+    // Clear email registration so the new wallet doesn't inherit the old one
     let mut cfg = read_config(&app);
     cfg.mnemonic_phrase = Some(phrase.clone());
+    cfg.claim_email = None;
+    cfg.claim_emails = None;
+    cfg.verified_emails = None;
     let _ = write_config(&app, &cfg);
 
     Ok(serde_json::json!({

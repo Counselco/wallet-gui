@@ -9508,6 +9508,13 @@ fn SettingsPanel(
                                                 "\u{2705} New wallet created!"
                                             </p>
                                         </div>
+                                        <div style="background:#2a2010;border:1px solid #daa520;border-radius:8px;padding:12px;margin-bottom:12px">
+                                            <p style="color:#daa520;font-weight:700;font-size:13px">
+                                                "\u{26a0}\u{fe0f} Important: Your email is no longer registered \
+                                                 to this wallet. Go to Settings \u{2192} My Emails to \
+                                                 re-register your email for automatic KX delivery."
+                                            </p>
+                                        </div>
                                         <p class="label" style="margin-bottom:8px">"Write down these 24 words:"</p>
                                         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 12px;\
                                                     background:#1a1a2e;border:1px solid #333;border-radius:8px;\
