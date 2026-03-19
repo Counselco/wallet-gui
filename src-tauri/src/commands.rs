@@ -127,6 +127,9 @@ struct WalletConfig {
     /// via generate_wallet_with_mnemonic so it can be viewed again from Settings.
     #[serde(default)]
     mnemonic_phrase: Option<String>,
+    /// Authentication method: "pin" (default) or "biometric".
+    #[serde(default)]
+    auth_method: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -154,6 +157,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             base_address_nickname: None,
             base_addresses: None,
             mnemonic_phrase: None,
+            auth_method: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -1406,6 +1410,105 @@ pub async fn set_pin_length(app: AppHandle, length: u8) -> Result<(), String> {
     let mut cfg = read_config(&app);
     cfg.pin_length = Some(length);
     write_config(&app, &cfg)
+}
+
+// ── Auth method (PIN / Biometric) ─────────────────────────────────────────────
+
+/// Returns the configured authentication method: "pin" (default) or "biometric".
+#[tauri::command]
+pub async fn get_auth_method(app: AppHandle) -> String {
+    read_config(&app).auth_method.unwrap_or_else(|| "pin".to_string())
+}
+
+/// Set authentication method to "pin" or "biometric".
+#[tauri::command]
+pub async fn set_auth_method(app: AppHandle, method: String) -> Result<(), String> {
+    if method != "pin" && method != "biometric" {
+        return Err("Method must be 'pin' or 'biometric'".to_string());
+    }
+    let mut cfg = read_config(&app);
+    cfg.auth_method = Some(method);
+    write_config(&app, &cfg)
+}
+
+/// Authenticate via platform biometric.
+/// Desktop (Windows): Windows Hello via native API.
+/// Mobile: uses tauri-plugin-biometric (handled separately).
+#[tauri::command]
+pub async fn authenticate_biometric(app: AppHandle) -> Result<bool, String> {
+    let _ = &app;
+    #[cfg(windows)]
+    {
+        // Windows Hello — attempt via PowerShell UserConsentVerifier
+        let output = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile", "-NonInteractive", "-Command",
+                r#"
+Add-Type -AssemblyName 'Windows.Security.Credentials.UI'
+$result = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::RequestVerificationAsync('Unlock ChronX Wallet').GetAwaiter().GetResult()
+if ($result -eq [Windows.Security.Credentials.UI.UserConsentVerificationResult]::Verified) { Write-Output 'VERIFIED' } else { Write-Output 'FAILED' }
+"#,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to launch Windows Hello: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.trim() == "VERIFIED" {
+            return Ok(true);
+        }
+        return Err("Biometric authentication failed or cancelled".to_string());
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Biometric authentication not available on this platform".to_string())
+    }
+}
+
+/// Reset PIN by verifying the wallet's mnemonic seed phrase.
+/// If the mnemonic produces the same wallet address, clears the PIN.
+#[tauri::command]
+pub async fn reset_pin_with_mnemonic(app: AppHandle, words: String) -> Result<String, String> {
+    let current_kp = load_keypair(&app)?;
+    let current_addr = current_kp.account_id.to_b58();
+
+    let mnemonic = bip39::Mnemonic::parse(words.trim())
+        .map_err(|_| "Invalid seed phrase. Please check your 24 words.".to_string())?;
+    let seed = mnemonic.to_seed("");
+    let mut seed32 = [0u8; 32];
+    seed32.copy_from_slice(&seed[..32]);
+    let restored_kp = keypair_from_seed(&seed32)?;
+
+    if restored_kp.account_id.to_b58() != current_addr {
+        return Err("Words don't match wallet".to_string());
+    }
+
+    let mut cfg = read_config(&app);
+    cfg.pin_hash = None;
+    write_config(&app, &cfg)?;
+    Ok("ok".to_string())
+}
+
+/// Reset PIN by verifying the wallet's raw private key (base64).
+/// If the key restores to the same wallet address, clears the PIN.
+#[tauri::command]
+pub async fn reset_pin_with_key(app: AppHandle, key: String) -> Result<String, String> {
+    let current_kp = load_keypair(&app)?;
+    let current_addr = current_kp.account_id.to_b58();
+
+    let trimmed = key.trim().trim_start_matches('\u{FEFF}');
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(trimmed)
+        .map_err(|e| format!("Invalid key format: {e}"))?;
+    let restored_kp: KeyPair = serde_json::from_slice(&bytes)
+        .map_err(|_| "Invalid key — not a valid wallet backup".to_string())?;
+
+    if restored_kp.account_id.to_b58() != current_addr {
+        return Err("Key doesn't match wallet".to_string());
+    }
+
+    let mut cfg = read_config(&app);
+    cfg.pin_hash = None;
+    write_config(&app, &cfg)?;
+    Ok("ok".to_string())
 }
 
 // ── Cold storage ──────────────────────────────────────────────────────────────

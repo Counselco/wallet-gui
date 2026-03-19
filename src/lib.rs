@@ -1182,6 +1182,16 @@ fn App() -> impl IntoView {
     let pin_first       = RwSignal::new(String::new()); // saved during PinConfirm
     let countdown       = RwSignal::new(0u32);
 
+    // Forgot PIN state
+    let show_forgot_pin     = RwSignal::new(false);
+    let forgot_input        = RwSignal::new(String::new());
+    let forgot_msg          = RwSignal::new(String::new());
+    let forgot_busy         = RwSignal::new(false);
+    let forgot_use_raw_key  = RwSignal::new(false);
+    // Biometric auto-trigger state
+    let bio_attempted       = RwSignal::new(false);
+    let bio_show_pin        = RwSignal::new(false);
+
     // ── Load wallet data after PIN unlock ─────────────────────────────────────
 
     async fn load_wallet(
@@ -1556,6 +1566,42 @@ fn App() -> impl IntoView {
         }
     };
 
+    // ── Biometric unlock listener ────────────────────────────────────────────
+    // When PinScreen sets pin_msg to "biometric_ok", unlock the wallet.
+    Effect::new(move |_| {
+        if pin_msg.get() == "biometric_ok" && app_phase.get() == AppPhase::PinUnlock {
+            pin_msg.set(String::new());
+            spawn_local(async move {
+                pin_attempts.set(0);
+                pin_digits.set(String::new());
+                app_phase.set(AppPhase::Wallet);
+                load_wallet(online, loading, info, err_msg).await;
+                check_email();
+                // Poke count fetch
+                {
+                    let blocked = call::<Vec<String>>("get_blocked_senders", no_args()).await.unwrap_or_default();
+                    if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
+                        let mut total = 0usize;
+                        for em in &emails {
+                            let pa = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
+                            if let Ok(pokes) = call::<Vec<PendingPoke>>("get_pending_pokes", pa).await {
+                                total += pokes.iter().filter(|p| {
+                                    let sender = p.from_email.as_deref().unwrap_or("").to_lowercase();
+                                    sender.is_empty() || !blocked.iter().any(|b| b.to_lowercase() == sender)
+                                }).count();
+                            }
+                        }
+                        poke_count.set(total);
+                    }
+                }
+                // Deep link check
+                if let Ok(Some(url)) = call::<Option<String>>("get_launch_deep_link", no_args()).await {
+                    route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
+                }
+            });
+        }
+    });
+
     // ── View ──────────────────────────────────────────────────────────────────
 
     view! {
@@ -1660,6 +1706,13 @@ fn App() -> impl IntoView {
                     countdown=countdown
                     pin_len=pin_len.get()
                     on_submit=handle_pin
+                    show_forgot_pin=show_forgot_pin
+                    forgot_input=forgot_input
+                    forgot_msg=forgot_msg
+                    forgot_busy=forgot_busy
+                    forgot_use_raw_key=forgot_use_raw_key
+                    bio_attempted=bio_attempted
+                    bio_show_pin=bio_show_pin
                 />
             }.into_any(),
 
@@ -2214,6 +2267,15 @@ fn PinScreen(
     countdown: RwSignal<u32>,
     #[prop(default = 4)] pin_len: u8,
     on_submit: impl Fn(String) + Clone + Send + 'static,
+    // Forgot PIN props
+    show_forgot_pin: RwSignal<bool>,
+    forgot_input: RwSignal<String>,
+    forgot_msg: RwSignal<String>,
+    forgot_busy: RwSignal<bool>,
+    forgot_use_raw_key: RwSignal<bool>,
+    // Biometric props
+    bio_attempted: RwSignal<bool>,
+    bio_show_pin: RwSignal<bool>,
 ) -> impl IntoView {
     let target_len = pin_len as usize;
     let on_submit_auto = on_submit.clone();
@@ -2226,6 +2288,31 @@ fn PinScreen(
             let captured = d.clone();
             pin_digits.set(String::new()); // clearing triggers PinInput auto-focus
             on_submit_auto(captured);
+        }
+    });
+
+    // Biometric auto-trigger on mount (PinUnlock only)
+    Effect::new(move |_| {
+        if phase.get() == AppPhase::PinUnlock && !bio_attempted.get() {
+            bio_attempted.set(true);
+            spawn_local(async move {
+                let method = call::<String>("get_auth_method", no_args()).await.unwrap_or_else(|_| "pin".to_string());
+                if method == "biometric" {
+                    match call::<bool>("authenticate_biometric", no_args()).await {
+                        Ok(true) => {
+                            // Success — emit a synthetic "biometric-unlock" event
+                            // The parent handles unlock via bio_show_pin signal
+                            bio_show_pin.set(false); // biometric succeeded, no need for PIN
+                            pin_msg.set("biometric_ok".to_string()); // signal to parent
+                        }
+                        _ => {
+                            bio_show_pin.set(true); // show PIN pad as fallback
+                        }
+                    }
+                } else {
+                    bio_show_pin.set(true); // PIN mode, show pad normally
+                }
+            });
         }
     });
 
@@ -2280,18 +2367,154 @@ fn PinScreen(
                         view! {
                             <p class="pin-lockout-msg">"\u{23f1} Please wait " {c} " seconds"</p>
                         }.into_any()
-                    } else if !msg.is_empty() {
+                    } else if !msg.is_empty() && msg != "biometric_ok" {
                         view! { <p class="pin-msg">{msg}</p> }.into_any()
                     } else {
                         view! { <span></span> }.into_any()
                     }
                 }}
 
+                // "Forgot PIN?" link (only on unlock screen)
+                {move || if phase.get() == AppPhase::PinUnlock {
+                    view! {
+                        <a href="javascript:void(0)" style="color:#666;font-size:12px;text-decoration:none;margin-top:8px;display:inline-block"
+                            on:click=move |_| {
+                                forgot_input.set(String::new());
+                                forgot_msg.set(String::new());
+                                forgot_busy.set(false);
+                                forgot_use_raw_key.set(false);
+                                show_forgot_pin.set(true);
+                            }>"Forgot PIN?"</a>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }}
+
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v1.4.18"
+                    "ChronX Wallet v2.3.7"
                 </p>
             </div>
         </div>
+
+        // ── Forgot PIN modal ────────────────────────────────────────────────
+        {move || if show_forgot_pin.get() {
+            view! {
+                <div class="modal-overlay" on:click=move |_| {
+                    if !forgot_busy.get_untracked() { show_forgot_pin.set(false); }
+                }>
+                    <div class="modal-card" style="max-width:440px" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                        <p class="modal-title">"\u{1f511} Reset Your PIN"</p>
+                        <div class="modal-body" style="text-align:left">
+                            {move || if forgot_use_raw_key.get() {
+                                // Raw key mode
+                                view! {
+                                    <p class="muted" style="font-size:13px;margin-bottom:10px">
+                                        "Paste your base64 private key to verify your identity."
+                                    </p>
+                                    <textarea
+                                        rows="4"
+                                        placeholder="Paste your private key (base64)..."
+                                        style="width:100%;padding:10px;font-size:13px;background:#1a1a2e;border:1px solid #333;border-radius:8px;color:#fff;font-family:monospace;resize:vertical"
+                                        prop:value=move || forgot_input.get()
+                                        on:input=move |ev| {
+                                            forgot_input.set(event_target_value(&ev));
+                                            forgot_msg.set(String::new());
+                                        }
+                                    ></textarea>
+                                    {move || {
+                                        let m = forgot_msg.get();
+                                        if m.is_empty() { view! { <span></span> }.into_any() }
+                                        else { view! { <p class="msg error" style="margin-top:8px">{m}</p> }.into_any() }
+                                    }}
+                                    <button
+                                        style="width:100%;margin-top:12px;background:linear-gradient(135deg,#b8860b,#daa520);color:#000;font-weight:700;padding:10px;border:none;border-radius:8px;cursor:pointer"
+                                        disabled=move || forgot_busy.get() || forgot_input.get().trim().is_empty()
+                                        on:click=move |_| {
+                                            forgot_busy.set(true);
+                                            forgot_msg.set(String::new());
+                                            let key = forgot_input.get_untracked();
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "key": key })
+                                                ).unwrap_or(no_args());
+                                                match call::<String>("reset_pin_with_key", args).await {
+                                                    Ok(_) => {
+                                                        show_forgot_pin.set(false);
+                                                        pin_digits.set(String::new());
+                                                        pin_msg.set(String::new());
+                                                        phase.set(AppPhase::PinSetup);
+                                                    }
+                                                    Err(e) => forgot_msg.set(format!("Error: {e}")),
+                                                }
+                                                forgot_busy.set(false);
+                                            });
+                                        }
+                                    >{move || if forgot_busy.get() { "Verifying\u{2026}" } else { "Verify Raw Key" }}</button>
+                                    <p style="text-align:center;margin-top:8px">
+                                        <a href="javascript:void(0)" style="color:#888;font-size:12px;text-decoration:underline"
+                                            on:click=move |_| { forgot_use_raw_key.set(false); forgot_input.set(String::new()); forgot_msg.set(String::new()); }
+                                        >"Use seed phrase instead"</a>
+                                    </p>
+                                }.into_any()
+                            } else {
+                                // Seed phrase mode (default)
+                                view! {
+                                    <p class="muted" style="font-size:13px;margin-bottom:10px">
+                                        "Enter your 24-word seed phrase to verify your identity and set a new PIN."
+                                    </p>
+                                    <textarea
+                                        rows="4"
+                                        placeholder="word1 word2 word3..."
+                                        style="width:100%;padding:10px;font-size:13px;background:#1a1a2e;border:1px solid #333;border-radius:8px;color:#fff;font-family:monospace;resize:vertical"
+                                        prop:value=move || forgot_input.get()
+                                        on:input=move |ev| {
+                                            forgot_input.set(event_target_value(&ev));
+                                            forgot_msg.set(String::new());
+                                        }
+                                    ></textarea>
+                                    {move || {
+                                        let m = forgot_msg.get();
+                                        if m.is_empty() { view! { <span></span> }.into_any() }
+                                        else { view! { <p class="msg error" style="margin-top:8px">{m}</p> }.into_any() }
+                                    }}
+                                    <button
+                                        style="width:100%;margin-top:12px;background:linear-gradient(135deg,#b8860b,#daa520);color:#000;font-weight:700;padding:10px;border:none;border-radius:8px;cursor:pointer"
+                                        disabled=move || forgot_busy.get() || forgot_input.get().trim().is_empty()
+                                        on:click=move |_| {
+                                            forgot_busy.set(true);
+                                            forgot_msg.set(String::new());
+                                            let words = forgot_input.get_untracked();
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(
+                                                    &serde_json::json!({ "words": words })
+                                                ).unwrap_or(no_args());
+                                                match call::<String>("reset_pin_with_mnemonic", args).await {
+                                                    Ok(_) => {
+                                                        show_forgot_pin.set(false);
+                                                        pin_digits.set(String::new());
+                                                        pin_msg.set(String::new());
+                                                        phase.set(AppPhase::PinSetup);
+                                                    }
+                                                    Err(e) => forgot_msg.set(format!("Error: {e}")),
+                                                }
+                                                forgot_busy.set(false);
+                                            });
+                                        }
+                                    >{move || if forgot_busy.get() { "Verifying\u{2026}" } else { "Verify Seed Phrase" }}</button>
+                                    <p style="text-align:center;margin-top:8px">
+                                        <a href="javascript:void(0)" style="color:#888;font-size:12px;text-decoration:underline"
+                                            on:click=move |_| { forgot_use_raw_key.set(true); forgot_input.set(String::new()); forgot_msg.set(String::new()); }
+                                        >"Using a legacy wallet? Enter raw key instead"</a>
+                                    </p>
+                                }.into_any()
+                            }}
+                        </div>
+                        <button on:click=move |_| show_forgot_pin.set(false)
+                            style="margin-top:12px;width:100%">"Cancel"</button>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
     }
 }
 
@@ -3423,15 +3646,29 @@ fn AccountPanel(
                             style="position:absolute;top:12px;right:12px;background:none;border:none;color:#888;font-size:20px;cursor:pointer;line-height:1">
                             "\u{00d7}"
                         </button>
-                        // Large avatar
-                        <img src={move || {
-                                let base = avatar_url.get();
-                                if base.is_empty() { return String::new(); }
-                                let bust = avatar_bust.get();
-                                if bust > 0.0 { format!("{}?t={:.0}", base, bust) } else { base }
-                            }}
-                            style="width:120px;height:120px;border-radius:50%;border:3px solid #d4a84b;object-fit:cover;background:#1a1a2e"
-                        />
+                        // Large avatar (clickable — triggers photo picker)
+                        <div style="position:relative;cursor:pointer"
+                            on:click=move |_| {
+                                if let Some(w) = web_sys::window() {
+                                    if let Some(d) = w.document() {
+                                        if let Some(el) = d.get_element_by_id("avatar-file-input") {
+                                            let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
+                                        }
+                                    }
+                                }
+                            }>
+                            <img src={move || {
+                                    let base = avatar_url.get();
+                                    if base.is_empty() { return String::new(); }
+                                    let bust = avatar_bust.get();
+                                    if bust > 0.0 { format!("{}?t={:.0}", base, bust) } else { base }
+                                }}
+                                style="width:120px;height:120px;border-radius:50%;border:3px solid #d4a84b;object-fit:cover;display:block;background:#1a1a2e"
+                            />
+                            <div style="position:absolute;bottom:2px;right:2px;background:#d4a84b;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1;border:2px solid #1a1a2e">
+                                "\u{1F4F7}"
+                            </div>
+                        </div>
                         // Display name (editable)
                         {move || {
                             if display_name_editing.get() {
@@ -3464,17 +3701,18 @@ fn AccountPanel(
                                 }.into_any()
                             } else {
                                 let dn = display_name.get();
+                                let is_empty = dn.is_empty();
                                 view! {
-                                    <div style="display:flex;align-items:center;gap:8px">
-                                        <span style="font-size:18px;font-weight:700;color:#fff">
-                                            {if dn.is_empty() { "Add your name".to_string() } else { dn }}
+                                    <div style="display:flex;align-items:center;gap:8px;cursor:pointer"
+                                        on:click=move |_| {
+                                            display_name_input.set(display_name.get_untracked());
+                                            display_name_editing.set(true);
+                                        }>
+                                        <span style={if is_empty { "font-size:18px;font-weight:700;color:#666" } else { "font-size:18px;font-weight:700;color:#fff" }}>
+                                            {if is_empty { "Add your name".to_string() } else { dn }}
                                         </span>
-                                        <button on:click=move |_| {
-                                                display_name_input.set(display_name.get_untracked());
-                                                display_name_editing.set(true);
-                                            }
-                                            style="background:none;border:none;color:#d4a84b;cursor:pointer;font-size:14px;padding:0">
-                                            "\u{270f}\u{fe0f}"</button>
+                                        <span style="color:#d4a84b;font-size:14px">
+                                            "\u{270f}\u{fe0f}"</span>
                                     </div>
                                 }.into_any()
                             }
@@ -3497,20 +3735,7 @@ fn AccountPanel(
                                 if a.len() > 20 { format!("{}...{}", &a[..10], &a[a.len()-10..]) } else { a }
                             }}
                         </div>
-                        // Change Photo button
-                        <button on:click=move |_| {
-                                show_profile_modal.set(false);
-                                if let Some(w) = web_sys::window() {
-                                    if let Some(d) = w.document() {
-                                        if let Some(el) = d.get_element_by_id("avatar-file-input") {
-                                            let _ = el.dyn_ref::<web_sys::HtmlElement>().map(|e| e.click());
-                                        }
-                                    }
-                                }
-                            }
-                            style="background:none;border:1px solid #444;color:#888;padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px;width:100%">
-                            "\u{1f4f7} Change Photo"
-                        </button>
+                        // (Photo change via avatar tap above)
                     </div>
                 </div>
             }.into_any()
@@ -8031,12 +8256,18 @@ fn SettingsPanel(
 
     // New wallet creation (compromised flow)
     let show_new_wallet       = RwSignal::new(false);
+    let show_balance_warning  = RwSignal::new(false);
+    let balance_warning_kx    = RwSignal::new(String::new());
     let new_wallet_confirm_input = RwSignal::new(String::new());
     let new_wallet_busy       = RwSignal::new(false);
     let new_wallet_msg        = RwSignal::new(String::new());
     let new_wallet_mnemonic   = RwSignal::new(String::new());
     let new_wallet_address    = RwSignal::new(String::new());
     let compromised_expanded  = RwSignal::new(false);
+
+    // Auth method (PIN / Biometric)
+    let auth_method = RwSignal::new("pin".to_string());
+    let auth_method_loading = RwSignal::new(false);
 
     // Cold storage state
     let show_cold         = RwSignal::new(false);
@@ -8084,6 +8315,8 @@ fn SettingsPanel(
             claim_emails.set(emails);
             let verified = call::<Vec<String>>("get_verified_emails", no_args()).await.unwrap_or_default();
             verified_emails.set(verified);
+            let method = call::<String>("get_auth_method", no_args()).await.unwrap_or_else(|_| "pin".to_string());
+            auth_method.set(method);
         });
     });
 
@@ -8492,37 +8725,100 @@ fn SettingsPanel(
             // Security
             <div class="settings-section">
                 <p class="label">{move || t(&lang.get(), "settings_security")}</p>
-                <button on:click=move |_| {
-                    cp_phase.set(0); cp_digits.set(String::new());
-                    cp_msg.set(String::new()); show_change_pin.set(true);
-                }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
 
-                <p class="muted" style="font-size:12px;margin-top:12px;margin-bottom:6px">{move || t(&lang.get(), "settings_pin_length")}</p>
-                <div style="display:flex;gap:8px">
-                    {[4u8, 6, 8].into_iter().map(|n| {
-                        view! {
-                            <button
-                                class=move || if pin_len.get() == n { "pin-len-btn active" } else { "pin-len-btn" }
-                                on:click=move |_| {
-                                    if pin_len.get() != n {
-                                        // Changing PIN length requires re-setting the PIN
-                                        pin_len.set(n);
-                                        spawn_local(async move {
-                                            let args = serde_wasm_bindgen::to_value(
-                                                &serde_json::json!({ "length": n })
-                                            ).unwrap_or(no_args());
-                                            let _ = call::<()>("set_pin_length", args).await;
-                                        });
-                                        // Open Change PIN modal so user sets a new PIN at the new length
-                                        cp_phase.set(0); cp_digits.set(String::new());
-                                        cp_msg.set(format!("PIN length changed to {} digits. Enter current PIN, then set a new {}-digit PIN.", n, n));
-                                        show_change_pin.set(true);
-                                    }
-                                }
-                            >{format!("{} {}", n, t(&lang.get(), "settings_digits"))}</button>
+                // Login Method toggle
+                <p class="muted" style="font-size:12px;margin-bottom:6px">"Login Method"</p>
+                <div style="display:flex;gap:8px;margin-bottom:12px">
+                    <button
+                        class=move || if auth_method.get() == "pin" { "pin-len-btn active" } else { "pin-len-btn" }
+                        style="flex:1"
+                        on:click=move |_| {
+                            if auth_method.get() != "pin" {
+                                auth_method.set("pin".to_string());
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({ "method": "pin" })
+                                    ).unwrap_or(no_args());
+                                    let _ = call::<()>("set_auth_method", args).await;
+                                });
+                            }
                         }
-                    }).collect::<Vec<_>>()}
+                    >"PIN"</button>
+                    <button
+                        class=move || if auth_method.get() == "biometric" { "pin-len-btn active" } else { "pin-len-btn" }
+                        style="flex:1"
+                        disabled=move || auth_method_loading.get()
+                        on:click=move |_| {
+                            if auth_method.get() != "biometric" {
+                                auth_method_loading.set(true);
+                                spawn_local(async move {
+                                    match call::<bool>("authenticate_biometric", no_args()).await {
+                                        Ok(true) => {
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "method": "biometric" })
+                                            ).unwrap_or(no_args());
+                                            let _ = call::<()>("set_auth_method", args).await;
+                                            auth_method.set("biometric".to_string());
+                                        }
+                                        _ => {
+                                            // Biometric not available or failed
+                                        }
+                                    }
+                                    auth_method_loading.set(false);
+                                });
+                            }
+                        }
+                    >{move || if auth_method_loading.get() { "\u{2026}" } else { "Biometric" }}</button>
                 </div>
+
+                // PIN-specific options (only when PIN is selected)
+                {move || if auth_method.get() == "pin" {
+                    view! {
+                        <p class="muted" style="font-size:12px;margin-bottom:6px">{move || t(&lang.get(), "settings_pin_length")}</p>
+                        <div style="display:flex;gap:8px;margin-bottom:12px">
+                            {[4u8, 6, 8].into_iter().map(|n| {
+                                view! {
+                                    <button
+                                        class=move || if pin_len.get() == n { "pin-len-btn active" } else { "pin-len-btn" }
+                                        on:click=move |_| {
+                                            if pin_len.get() != n {
+                                                pin_len.set(n);
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(
+                                                        &serde_json::json!({ "length": n })
+                                                    ).unwrap_or(no_args());
+                                                    let _ = call::<()>("set_pin_length", args).await;
+                                                });
+                                                cp_phase.set(0); cp_digits.set(String::new());
+                                                cp_msg.set(format!("PIN length changed to {} digits. Enter current PIN, then set a new {}-digit PIN.", n, n));
+                                                show_change_pin.set(true);
+                                            }
+                                        }
+                                    >{format!("{} {}", n, t(&lang.get(), "settings_digits"))}</button>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                        <button on:click=move |_| {
+                            cp_phase.set(0); cp_digits.set(String::new());
+                            cp_msg.set(String::new()); show_change_pin.set(true);
+                        }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div style="background:#1a2a1a;border:1px solid #333;border-radius:8px;padding:12px;margin-bottom:12px">
+                            <p style="font-size:13px;color:#aaa;margin-bottom:4px">
+                                "Face ID / Fingerprint / Windows Hello will unlock your wallet"
+                            </p>
+                            <p style="font-size:11px;color:#666">
+                                "PIN kept as backup if biometric is unavailable"
+                            </p>
+                        </div>
+                        <button on:click=move |_| {
+                            cp_phase.set(0); cp_digits.set(String::new());
+                            cp_msg.set(String::new()); show_change_pin.set(true);
+                        }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
+                    }.into_any()
+                }}
             </div>
 
             // ── Backup Your Wallet (Seed Phrase) ──
@@ -8571,7 +8867,18 @@ fn SettingsPanel(
                                         new_wallet_mnemonic.set(String::new());
                                         new_wallet_address.set(String::new());
                                         new_wallet_busy.set(false);
-                                        show_new_wallet.set(true);
+                                        // Check balance before proceeding
+                                        spawn_local(async move {
+                                            if let Ok(acct) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                                let bal: u128 = acct.balance_chronos.parse().unwrap_or(0);
+                                                if bal > 0 {
+                                                    balance_warning_kx.set(format_kx(&acct.balance_chronos));
+                                                    show_balance_warning.set(true);
+                                                    return;
+                                                }
+                                            }
+                                            show_new_wallet.set(true);
+                                        });
                                     }
                                 >"Create New Wallet"</button>
                             </div>
@@ -9415,6 +9722,43 @@ fn SettingsPanel(
                                     }.into_any()
                                 }
                             }}
+                        </div>
+                    </div>
+                </div>
+            }.into_any()
+        } else { view! { <span></span> }.into_any() }}
+
+        // ── Balance warning before Create New Wallet ────────────────────────
+
+        {move || if show_balance_warning.get() {
+            let kx = balance_warning_kx.get();
+            view! {
+                <div class="modal-overlay" on:click=move |_| show_balance_warning.set(false)>
+                    <div class="modal-card" style="max-width:440px" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                        <p class="modal-title">"\u{26a0}\u{fe0f} You Have KX in This Wallet"</p>
+                        <div class="modal-body" style="text-align:left">
+                            <div style="background:#2a1010;border:1px solid #f87171;border-radius:8px;padding:12px;margin-bottom:12px">
+                                <p style="color:#f87171;font-size:13px;font-weight:700;line-height:1.5">
+                                    "Your current wallet contains " {kx} " KX. \
+                                     Creating a new wallet will generate a NEW address. \
+                                     Your KX will NOT move automatically \u{2014} it will stay \
+                                     at your old address."
+                                </p>
+                                <p style="color:#f87171;font-size:13px;font-weight:700;margin-top:8px">
+                                    "You must send your KX to your new address manually \
+                                     after creating it."
+                                </p>
+                            </div>
+                            <p style="color:#aaa;font-size:13px;margin-bottom:12px">"Are you sure you want to continue?"</p>
+                            <div style="display:flex;gap:8px">
+                                <button style="flex:1" on:click=move |_| show_balance_warning.set(false)>"Cancel"</button>
+                                <button style="flex:1;border:2px solid #daa520;background:transparent;color:#daa520;font-weight:700"
+                                    on:click=move |_| {
+                                        show_balance_warning.set(false);
+                                        show_new_wallet.set(true);
+                                    }
+                                >"I understand, continue anyway"</button>
+                            </div>
                         </div>
                     </div>
                 </div>

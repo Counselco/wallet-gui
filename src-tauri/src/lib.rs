@@ -158,6 +158,12 @@ pub fn run() {
             commands::get_wallet_badges,
             commands::get_commitments,
             commands::cancel_commitment,
+            // v2.3.7 — Biometric login + Forgot PIN
+            commands::get_auth_method,
+            commands::set_auth_method,
+            commands::authenticate_biometric,
+            commands::reset_pin_with_mnemonic,
+            commands::reset_pin_with_key,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
