@@ -2311,9 +2311,11 @@ input[type="range"].pct-slider {
     border-bottom: none;
 }
 
-/* Settings max-width container */
+/* Settings max-width container with flex ordering */
 .settings-content-wrap {
     max-width: 680px;
     margin: 0 auto;
     width: 100%;
+    display: flex;
+    flex-direction: column;
 }
