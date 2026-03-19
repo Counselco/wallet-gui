@@ -2513,7 +2513,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.0"
+                    "ChronX Wallet v2.5.1"
                 </p>
             </div>
         </div>
@@ -9438,29 +9438,21 @@ fn SettingsPanel(
             // ── Privacy content (inside collapsible) ──
             <div class="settings-section" style="order:3;padding-top:0;margin-top:-8px"
                  style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
-                // Badges (only if user has any)
-                {move || {
-                    let badges = settings_badge_list.get();
-                    if badges.is_empty() {
-                        return view! { <span></span> }.into_any();
-                    }
-                    view! {
-                        <div style="margin-bottom:12px">
-                            <p class="muted" style="font-size:12px;margin-bottom:6px">"Your badges:"</p>
-                            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+                // Show badges toggle (with inline badge pills)
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                    <span style="font-size:13px;color:#e5e7eb;white-space:nowrap">"Show badges when sending?"</span>
+                    {move || {
+                        let badges = settings_badge_list.get();
+                        view! {
+                            <div style="display:flex;flex-wrap:wrap;gap:4px;flex:1;min-width:0">
                                 {badges.into_iter().map(|(bg, fg, label)| {
                                     view! {
-                                        <span style={format!("display:inline-block;padding:3px 10px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700")}>{label}</span>
+                                        <span style={format!("display:inline-block;padding:2px 8px;border-radius:4px;background:{bg};color:{fg};font-size:10px;font-weight:700")}>{label}</span>
                                     }
                                 }).collect_view()}
                             </div>
-                        </div>
-                    }.into_any()
-                }}
-
-                // Show badges toggle
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:4px">
-                    <span style="font-size:13px;color:#e5e7eb">"Show badges when sending?"</span>
+                        }
+                    }}
                     <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
                         <input type="checkbox" style="opacity:0;width:0;height:0"
                             prop:checked=move || settings_badges_on.get()
