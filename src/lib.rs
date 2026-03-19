@@ -1018,11 +1018,31 @@ async fn route_deep_link_url(
     decline_sender_email: RwSignal<String>,
     decline_block_checked: RwSignal<bool>,
     decline_modal_open: RwSignal<bool>,
+    pay_link_to: RwSignal<String>,
+    pay_link_amount: RwSignal<String>,
+    pay_link_memo: RwSignal<String>,
+    pay_link_ref: RwSignal<String>,
+    pay_link_show: RwSignal<bool>,
 ) {
-    if url.starts_with("chronx://pay") || url.starts_with("chronx://poke/pay")
+    // Direct pay link: chronx://pay?to=WALLET&amount=X&memo=Y&ref=Z
+    if url.starts_with("chronx://pay") && url.contains("to=") {
+        let get_param = |key: &str| -> String {
+            url.split(&format!("{key}=")).nth(1)
+                .map(|s| s.split('&').next().unwrap_or(s))
+                .unwrap_or("")
+                .replace("%20", " ").replace('+', " ")
+        };
+        pay_link_to.set(get_param("to"));
+        pay_link_amount.set(get_param("amount"));
+        pay_link_memo.set(get_param("memo"));
+        pay_link_ref.set(get_param("ref"));
+        pay_link_show.set(true);
+        active_tab.set(1); // Send tab
+    }
+    // Poke pay/decline links
+    else if url.starts_with("chronx://pay") || url.starts_with("chronx://poke/pay")
         || url.starts_with("chronx://decline") || url.starts_with("chronx://poke/decline")
     {
-        // Normalize pay/decline URLs to poke/ prefix
         let normalized = if url.starts_with("chronx://poke/") {
             url.to_string()
         } else if url.starts_with("chronx://pay") {
@@ -1125,6 +1145,13 @@ fn App() -> impl IntoView {
     let send_cascade_mode = RwSignal::new(0u8);
     // Send tab mode: 0=Send KX, 1=Request KX
     let send_tab_mode = RwSignal::new(0u8);
+
+    // Pay deep link pre-fill signals
+    let pay_link_to = RwSignal::new(String::new());
+    let pay_link_amount = RwSignal::new(String::new());
+    let pay_link_memo = RwSignal::new(String::new());
+    let pay_link_ref = RwSignal::new(String::new());
+    let pay_link_show = RwSignal::new(false);
 
     // Welcome / backup / restore state
     let welcome_busy  = RwSignal::new(false);
@@ -1532,7 +1559,7 @@ fn App() -> impl IntoView {
                                 }
                                 // Check for cold-start deep link (managed state)
                                 if let Ok(Some(url)) = call::<Option<String>>("get_launch_deep_link", no_args()).await {
-                                    route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
+                                    route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open, pay_link_to, pay_link_amount, pay_link_memo, pay_link_ref, pay_link_show).await;
                                 }
                             }
                             Err(e) => {
@@ -1591,7 +1618,7 @@ fn App() -> impl IntoView {
                             }
                             // Check for cold-start deep link (managed state)
                             if let Ok(Some(url)) = call::<Option<String>>("get_launch_deep_link", no_args()).await {
-                                route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
+                                route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open, pay_link_to, pay_link_amount, pay_link_memo, pay_link_ref, pay_link_show).await;
                             }
                         }
                         Ok(false) | Err(_) => {
@@ -1646,7 +1673,7 @@ fn App() -> impl IntoView {
                 }
                 // Deep link check
                 if let Ok(Some(url)) = call::<Option<String>>("get_launch_deep_link", no_args()).await {
-                    route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open).await;
+                    route_deep_link_url(&url, deep_link_code, active_tab, poke_prefill_email, poke_prefill_amount, poke_prefill_memo, poke_prefill_id, decline_request_id, decline_sender_email, decline_block_checked, decline_modal_open, pay_link_to, pay_link_amount, pay_link_memo, pay_link_ref, pay_link_show).await;
                 }
             });
         }
@@ -1937,6 +1964,37 @@ fn App() -> impl IntoView {
                                             "Request KX"
                                         </button>
                                     </div>
+                                    // Pay link info banner
+                                    {move || if pay_link_show.get() {
+                                        let to_addr = pay_link_to.get();
+                                        let amount = pay_link_amount.get();
+                                        let memo = pay_link_memo.get();
+                                        let ref_id = pay_link_ref.get();
+                                        view! {
+                                            <div style="background:linear-gradient(135deg,rgba(212,168,75,0.15),rgba(212,168,75,0.05));border:1px solid #d4a84b;border-radius:8px;padding:12px;margin-bottom:12px">
+                                                <p style="font-size:14px;font-weight:700;color:#d4a84b;margin:0 0 6px">
+                                                    "\u{1f4b3} Payment Request"
+                                                </p>
+                                                <p style="font-size:13px;color:#e5e7eb;margin:0 0 4px">
+                                                    {format!("Pay {} KX to {}", amount, if to_addr.len() > 20 { format!("{}...{}", &to_addr[..8], &to_addr[to_addr.len()-8..]) } else { to_addr.clone() })}
+                                                </p>
+                                                {if !memo.is_empty() {
+                                                    view! { <p style="font-size:12px;color:#9ca3af;margin:0 0 4px">{format!("Memo: {}", memo)}</p> }.into_any()
+                                                } else { view! { <span></span> }.into_any() }}
+                                                {if !ref_id.is_empty() {
+                                                    view! { <p style="font-size:11px;color:#888;margin:0">{format!("Reference: {}", ref_id)}</p> }.into_any()
+                                                } else { view! { <span></span> }.into_any() }}
+                                                <button style="margin-top:8px;font-size:12px;padding:4px 12px;background:none;border:1px solid #666;color:#888;border-radius:4px;cursor:pointer"
+                                                    on:click=move |_| {
+                                                        pay_link_show.set(false);
+                                                        pay_link_to.set(String::new());
+                                                        pay_link_amount.set(String::new());
+                                                        pay_link_memo.set(String::new());
+                                                        pay_link_ref.set(String::new());
+                                                    }>"Cancel"</button>
+                                            </div>
+                                        }.into_any()
+                                    } else { view! { <span></span> }.into_any() }}
                                     {move || if send_tab_mode.get() == 0 {
                                         // Send KX mode
                                         view! {
@@ -1959,7 +2017,7 @@ fn App() -> impl IntoView {
                                                 view! { <span></span> }.into_any()
                                             }}
                                             {move || if send_cascade_mode.get() == 0 {
-                                                view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact /> }.into_any()
+                                                view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact pay_link_to=pay_link_to pay_link_amount=pay_link_amount pay_link_memo=pay_link_memo pay_link_show=pay_link_show /> }.into_any()
                                             } else {
                                                 view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
                                             }}
@@ -2513,7 +2571,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.2"
+                    "ChronX Wallet v2.5.3"
                 </p>
             </div>
         </div>
@@ -4022,6 +4080,10 @@ fn SendPanel(
     poke_prefill_memo: RwSignal<String>,
     poke_prefill_id: RwSignal<String>,
     email_prefill_from_contact: RwSignal<String>,
+    pay_link_to: RwSignal<String>,
+    pay_link_amount: RwSignal<String>,
+    pay_link_memo: RwSignal<String>,
+    pay_link_show: RwSignal<bool>,
 ) -> impl IntoView {
     // Mobile defaults to Email mode (no KX address entry)
     let mobile_send = !is_desktop();
@@ -4043,6 +4105,21 @@ fn SendPanel(
     let msg       = RwSignal::new(String::new());
     let scan_msg  = RwSignal::new(String::new());
     let spam_warn = RwSignal::new(false);
+
+    // Pre-fill from pay deep link
+    Effect::new(move |_| {
+        if pay_link_show.get() {
+            let to = pay_link_to.get();
+            let amt = pay_link_amount.get();
+            let m = pay_link_memo.get();
+            if !to.is_empty() {
+                send_sub.set(0); // Switch to KX Address mode
+                to_addr.set(to);
+                amount.set(amt);
+                memo.set(m);
+            }
+        }
+    });
 
     // Series entries for Email + Send Later (additional payments beyond the first)
     let series_entries: RwSignal<Vec<(RwSignal<String>, RwSignal<String>, RwSignal<String>)>> = RwSignal::new(Vec::new()); // (amount, date, memo)
