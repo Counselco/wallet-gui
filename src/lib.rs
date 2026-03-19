@@ -2477,7 +2477,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.2"
+                    "ChronX Wallet v2.4.3"
                 </p>
             </div>
         </div>
