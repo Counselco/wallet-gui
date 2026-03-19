@@ -182,6 +182,8 @@ pub fn run() {
             commands::set_request_permission,
             commands::get_show_badges,
             commands::set_show_badges,
+            commands::get_show_identity,
+            commands::set_show_identity,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

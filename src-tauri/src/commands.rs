@@ -139,6 +139,9 @@ struct WalletConfig {
     /// Whether to broadcast badges/identity when sending KX. Default true.
     #[serde(default)]
     show_badges: Option<bool>,
+    /// Whether to broadcast identity (name/email) when sending KX. Default true.
+    #[serde(default)]
+    show_identity: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -178,6 +181,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             address_book: None,
             request_permission: None,
             show_badges: None,
+            show_identity: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -2321,12 +2325,12 @@ pub async fn notify_email_recipient(
     claim_code: String,
 ) -> Result<(), String> {
     let cfg = read_config(&app);
-    let show_badges = cfg.show_badges.unwrap_or(true);
-    // Include sender identity only if badge visibility is on
-    let sender_wallet = if show_badges {
+    let show_identity = cfg.show_identity.unwrap_or(true);
+    // Include sender identity only if identity privacy is on
+    let sender_wallet = if show_identity {
         load_keypair(&app).map(|kp| kp.account_id.to_b58()).ok()
     } else { None };
-    let sender_email = if show_badges {
+    let sender_email = if show_identity {
         cfg.claim_emails.and_then(|v| v.into_iter().next())
     } else { None };
     let client = reqwest::Client::new();
@@ -3126,6 +3130,18 @@ pub async fn get_show_badges(app: AppHandle) -> bool {
 pub async fn set_show_badges(app: AppHandle, show: bool) -> Result<(), String> {
     let mut cfg = read_config(&app);
     cfg.show_badges = Some(show);
+    write_config(&app, &cfg)
+}
+
+#[tauri::command]
+pub async fn get_show_identity(app: AppHandle) -> bool {
+    read_config(&app).show_identity.unwrap_or(true)
+}
+
+#[tauri::command]
+pub async fn set_show_identity(app: AppHandle, show: bool) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    cfg.show_identity = Some(show);
     write_config(&app, &cfg)
 }
 
