@@ -3997,7 +3997,19 @@ pub async fn get_promises_needing_sign_of_life(_app: AppHandle) -> Result<Vec<se
 pub async fn get_verified_identity(_app: AppHandle) -> Result<Option<serde_json::Value>, String> { Ok(None) }
 
 #[tauri::command]
-pub async fn get_wallet_badges(_app: AppHandle) -> Result<Vec<serde_json::Value>, String> { Ok(vec![]) }
+pub async fn get_wallet_badges(wallet_address: Option<String>) -> Result<Vec<serde_json::Value>, String> {
+    let addr = wallet_address.unwrap_or_default();
+    if addr.is_empty() { return Ok(vec![]); }
+    let url = format!("https://api.chronx.io/wallet/badges/{}", addr);
+    let client = reqwest::Client::new();
+    let resp = client.get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::json!({"badges":[]}));
+    let badges = json["badges"].as_array().cloned().unwrap_or_default();
+    Ok(badges)
+}
 
 #[tauri::command]
 pub async fn get_commitments(_app: AppHandle) -> Result<Vec<CommitmentInfo>, String> { Ok(vec![]) }

@@ -2508,7 +2508,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.6"
+                    "ChronX Wallet v2.4.7"
                 </p>
             </div>
         </div>
@@ -9068,7 +9068,7 @@ fn SettingsPanel(
                 let advanced_open = RwSignal::new(false);
                 let node_editing = RwSignal::new(false);
                 view! {
-                    <div class="settings-section" style="margin-top:12px;border-top:1px solid #2d3748;padding-top:12px;order:7">
+                    <div class="settings-section" style="margin-top:12px;border-top:1px solid #2d3748;padding-top:12px;order:8">
                         <div style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px"
                             on:click=move |_| advanced_open.update(|v| *v = !*v)>
                             <span style="font-size:12px;color:#9ca3af">{move || if advanced_open.get() { "\u{25BC}" } else { "\u{25B6}" }}</span>
@@ -9115,7 +9115,7 @@ fn SettingsPanel(
             }}
 
             // Public Key
-            <div class="settings-section" style="order:7">
+            <div class="settings-section" style="order:8">
                 <p class="label" style="text-transform:uppercase;letter-spacing:1px">{move || t(&lang.get(), "settings_public_key")}</p>
                 <p class="muted" style="font-size:11px;margin-bottom:6px">
                     {move || format!("({})", t(&lang.get(), "settings_public_key_sub"))}
@@ -9155,7 +9155,7 @@ fn SettingsPanel(
             </div>
 
             // Notices
-            <div class="settings-section" style="order:5">
+            <div class="settings-section" style="order:6">
                 <p class="label">{move || t(&lang.get(), "settings_notices")}</p>
                 {move || if update_available.get() {
                     view! {
@@ -9235,7 +9235,7 @@ fn SettingsPanel(
             </div>
 
             // Security
-            <div class="settings-section" style="order:4">
+            <div class="settings-section" style="order:5">
                 <p class="label">{move || t(&lang.get(), "settings_security")}</p>
 
                 // Login Method toggle
@@ -9355,9 +9355,8 @@ fn SettingsPanel(
                 }}
             </div>
 
-            // ── KX Request Permissions ──
-            <div class="settings-section" style="order:2">
-                <p class="label">"KX Requests"</p>
+            // ── Privacy section: KX Request Permissions ──
+            <div class="settings-section" style="order:3">
                 <p class="muted" style="font-size:12px;margin-bottom:6px">"Who can request KX from me?"</p>
                 // Note: request_permission state will use inline spawn_local
                 // to keep this section self-contained
@@ -9500,7 +9499,7 @@ fn SettingsPanel(
             }
 
             // ── Wallet Management (collapsed by default) ──
-            <div class="settings-section" style="order:6">
+            <div class="settings-section" style="order:7">
                 {
                     let wm_expanded = RwSignal::new(false);
                     view! {
@@ -9637,7 +9636,7 @@ fn SettingsPanel(
             </div> // close Wallet Management section
 
             // My Emails for KX Claims (with verification)
-            <div class="settings-section" style="order:3">
+            <div class="settings-section" style="order:4">
                 <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
                     {move || t(&lang.get(), "settings_claim_emails_sub_v2")}
@@ -9876,7 +9875,7 @@ fn SettingsPanel(
             </div>
 
             // About & Updates
-            <div class="settings-section" style="order:8">
+            <div class="settings-section" style="order:9">
                 <p class="label">{move || t(&lang.get(), "settings_about")}</p>
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
                     <button on:click=move |_| show_about.set(true)>{move || format!("\u{2139} {}", t(&lang.get(), "settings_about_chronx"))}</button>
