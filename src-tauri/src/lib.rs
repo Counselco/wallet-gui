@@ -180,6 +180,8 @@ pub fn run() {
             commands::unblock_kx_sender,
             commands::get_request_permission,
             commands::set_request_permission,
+            commands::get_show_badges,
+            commands::set_show_badges,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

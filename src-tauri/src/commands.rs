@@ -136,6 +136,9 @@ struct WalletConfig {
     /// Who can request KX: "anyone" (default), "address_book", "nobody".
     #[serde(default)]
     request_permission: Option<String>,
+    /// Whether to broadcast badges/identity when sending KX. Default true.
+    #[serde(default)]
+    show_badges: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -174,6 +177,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             auth_method: None,
             address_book: None,
             request_permission: None,
+            show_badges: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -2287,13 +2291,15 @@ pub async fn notify_email_recipient(
     memo: Option<String>,
     claim_code: String,
 ) -> Result<(), String> {
-    // Include sender identity so the recipient knows who sent the KX
-    let sender_wallet = load_keypair(&app)
-        .map(|kp| kp.account_id.to_b58())
-        .ok();
-    let sender_email = read_config(&app)
-        .claim_emails
-        .and_then(|v| v.into_iter().next());
+    let cfg = read_config(&app);
+    let show_badges = cfg.show_badges.unwrap_or(true);
+    // Include sender identity only if badge visibility is on
+    let sender_wallet = if show_badges {
+        load_keypair(&app).map(|kp| kp.account_id.to_b58()).ok()
+    } else { None };
+    let sender_email = if show_badges {
+        cfg.claim_emails.and_then(|v| v.into_iter().next())
+    } else { None };
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "to": email,
@@ -3077,6 +3083,20 @@ pub async fn set_request_permission(app: AppHandle, permission: String) -> Resul
     }
     let mut cfg = read_config(&app);
     cfg.request_permission = Some(permission);
+    write_config(&app, &cfg)
+}
+
+// ── Badge visibility (privacy) ────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_show_badges(app: AppHandle) -> bool {
+    read_config(&app).show_badges.unwrap_or(true)
+}
+
+#[tauri::command]
+pub async fn set_show_badges(app: AppHandle, show: bool) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    cfg.show_badges = Some(show);
     write_config(&app, &cfg)
 }
 

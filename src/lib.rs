@@ -9335,6 +9335,105 @@ fn SettingsPanel(
                 }
             </div>
 
+            // ── Privacy (badge visibility — only shown if user has badges) ──
+            {
+                let priv_badges = RwSignal::new(Vec::<(String, String, String)>::new()); // (type, bg, label)
+                let priv_main_badge = RwSignal::new(String::new());
+                let badges_on = RwSignal::new(true);
+                Effect::new(move |_| {
+                    spawn_local(async move {
+                        let v = call::<bool>("get_show_badges", no_args()).await.unwrap_or(true);
+                        badges_on.set(v);
+                        // Fetch identity badge
+                        if let Ok(Some(identity)) = call::<Option<serde_json::Value>>("get_verified_identity", no_args()).await {
+                            if let Some(b) = identity.get("badge").and_then(|b| b.as_str()) {
+                                priv_main_badge.set(b.to_string());
+                            }
+                        }
+                        // Fetch KXGO badges
+                        if let Ok(acct) = call::<AccountInfo>("get_account_info", no_args()).await {
+                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "walletAddress": acct.account_id })).unwrap_or(no_args());
+                            if let Ok(wb) = call::<Vec<WalletBadge>>("get_wallet_badges", args).await {
+                                let mut pills = Vec::new();
+                                for b in &wb {
+                                    let (bg, fg, label) = match b.badge_type.as_str() {
+                                        "KXGO_BRONZE" => ("#CD7F32".to_string(), "white".to_string(), "KXGO Bronze".to_string()),
+                                        "KXGO_SILVER" => ("#C0C0C0".to_string(), "#1a1a2e".to_string(), "KXGO Silver".to_string()),
+                                        "KXGO_GOLD"   => ("#D4A84B".to_string(), "black".to_string(), "KXGO Gold".to_string()),
+                                        _ => ("#555".to_string(), "white".to_string(), b.badge_type.clone()),
+                                    };
+                                    pills.push((bg, fg, label));
+                                }
+                                priv_badges.set(pills);
+                            }
+                        }
+                    });
+                });
+                view! {
+                    {move || {
+                        let main = priv_main_badge.get();
+                        let kxgo = priv_badges.get();
+                        let has_any = !main.is_empty() || !kxgo.is_empty();
+                        if !has_any {
+                            return view! { <span></span> }.into_any();
+                        }
+                        view! {
+                            <div class="settings-section">
+                                <p class="label">"Privacy"</p>
+                                <p class="muted" style="font-size:12px;margin-bottom:6px">"Your badges:"</p>
+                                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+                                    {if !main.is_empty() {
+                                        let (bg, fg, label): (&str, &str, String) = match main.as_str() {
+                                            "FOUNDING_MEMBER" => ("#7c3aed", "white", "\u{1f451} Founding Member".to_string()),
+                                            "GENESIS_MEMBER" => ("#d4a84b", "black", "\u{1f48e} Genesis Member".to_string()),
+                                            "PROTOCOL_PATRON" => ("#e2e8f0", "#1a1a2e", "\u{26a1} Protocol Patron".to_string()),
+                                            _ => ("#555", "white", main.clone()),
+                                        };
+                                        view! {
+                                            <span style={format!("display:inline-block;padding:3px 10px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700")}>{label}</span>
+                                        }.into_any()
+                                    } else { view! { <span></span> }.into_any() }}
+                                    {kxgo.into_iter().map(|(bg, fg, label)| {
+                                        view! {
+                                            <span style={format!("display:inline-block;padding:3px 10px;border-radius:4px;background:{bg};color:{fg};font-size:11px;font-weight:700")}>{label}</span>
+                                        }
+                                    }).collect_view()}
+                                </div>
+                                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                                    <span style="font-size:13px;color:#e5e7eb">"Show badges when sending?"</span>
+                                    <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
+                                        <input type="checkbox" style="opacity:0;width:0;height:0"
+                                            prop:checked=move || badges_on.get()
+                                            on:change=move |ev| {
+                                                use wasm_bindgen::JsCast;
+                                                let checked = ev.target()
+                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                    .map(|i| i.checked()).unwrap_or(true);
+                                                badges_on.set(checked);
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "show": checked })).unwrap_or(no_args());
+                                                    let _ = call::<()>("set_show_badges", args).await;
+                                                });
+                                            } />
+                                        <span style=move || format!(
+                                            "position:absolute;inset:0;border-radius:12px;transition:0.2s;{}",
+                                            if badges_on.get() { "background:#d4a84b" } else { "background:#444" }
+                                        )></span>
+                                        <span style=move || format!(
+                                            "position:absolute;top:2px;width:20px;height:20px;border-radius:50%;background:white;transition:0.2s;{}",
+                                            if badges_on.get() { "left:22px" } else { "left:2px" }
+                                        )></span>
+                                    </label>
+                                </div>
+                                <p class="muted" style="font-size:11px;margin-top:4px">
+                                    "When off, your Founder, KXGO, and other badges are hidden from recipients when you send KX."
+                                </p>
+                            </div>
+                        }.into_any()
+                    }}
+                }
+            }
+
             // ── Backup Your Wallet (Seed Phrase) ──
             <div class="settings-section">
                 <p class="label">"Backup Your Wallet"</p>
