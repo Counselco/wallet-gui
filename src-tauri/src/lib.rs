@@ -162,11 +162,24 @@ pub fn run() {
             commands::get_auth_method,
             commands::set_auth_method,
             commands::authenticate_biometric,
+            commands::check_biometric_available,
             commands::reset_pin_with_mnemonic,
             commands::reset_pin_with_key,
             // v2.4.0 — Invoice rejection
             commands::get_pending_invoices,
             commands::reject_invoice,
+            // v2.4.1 — Address Book + KX Requests
+            commands::get_address_book,
+            commands::add_to_address_book,
+            commands::remove_from_address_book,
+            commands::check_email_registered,
+            commands::send_kx_request,
+            commands::get_pending_kx_requests,
+            commands::decline_kx_request,
+            commands::block_kx_sender,
+            commands::unblock_kx_sender,
+            commands::get_request_permission,
+            commands::set_request_permission,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

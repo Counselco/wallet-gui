@@ -130,12 +130,26 @@ struct WalletConfig {
     /// Authentication method: "pin" (default) or "biometric".
     #[serde(default)]
     auth_method: Option<String>,
+    /// Address book entries (replaces trusted_contacts in v2.4.1).
+    #[serde(default)]
+    address_book: Option<Vec<AddressBookEntry>>,
+    /// Who can request KX: "anyone" (default), "address_book", "nobody".
+    #[serde(default)]
+    request_permission: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SavedBaseAddress {
     pub address: String,
     pub nickname: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AddressBookEntry {
+    pub email: String,
+    pub name: Option<String>,
+    pub registered: Option<bool>,
+    pub last_checked: Option<u64>,
 }
 
 fn read_config(app: &AppHandle) -> WalletConfig {
@@ -158,6 +172,8 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             base_addresses: None,
             mnemonic_phrase: None,
             auth_method: None,
+            address_book: None,
+            request_permission: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -1432,34 +1448,80 @@ pub async fn set_auth_method(app: AppHandle, method: String) -> Result<(), Strin
 }
 
 /// Authenticate via platform biometric.
-/// Desktop (Windows): Windows Hello via native API.
+/// Desktop (Windows): Windows Hello via PowerShell UserConsentVerifier.
 /// Mobile: uses tauri-plugin-biometric (handled separately).
 #[tauri::command]
 pub async fn authenticate_biometric(app: AppHandle) -> Result<bool, String> {
     let _ = &app;
     #[cfg(windows)]
     {
-        // Windows Hello — attempt via PowerShell UserConsentVerifier
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let output = std::process::Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
-                "-NoProfile", "-NonInteractive", "-Command",
+                "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
                 r#"
-Add-Type -AssemblyName 'Windows.Security.Credentials.UI'
-$result = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::RequestVerificationAsync('Unlock ChronX Wallet').GetAwaiter().GetResult()
-if ($result -eq [Windows.Security.Credentials.UI.UserConsentVerificationResult]::Verified) { Write-Output 'VERIFIED' } else { Write-Output 'FAILED' }
+try {
+    Add-Type -AssemblyName 'Windows.Security.Credentials.UI'
+    $avail = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::CheckAvailabilityAsync().GetAwaiter().GetResult()
+    if ($avail -ne [Windows.Security.Credentials.UI.UserConsentVerifierAvailability]::Available) {
+        Write-Output 'NOT_AVAILABLE'
+        exit
+    }
+    $result = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::RequestVerificationAsync('Unlock ChronX Wallet').GetAwaiter().GetResult()
+    if ($result -eq [Windows.Security.Credentials.UI.UserConsentVerificationResult]::Verified) { Write-Output 'VERIFIED' } else { Write-Output 'FAILED' }
+} catch {
+    Write-Output 'ERROR'
+}
 "#,
             ])
             .output()
             .map_err(|e| format!("Failed to launch Windows Hello: {e}"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.trim() == "VERIFIED" {
-            return Ok(true);
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        match stdout.as_str() {
+            "VERIFIED" => return Ok(true),
+            "NOT_AVAILABLE" => return Err("Windows Hello is not configured on this device. Please set it up in Windows Settings first.".to_string()),
+            _ => return Err("Biometric authentication failed or cancelled".to_string()),
         }
-        return Err("Biometric authentication failed or cancelled".to_string());
     }
     #[cfg(not(windows))]
     {
         Err("Biometric authentication not available on this platform".to_string())
+    }
+}
+
+/// Check if biometric authentication is available on this device.
+#[tauri::command]
+pub async fn check_biometric_available(app: AppHandle) -> String {
+    let _ = &app;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let output = std::process::Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args([
+                "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+                r#"
+try {
+    Add-Type -AssemblyName 'Windows.Security.Credentials.UI'
+    $avail = [Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime]::CheckAvailabilityAsync().GetAwaiter().GetResult()
+    if ($avail -eq [Windows.Security.Credentials.UI.UserConsentVerifierAvailability]::Available) { Write-Output 'available' }
+    elseif ($avail -eq [Windows.Security.Credentials.UI.UserConsentVerifierAvailability]::DeviceNotPresent) { Write-Output 'not_supported' }
+    else { Write-Output 'not_configured' }
+} catch { Write-Output 'not_supported' }
+"#,
+            ])
+            .output();
+        match output {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Err(_) => "not_supported".to_string(),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        "not_supported".to_string()
     }
 }
 
@@ -2818,6 +2880,220 @@ pub async fn is_trusted_contact(app: AppHandle, email: String) -> Result<bool, S
     let contacts = read_trusted_contacts(&app);
     let email_lower = email.trim().to_lowercase();
     Ok(contacts.iter().any(|c| c.email.to_lowercase() == email_lower))
+}
+
+// ── Address Book (v2.4.1 — replaces trusted contacts) ────────────────────────
+
+#[tauri::command]
+pub async fn get_address_book(app: AppHandle) -> Result<Vec<AddressBookEntry>, String> {
+    let mut cfg = read_config(&app);
+    // Auto-migrate trusted contacts → address book on first access
+    if cfg.address_book.is_none() {
+        let trusted = read_trusted_contacts(&app);
+        if !trusted.is_empty() {
+            let mut entries = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for tc in &trusted {
+                let key = tc.email.trim().to_lowercase();
+                if seen.insert(key) {
+                    entries.push(AddressBookEntry {
+                        email: tc.email.trim().to_string(),
+                        name: tc.display_name.clone(),
+                        registered: None,
+                        last_checked: None,
+                    });
+                }
+            }
+            cfg.address_book = Some(entries);
+            let _ = write_config(&app, &cfg);
+        }
+    }
+    Ok(cfg.address_book.unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn add_to_address_book(app: AppHandle, email: String, name: Option<String>) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut book = cfg.address_book.unwrap_or_default();
+    let key = email.trim().to_lowercase();
+    if book.iter().any(|e| e.email.to_lowercase() == key) {
+        return Ok(());
+    }
+    book.push(AddressBookEntry {
+        email: email.trim().to_string(),
+        name,
+        registered: None,
+        last_checked: None,
+    });
+    cfg.address_book = Some(book);
+    write_config(&app, &cfg)
+}
+
+#[tauri::command]
+pub async fn remove_from_address_book(app: AppHandle, email: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut book = cfg.address_book.unwrap_or_default();
+    let key = email.trim().to_lowercase();
+    book.retain(|e| e.email.to_lowercase() != key);
+    cfg.address_book = Some(book);
+    write_config(&app, &cfg)
+}
+
+#[tauri::command]
+pub async fn check_email_registered(app: AppHandle, email: String) -> Result<bool, String> {
+    let url = format!("https://api.chronx.io/check-email?email={}", email.trim());
+    let client = reqwest::Client::new();
+    let resp = client.get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Parse error: {e}"))?;
+    let registered = json["registered"].as_bool().unwrap_or(false);
+    // Update address book entry
+    let mut cfg = read_config(&app);
+    let mut book = cfg.address_book.unwrap_or_default();
+    let key = email.trim().to_lowercase();
+    let now = chrono::Utc::now().timestamp() as u64;
+    if let Some(entry) = book.iter_mut().find(|e| e.email.to_lowercase() == key) {
+        entry.registered = Some(registered);
+        entry.last_checked = Some(now);
+    }
+    cfg.address_book = Some(book);
+    let _ = write_config(&app, &cfg);
+    Ok(registered)
+}
+
+// ── KX Request commands (v2.4.1) ─────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KxRequest {
+    pub request_id: String,
+    pub from_email: String,
+    pub from_name: String,
+    pub from_wallet: String,
+    pub amount_kx: f64,
+    pub note: Option<String>,
+    pub created_at: u64,
+}
+
+#[tauri::command]
+pub async fn send_kx_request(
+    app: AppHandle,
+    to_email: String,
+    amount_kx: f64,
+    note: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let kp = load_keypair(&app)?;
+    let wallet = kp.account_id.to_b58();
+    let cfg = read_config(&app);
+    let from_email = cfg.claim_emails.as_ref().and_then(|v| v.first()).cloned().unwrap_or_default();
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "from_email": from_email,
+        "from_wallet": wallet,
+        "to_email": to_email.trim(),
+        "amount_kx": amount_kx,
+        "note": note.unwrap_or_default(),
+        "from_name": from_email,
+    });
+    let resp = client.post("https://api.chronx.io/request-kx")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Request failed: {text}"));
+    }
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Parse error: {e}"))?;
+    Ok(json)
+}
+
+#[tauri::command]
+pub async fn get_pending_kx_requests(app: AppHandle) -> Result<Vec<KxRequest>, String> {
+    let cfg = read_config(&app);
+    let email = cfg.claim_emails.as_ref().and_then(|v| v.first()).cloned().unwrap_or_default();
+    if email.is_empty() { return Ok(vec![]); }
+    let url = format!("https://api.chronx.io/request-kx/pending?email={}", email);
+    let client = reqwest::Client::new();
+    let resp = client.get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let items: Vec<KxRequest> = resp.json().await.unwrap_or_default();
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn decline_kx_request(request_id: String) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({ "request_id": request_id });
+    let resp = client.post("https://api.chronx.io/request-kx/decline")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    if !resp.status().is_success() {
+        return Err("Failed to decline request".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn block_kx_sender(app: AppHandle, from_wallet: String) -> Result<(), String> {
+    let kp = load_keypair(&app)?;
+    let my_wallet = kp.account_id.to_b58();
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "from_wallet": from_wallet,
+        "blocked_by_wallet": my_wallet,
+    });
+    let resp = client.post("https://api.chronx.io/request-kx/block")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    if !resp.status().is_success() {
+        return Err("Failed to block sender".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn unblock_kx_sender(app: AppHandle, blocked_wallet: String) -> Result<(), String> {
+    let kp = load_keypair(&app)?;
+    let my_wallet = kp.account_id.to_b58();
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "blocker_wallet": my_wallet,
+        "blocked_wallet": blocked_wallet,
+    });
+    let resp = client.post("https://api.chronx.io/request-kx/unblock")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    if !resp.status().is_success() {
+        return Err("Failed to unblock sender".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_request_permission(app: AppHandle) -> String {
+    read_config(&app).request_permission.unwrap_or_else(|| "anyone".to_string())
+}
+
+#[tauri::command]
+pub async fn set_request_permission(app: AppHandle, permission: String) -> Result<(), String> {
+    if !["anyone", "address_book", "nobody"].contains(&permission.as_str()) {
+        return Err("Invalid permission value".to_string());
+    }
+    let mut cfg = read_config(&app);
+    cfg.request_permission = Some(permission);
+    write_config(&app, &cfg)
 }
 
 // ── Poke / Payment Request commands ──────────────────────────────────────────

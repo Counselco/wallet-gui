@@ -199,6 +199,27 @@ struct InvoiceRecord {
     memo: Option<String>,
 }
 
+#[derive(Clone, Deserialize, Default)]
+struct AddressBookEntry {
+    email: String,
+    name: Option<String>,
+    registered: Option<bool>,
+    #[allow(dead_code)]
+    last_checked: Option<u64>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct KxRequest {
+    request_id: String,
+    from_email: String,
+    from_name: String,
+    from_wallet: String,
+    amount_kx: f64,
+    note: Option<String>,
+    #[allow(dead_code)]
+    created_at: u64,
+}
+
 fn logo_src() -> String {
     format!(
         "data:image/png;base64,{}",
@@ -1102,6 +1123,8 @@ fn App() -> impl IntoView {
 
     // Cascade send mode (desktop only): 0=Simple, 1=Cascade
     let send_cascade_mode = RwSignal::new(0u8);
+    // Send tab mode: 0=Send KX, 1=Request KX
+    let send_tab_mode = RwSignal::new(0u8);
 
     // Welcome / backup / restore state
     let welcome_busy  = RwSignal::new(false);
@@ -1897,30 +1920,53 @@ fn App() -> impl IntoView {
                                 0 => view! {
                                     <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal />
                                 }.into_any(),
-                                // Tab 1: Send (Simple or Cascade on desktop)
+                                // Tab 1: Send / Request KX
                                 1 => view! {
-                                    {if desktop {
+                                    // Send/Request toggle (all platforms)
+                                    <div style="display:flex;gap:6px;margin-bottom:12px">
+                                        <button
+                                            class=move || if send_tab_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                                            style="flex:1"
+                                            on:click=move |_| send_tab_mode.set(0)>
+                                            "Send KX"
+                                        </button>
+                                        <button
+                                            class=move || if send_tab_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                                            style="flex:1"
+                                            on:click=move |_| send_tab_mode.set(1)>
+                                            "Request KX"
+                                        </button>
+                                    </div>
+                                    {move || if send_tab_mode.get() == 0 {
+                                        // Send KX mode
                                         view! {
-                                            <div class="send-mode-row" style="margin-bottom:12px">
-                                                <button type="button"
-                                                    class=move || if send_cascade_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
-                                                    on:click=move |_| send_cascade_mode.set(0)>
-                                                    {move || t(&lang.get(), "simple_send")}
-                                                </button>
-                                                <button type="button"
-                                                    class=move || if send_cascade_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
-                                                    on:click=move |_| send_cascade_mode.set(1)>
-                                                    {move || t(&lang.get(), "cascade_send")}
-                                                </button>
-                                            </div>
+                                            {if desktop {
+                                                view! {
+                                                    <div class="send-mode-row" style="margin-bottom:12px">
+                                                        <button type="button"
+                                                            class=move || if send_cascade_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                                                            on:click=move |_| send_cascade_mode.set(0)>
+                                                            {move || t(&lang.get(), "simple_send")}
+                                                        </button>
+                                                        <button type="button"
+                                                            class=move || if send_cascade_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                                                            on:click=move |_| send_cascade_mode.set(1)>
+                                                            {move || t(&lang.get(), "cascade_send")}
+                                                        </button>
+                                                    </div>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                            {move || if send_cascade_mode.get() == 0 {
+                                                view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact /> }.into_any()
+                                            } else {
+                                                view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
+                                            }}
                                         }.into_any()
                                     } else {
-                                        view! { <span></span> }.into_any()
-                                    }}
-                                    {move || if send_cascade_mode.get() == 0 {
-                                        view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact /> }.into_any()
-                                    } else {
-                                        view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
+                                        // Request KX mode
+                                        view! { <RequestPanel info=info lang=lang /> }.into_any()
                                     }}
                                 }.into_any(),
                                 // Tab 2: Activity (History/Promises/Open sub-tabs)
@@ -2431,7 +2477,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.0"
+                    "ChronX Wallet v2.4.1"
                 </p>
             </div>
         </div>
@@ -4208,14 +4254,7 @@ fn SendPanel(
                 email_confirm_memo.set(memo.get_untracked());
                 email_confirm_add_trusted.set(false);
                 email_confirm_already_trusted.set(false);
-                // Check if already trusted (async, then open modal)
-                let em = email_str.clone();
-                spawn_local(async move {
-                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
-                    let trusted = call::<bool>("is_trusted_contact", args).await.unwrap_or(false);
-                    email_confirm_already_trusted.set(trusted);
-                    email_confirm_open.set(true);
-                });
+                email_confirm_open.set(true);
                 return;
             }
             email_send_confirmed.set(false);
@@ -4241,13 +4280,7 @@ fn SendPanel(
                             "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
                         let _ = call::<()>("save_email_send", save_args).await;
-                        // Add as trusted contact if checkbox was checked
-                        if email_confirm_add_trusted.get_untracked() {
-                            let tc_args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                                "email": email_str.clone(),
-                            })).unwrap_or(no_args());
-                            let _ = call::<()>("add_trusted_contact", tc_args).await;
-                        }
+                        // (trusted contact add removed in v2.4.1)
                         email.set(String::new());
                         amount.set(String::new());
                         memo.set(String::new());
@@ -4323,13 +4356,7 @@ fn SendPanel(
                 email_confirm_memo.set(memo.get_untracked());
                 email_confirm_add_trusted.set(false);
                 email_confirm_already_trusted.set(false);
-                let em = email_str.clone();
-                spawn_local(async move {
-                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": em })).unwrap_or(no_args());
-                    let trusted = call::<bool>("is_trusted_contact", args).await.unwrap_or(false);
-                    email_confirm_already_trusted.set(trusted);
-                    email_confirm_open.set(true);
-                });
+                email_confirm_open.set(true);
                 return;
             }
             email_send_confirmed.set(false);
@@ -5451,28 +5478,7 @@ fn SendPanel(
                         {if !disp_memo.is_empty() {
                             view! { <p style="color:#9ca3af;font-size:13px;margin:0 0 12px">{format!("Memo: {disp_memo}")}</p> }.into_any()
                         } else { view! { <span></span> }.into_any() }}
-                        {move || if !email_confirm_already_trusted.get() {
-                            view! {
-                                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin:12px 0 16px;font-size:13px;color:#e5e7eb">
-                                    <input type="checkbox" style="margin-top:2px;accent-color:#d4a84b"
-                                        prop:checked=move || email_confirm_add_trusted.get()
-                                        on:change=move |ev| {
-                                            use wasm_bindgen::JsCast;
-                                            let checked = ev.target()
-                                                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                                .map(|i| i.checked()).unwrap_or(false);
-                                            email_confirm_add_trusted.set(checked);
-                                        } />
-                                    <span>
-                                        <span style="font-weight:600">"Add as Trusted Contact"</span>
-                                        <br/>
-                                        <span style="color:#9ca3af;font-size:12px">"They'll be able to request KX from you"</span>
-                                    </span>
-                                </label>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
-                        }}
+                        // (Trusted contact checkbox removed in v2.4.1 — replaced by Address Book)
                         <div class="btn-row">
                             <button class="btn-confirm" on:click=move |_| {
                                 email_confirm_open.set(false);
@@ -6452,27 +6458,27 @@ fn RequestPanel(
     info: RwSignal<Option<AccountInfo>>,
     lang: RwSignal<String>,
 ) -> impl IntoView {
-    let contacts = RwSignal::new(Vec::<TrustedContact>::new());
-    let sender_email = RwSignal::new(String::new());
+    let _ = &info;
+    let address_book = RwSignal::new(Vec::<AddressBookEntry>::new());
     let req_email = RwSignal::new(String::new());
     let req_amount = RwSignal::new(String::new());
     let req_note = RwSignal::new(String::new());
     let req_msg = RwSignal::new(String::new());
     let req_busy = RwSignal::new(false);
+    // Address book add form
+    let ab_new_email = RwSignal::new(String::new());
+    let ab_new_name = RwSignal::new(String::new());
+    let ab_show_add = RwSignal::new(false);
 
-    Effect::new(move |_| {
+    let load_book = move || {
         spawn_local(async move {
-            if let Ok(c) = call::<Vec<TrustedContact>>("get_trusted_contacts", no_args()).await {
-                contacts.set(c);
-            }
-            // Load sender's claim email for poke requests
-            if let Ok(emails) = call::<Vec<String>>("get_claim_emails", no_args()).await {
-                if let Some(first) = emails.first() {
-                    sender_email.set(first.clone());
-                }
+            if let Ok(book) = call::<Vec<AddressBookEntry>>("get_address_book", no_args()).await {
+                address_book.set(book);
             }
         });
-    });
+    };
+
+    Effect::new(move |_| { load_book(); });
 
     let on_send_request = move |_: web_sys::MouseEvent| {
         let email = req_email.get_untracked().trim().to_string();
@@ -6486,32 +6492,18 @@ fn RequestPanel(
             Ok(v) if v > 0.0 => v,
             _ => { req_msg.set("Invalid amount".to_string()); return; }
         };
-        let wallet = info.get_untracked().map(|a| a.account_id).unwrap_or_default();
         req_busy.set(true);
         req_msg.set(String::new());
-        let email_c = email.clone();
         spawn_local(async move {
-            // Trust gate: only allow requests to trusted contacts
-            let args_check = serde_wasm_bindgen::to_value(&serde_json::json!({
-                "email": email_c,
-            })).unwrap_or(no_args());
-            let is_trusted = call::<bool>("is_trusted_contact", args_check).await.unwrap_or(false);
-            if !is_trusted {
-                req_msg.set("You can only request money from Trusted Contacts. Send them KX first to add them as a contact.".to_string());
-                req_busy.set(false);
-                return;
-            }
-            let from_em = sender_email.get_untracked();
+            let note_opt: Option<String> = if note.is_empty() { None } else { Some(note) };
             let args = serde_wasm_bindgen::to_value(&serde_json::json!({
-                "fromWallet": wallet,
-                "fromEmail": from_em,
-                "toEmail": email_c,
+                "toEmail": email,
                 "amountKx": amount,
-                "note": note,
+                "note": note_opt,
             })).unwrap_or(no_args());
-            match call::<serde_json::Value>("send_poke_request", args).await {
+            match call::<serde_json::Value>("send_kx_request", args).await {
                 Ok(_) => {
-                    req_msg.set("Request sent!".to_string());
+                    req_msg.set("\u{2705} KX request sent!".to_string());
                     req_email.set(String::new());
                     req_amount.set(String::new());
                     req_note.set(String::new());
@@ -6523,86 +6515,141 @@ fn RequestPanel(
     };
 
     view! {
+        // Request KX form
         <div class="card">
-            <h3 class="section-title">{move || t(&lang.get(), "request_money")}</h3>
+            <h3 class="section-title">"Request KX"</h3>
             <div class="form-group">
                 <label>"Email"</label>
                 <input type="email" class="input" placeholder="recipient@email.com"
                     prop:value=move || req_email.get()
-                    on:input=move |ev| {
-                        use wasm_bindgen::JsCast;
-                        let val = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()).map(|i| i.value()).unwrap_or_default();
-                        req_email.set(val);
-                    }
+                    on:input=move |ev| req_email.set(event_target_value(&ev))
                 />
             </div>
             <div class="form-group">
                 <label>{move || t(&lang.get(), "amount_kx")}</label>
                 <input type="number" class="input" step="0.01" min="0.01"
                     prop:value=move || req_amount.get()
-                    on:input=move |ev| {
-                        use wasm_bindgen::JsCast;
-                        let val = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()).map(|i| i.value()).unwrap_or_default();
-                        req_amount.set(val);
-                    }
+                    on:input=move |ev| req_amount.set(event_target_value(&ev))
                 />
             </div>
             <div class="form-group">
                 <label>{move || t(&lang.get(), "memo_optional")}</label>
                 <input type="text" class="input" maxlength="256"
                     prop:value=move || req_note.get()
-                    on:input=move |ev| {
-                        use wasm_bindgen::JsCast;
-                        let val = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()).map(|i| i.value()).unwrap_or_default();
-                        req_note.set(val);
-                    }
+                    on:input=move |ev| req_note.set(event_target_value(&ev))
                 />
             </div>
             <button class="btn gold" on:click=on_send_request disabled=move || req_busy.get()>
-                {move || t(&lang.get(), "send_request")}
+                "Send KX Request"
             </button>
+            <p class="muted" style="font-size:11px;margin-top:6px">"Recipients can pay or decline at their convenience."</p>
             {move || {
                 let s = req_msg.get();
                 if s.is_empty() { view! { <span></span> }.into_any() }
                 else {
-                    let cls = if s.starts_with("Error") { "msg error" }
-                              else if s.starts_with("You can only") { "msg warning" }
-                              else { "msg success" };
+                    let cls = if s.starts_with("Error") { "msg error" } else { "msg success" };
                     view! { <p class=cls>{s}</p> }.into_any()
                 }
             }}
         </div>
 
-        // Trusted Contacts
+        // Address Book
         <div class="card" style="margin-top:16px">
-            <h3 class="section-title">{move || t(&lang.get(), "trusted_contacts")}</h3>
+            <h3 class="section-title">"Address Book"</h3>
             {move || {
-                let list = contacts.get();
-                if list.is_empty() {
-                    view! { <p class="muted">{move || t(&lang.get(), "no_trusted")}</p> }.into_any()
+                let list = address_book.get();
+                if list.is_empty() && !ab_show_add.get() {
+                    view! { <p class="muted">"No contacts saved yet."</p> }.into_any()
                 } else {
                     view! {
-                        <div class="timelock-list">
-                            {list.into_iter().map(|c| {
-                                let email = c.email.clone();
-                                let email_for_remove = email.clone();
+                        <div style="display:flex;flex-direction:column;gap:6px">
+                            {list.into_iter().map(|entry| {
+                                let email_c = entry.email.clone();
+                                let email_fill = entry.email.clone();
+                                let indicator = match entry.registered {
+                                    Some(true) => "\u{1f7e2}",
+                                    Some(false) => "\u{1f7e1}",
+                                    None => "\u{26aa}",
+                                };
+                                let display = entry.name.as_ref()
+                                    .filter(|n| !n.is_empty())
+                                    .cloned()
+                                    .unwrap_or_else(|| entry.email.clone());
+                                let email_sub = if entry.name.is_some() && !entry.name.as_ref().unwrap().is_empty() {
+                                    Some(entry.email.clone())
+                                } else { None };
                                 view! {
-                                    <div class="timelock-item" style="display:flex;justify-content:space-between;align-items:center">
-                                        <span>{email}</span>
-                                        <button class="btn-outline small" on:click=move |_| {
-                                            let e = email_for_remove.clone();
-                                            spawn_local(async move {
-                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": e }))
-                                                    .unwrap_or(no_args());
-                                                let _ = call::<()>("remove_trusted_contact", args).await;
-                                            });
-                                        }>{move || t(&lang.get(), "remove")}</button>
+                                    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#0d0d1a;border-radius:6px;cursor:pointer"
+                                        on:click=move |_| {
+                                            req_email.set(email_fill.clone());
+                                        }>
+                                        <span style="font-size:10px">{indicator}</span>
+                                        <div style="flex:1;min-width:0">
+                                            <span style="font-size:13px;color:#e5e7eb;font-weight:600">{display}</span>
+                                            {if let Some(ref sub) = email_sub {
+                                                view! { <span style="font-size:11px;color:#888;margin-left:6px">{sub.clone()}</span> }.into_any()
+                                            } else { view! { <span></span> }.into_any() }}
+                                        </div>
+                                        <button style="background:none;border:1px solid #333;color:#888;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;flex-shrink:0"
+                                            on:click=move |ev| {
+                                                ev.stop_propagation();
+                                                let e = email_c.clone();
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": e })).unwrap_or(no_args());
+                                                    let _ = call::<()>("remove_from_address_book", args).await;
+                                                    load_book();
+                                                });
+                                            }>"Remove"</button>
                                     </div>
                                 }
                             }).collect_view()}
                         </div>
                     }.into_any()
                 }
+            }}
+            // Add to Address Book
+            {move || if ab_show_add.get() {
+                view! {
+                    <div style="margin-top:10px;padding:10px;background:#0d0d1a;border-radius:6px;display:flex;flex-direction:column;gap:6px">
+                        <input type="email" class="input" placeholder="email@address.com"
+                            prop:value=move || ab_new_email.get()
+                            on:input=move |ev| ab_new_email.set(event_target_value(&ev))
+                        />
+                        <input type="text" class="input" placeholder="Name (optional)"
+                            prop:value=move || ab_new_name.get()
+                            on:input=move |ev| ab_new_name.set(event_target_value(&ev))
+                        />
+                        <div style="display:flex;gap:6px">
+                            <button class="btn gold" style="flex:1;font-size:12px;padding:6px" on:click=move |_| {
+                                let email = ab_new_email.get_untracked().trim().to_string();
+                                let name = ab_new_name.get_untracked().trim().to_string();
+                                if email.is_empty() { return; }
+                                let name_opt: Option<String> = if name.is_empty() { None } else { Some(name) };
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                        "email": email, "name": name_opt,
+                                    })).unwrap_or(no_args());
+                                    let _ = call::<()>("add_to_address_book", args).await;
+                                    // Check registration
+                                    let check_args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": email })).unwrap_or(no_args());
+                                    let _ = call::<bool>("check_email_registered", check_args).await;
+                                    ab_new_email.set(String::new());
+                                    ab_new_name.set(String::new());
+                                    ab_show_add.set(false);
+                                    load_book();
+                                });
+                            }>"Save"</button>
+                            <button style="flex:1;font-size:12px;padding:6px" on:click=move |_| ab_show_add.set(false)>"Cancel"</button>
+                        </div>
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <button style="margin-top:10px;width:100%;font-size:12px;padding:8px;background:none;border:1px dashed #444;color:#888;border-radius:6px;cursor:pointer"
+                        on:click=move |_| ab_show_add.set(true)>
+                        "+ Add to Address Book"
+                    </button>
+                }.into_any()
             }}
         </div>
     }
@@ -7017,6 +7064,25 @@ fn OpenPanel(
                 }
             }
 
+            // 5. Incoming KX requests (v2.4.1)
+            if let Ok(reqs) = call::<Vec<KxRequest>>("get_pending_kx_requests", no_args()).await {
+                for r in reqs {
+                    all.push(OpenItem {
+                        id: r.request_id.clone(),
+                        item_type: "request".to_string(),
+                        icon: "\u{1f44b}",
+                        badge_label: "REQUEST".to_string(),
+                        badge_color: "#3b82f6".to_string(),
+                        description: format!("{} wants {} KX", if r.from_name.is_empty() { &r.from_email } else { &r.from_name }, r.amount_kx),
+                        amount_kx: Some(r.amount_kx),
+                        time_label: r.note.clone().unwrap_or_default(),
+                        can_dismiss: true,
+                        dismiss_tooltip: None,
+                        sort_time: r.created_at as i64,
+                    });
+                }
+            }
+
             items.set(all);
             loading.set(false);
         });
@@ -7131,7 +7197,7 @@ fn OpenPanel(
                         format!("Decline this invoice from {}?\nThey will be notified by email.", item.description),
                         "Decline Invoice",
                     ),
-                    "poke" => (
+                    "poke" | "request" => (
                         "Decline Request",
                         format!("Decline payment request from {}?", item.description),
                         "Decline",
@@ -7179,6 +7245,10 @@ fn OpenPanel(
                                                     "poke" => {
                                                         let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "requestId": iid })).unwrap_or(no_args());
                                                         call::<()>("decline_poke", args).await.map(|_| ())
+                                                    }
+                                                    "request" => {
+                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "requestId": iid })).unwrap_or(no_args());
+                                                        call::<()>("decline_kx_request", args).await.map(|_| ())
                                                     }
                                                     "TYPE_V" | "kxgo" | "TYPE_C" | "credit" | "TYPE_Y" | "deposit" => {
                                                         let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "commitmentId": iid, "commitmentType": itype })).unwrap_or(no_args());
@@ -9130,6 +9200,17 @@ fn SettingsPanel(
                             if auth_method.get() != "biometric" {
                                 auth_method_loading.set(true);
                                 spawn_local(async move {
+                                    // Check availability first
+                                    let avail = call::<String>("check_biometric_available", no_args()).await.unwrap_or_else(|_| "not_supported".to_string());
+                                    if avail != "available" {
+                                        cp_msg.set(if avail == "not_configured" {
+                                            "Windows Hello is not configured. Set it up in Windows Settings first.".to_string()
+                                        } else {
+                                            "Biometric authentication not supported on this device.".to_string()
+                                        });
+                                        auth_method_loading.set(false);
+                                        return;
+                                    }
                                     match call::<bool>("authenticate_biometric", no_args()).await {
                                         Ok(true) => {
                                             let args = serde_wasm_bindgen::to_value(
@@ -9137,9 +9218,13 @@ fn SettingsPanel(
                                             ).unwrap_or(no_args());
                                             let _ = call::<()>("set_auth_method", args).await;
                                             auth_method.set("biometric".to_string());
+                                            cp_msg.set("\u{2705} Biometric login enabled".to_string());
+                                        }
+                                        Err(e) => {
+                                            cp_msg.set(e);
                                         }
                                         _ => {
-                                            // Biometric not available or failed
+                                            cp_msg.set("Biometric verification failed.".to_string());
                                         }
                                     }
                                     auth_method_loading.set(false);
@@ -9148,6 +9233,13 @@ fn SettingsPanel(
                         }
                     >{move || if auth_method_loading.get() { "\u{2026}" } else { "Biometric" }}</button>
                 </div>
+                // Biometric status message
+                {move || {
+                    let m = cp_msg.get();
+                    if m.is_empty() || m.starts_with("PIN changed") { view! { <span></span> }.into_any() }
+                    else if m.starts_with("\u{2705}") { view! { <p class="msg success" style="margin-bottom:8px">{m}</p> }.into_any() }
+                    else { view! { <p class="msg error" style="margin-bottom:8px">{m}</p> }.into_any() }
+                }}
 
                 // PIN-specific options (only when PIN is selected)
                 {move || if auth_method.get() == "pin" {
@@ -9197,6 +9289,50 @@ fn SettingsPanel(
                         }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
                     }.into_any()
                 }}
+            </div>
+
+            // ── KX Request Permissions ──
+            <div class="settings-section">
+                <p class="label">"KX Requests"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:6px">"Who can request KX from me?"</p>
+                // Note: request_permission state will use inline spawn_local
+                // to keep this section self-contained
+                {
+                    let rp = RwSignal::new("anyone".to_string());
+                    Effect::new(move |_| {
+                        spawn_local(async move {
+                            let p = call::<String>("get_request_permission", no_args()).await.unwrap_or_else(|_| "anyone".to_string());
+                            rp.set(p);
+                        });
+                    });
+                    let set_perm = move |val: &str| {
+                        let v = val.to_string();
+                        rp.set(v.clone());
+                        spawn_local(async move {
+                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "permission": v })).unwrap_or(no_args());
+                            let _ = call::<()>("set_request_permission", args).await;
+                        });
+                    };
+                    view! {
+                        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb">
+                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "anyone"
+                                    on:change=move |_| set_perm("anyone") style="accent-color:#d4a84b" />
+                                "Anyone"
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb">
+                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "address_book"
+                                    on:change=move |_| set_perm("address_book") style="accent-color:#d4a84b" />
+                                "Only people in my Address Book"
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb">
+                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "nobody"
+                                    on:change=move |_| set_perm("nobody") style="accent-color:#d4a84b" />
+                                "Nobody"
+                            </label>
+                        </div>
+                    }
+                }
             </div>
 
             // ── Backup Your Wallet (Seed Phrase) ──
