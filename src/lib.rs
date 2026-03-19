@@ -2408,7 +2408,38 @@ fn PinScreen(
                 <img src=logo_src() alt="ChronX" style="height:44px;width:auto;display:inline-block" />
             </div>
 
-            <div class="pin-screen">
+            // Biometric unlock screen (shown when biometric mode, before fallback to PIN)
+            {move || {
+                let is_unlock = phase.get() == AppPhase::PinUnlock;
+                let show_pin = bio_show_pin.get();
+                let attempted = bio_attempted.get();
+                if is_unlock && !show_pin && attempted {
+                    // Biometric succeeded or still waiting — show clean screen
+                    return view! {
+                        <div class="pin-screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding-top:40px">
+                            <span style="font-size:48px">{"\u{1f9d1}\u{200d}\u{1f4bb}"}</span>
+                            <p class="pin-title">"Unlock with Windows Hello"</p>
+                            <p class="muted" style="font-size:13px">"Verifying your identity\u{2026}"</p>
+                        </div>
+                    }.into_any();
+                }
+                if is_unlock && !show_pin && !attempted {
+                    // Still loading auth_method check
+                    return view! {
+                        <div class="pin-screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding-top:40px">
+                            <span style="font-size:48px">{"\u{1f513}"}</span>
+                            <p class="pin-title">"Unlocking\u{2026}"</p>
+                        </div>
+                    }.into_any();
+                }
+                view! { <span></span> }.into_any()
+            }}
+
+            <div class="pin-screen" style:display=move || {
+                let is_unlock = phase.get() == AppPhase::PinUnlock;
+                let show_pin = bio_show_pin.get();
+                if is_unlock && !show_pin { "none" } else { "" }
+            }>
                 <p class="pin-title">
                     {move || match phase.get() {
                         AppPhase::PinSetup   => "Create Your PIN",
@@ -2477,7 +2508,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.3"
+                    "ChronX Wallet v2.4.4"
                 </p>
             </div>
         </div>
@@ -2824,6 +2855,15 @@ fn AccountPanel(
     });
     let home_claim_msg  = RwSignal::new(String::new());
     let home_claim_busy = RwSignal::new(false);
+    let claim_collapsed = RwSignal::new(false); // true = collapsed (user has verified emails)
+
+    // Check if user has verified emails → collapse claim section
+    Effect::new(move |_| {
+        spawn_local(async move {
+            let emails = call::<Vec<String>>("get_verified_emails", no_args()).await.unwrap_or_default();
+            claim_collapsed.set(!emails.is_empty());
+        });
+    });
 
     // Whitelist popup state (shown after successful claim)
     let wl_show    = RwSignal::new(false);
@@ -3510,9 +3550,32 @@ fn AccountPanel(
 
                 <hr style="border:none;border-top:1px solid #1e2130;margin:14px 0" />
 
-                // ── Claim Code ───────────────────────────────────────────────
+                // ── Claim Code (collapsible when user has verified emails) ──
                 <div style="border:1px solid rgba(212,168,75,0.3);border-radius:8px;padding:12px;margin-top:0">
-                    <p style="font-size:15px;font-weight:700;color:#d4a84b;margin:0 0 6px">"Got a claim code?"</p>
+                    {move || if claim_collapsed.get() {
+                        view! {
+                            <a href="javascript:void(0)" style="font-size:14px;font-weight:700;color:#d4a84b;text-decoration:none;display:block"
+                                on:click=move |_| claim_collapsed.set(false)>
+                                "Got a claim code? \u{203a}"
+                            </a>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div>
+                                <p style="font-size:15px;font-weight:700;color:#d4a84b;margin:0 0 6px;cursor:pointer"
+                                    on:click=move |_| {
+                                        // Only allow re-collapse if user has verified emails
+                                        spawn_local(async move {
+                                            let emails = call::<Vec<String>>("get_verified_emails", no_args()).await.unwrap_or_default();
+                                            if !emails.is_empty() { claim_collapsed.set(true); }
+                                        });
+                                    }>
+                                    "Got a claim code? \u{2039}"
+                                </p>
+                            </div>
+                        }.into_any()
+                    }}
+                    <div style:display=move || if claim_collapsed.get() { "none" } else { "" }>
                     <p class="muted" style="font-size:12px;margin-bottom:8px">
                         "Paste the code you received to claim your KX."
                     </p>
@@ -3599,6 +3662,7 @@ fn AccountPanel(
                             view! { <p class=cls style="margin-top:6px;text-align:center">{s}</p> }.into_any()
                         }
                     }}
+                    </div> // close style:display wrapper
                 </div>
 
                 // ── Email registration prompt after claim ────────────────────
@@ -9434,8 +9498,18 @@ fn SettingsPanel(
                 }
             }
 
-            // ── Backup Your Wallet (Seed Phrase) ──
+            // ── Wallet Management (collapsed by default) ──
             <div class="settings-section">
+                {
+                    let wm_expanded = RwSignal::new(false);
+                    view! {
+                        <a href="javascript:void(0)" style="display:flex;align-items:center;gap:6px;color:#e5e7eb;text-decoration:none;font-weight:600;font-size:14px"
+                            on:click=move |_| wm_expanded.set(!wm_expanded.get_untracked())>
+                            <span style=move || if wm_expanded.get() { "transition:0.2s;transform:rotate(90deg)" } else { "transition:0.2s" }>{"\u{25b6}"}</span>
+                            "Backup & Recovery"
+                        </a>
+                        <div style:display=move || if wm_expanded.get() { "" } else { "none" }>
+            <div style="margin-top:12px">
                 <p class="label">"Backup Your Wallet"</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
                     "These 24 words are the ONLY way to recover your wallet. Write them down and store them safely offline."
@@ -9555,6 +9629,11 @@ fn SettingsPanel(
             } else {
                 view! { <span></span> }.into_any()
             }}
+
+            </div> // close wm_expanded div
+                    }
+                }
+            </div> // close Wallet Management section
 
             // My Emails for KX Claims (with verification)
             <div class="settings-section">

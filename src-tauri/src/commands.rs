@@ -1452,18 +1452,46 @@ pub async fn set_auth_method(app: AppHandle, method: String) -> Result<(), Strin
 }
 
 /// Authenticate via platform biometric (Windows Hello).
+/// Minimizes the Tauri window so Windows Hello dialog is visible.
 #[tauri::command]
 pub async fn authenticate_biometric(app: AppHandle) -> Result<bool, String> {
-    let _ = &app;
     #[cfg(windows)]
     {
+        use tauri::Manager;
         use windows::Security::Credentials::UI::{
             UserConsentVerifier, UserConsentVerificationResult,
         };
+
+        // Minimize app window so Windows Hello dialog is visible
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.minimize();
+        }
+
         let op = UserConsentVerifier::RequestVerificationAsync(
             &windows::core::HSTRING::from("Unlock ChronX Wallet"),
-        ).map_err(|e| format!("Windows Hello unavailable: {e}"))?;
-        let result = op.get().map_err(|e| format!("Windows Hello error: {e}"))?;
+        ).map_err(|e| {
+            // Restore window on error
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+            format!("Windows Hello unavailable: {e}")
+        })?;
+
+        let result = op.get().map_err(|e| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+            format!("Windows Hello error: {e}")
+        })?;
+
+        // Restore window after authentication
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        }
+
         match result {
             UserConsentVerificationResult::Verified => Ok(true),
             UserConsentVerificationResult::Canceled => Ok(false),
@@ -1478,6 +1506,7 @@ pub async fn authenticate_biometric(app: AppHandle) -> Result<bool, String> {
     }
     #[cfg(not(windows))]
     {
+        let _ = &app;
         Err("Biometric authentication not available on this platform".to_string())
     }
 }

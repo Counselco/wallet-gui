@@ -3,7 +3,7 @@
 
 [package]
 name = "chronx-wallet-gui"
-version = "2.4.3"
+version = "2.4.4"
 edition = "2021"
 
 [features]
@@ -50,4 +50,5 @@ chronx-crypto = { path = "../../crates/chronx-crypto" }
 windows = { version = "0.58", features = [
   "Security_Credentials_UI",
   "Foundation",
+  "Win32_UI_WindowsAndMessaging",
 ] }
