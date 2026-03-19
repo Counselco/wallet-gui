@@ -2045,7 +2045,11 @@ fn App() -> impl IntoView {
                         }}
                     </div>
 
-                    // Version footer — always visible
+                    // Version footer — hidden on Settings tab (shown there already)
+                    <div style:display=move || {
+                        let settings_idx: u8 = if desktop { 4 } else { 3 };
+                        if active_tab.get() == settings_idx { "none" } else { "" }
+                    }>
                     <p class="version-footer">
                         "ChronX Wallet v"
                         {move || app_version.get()}
@@ -2054,7 +2058,8 @@ fn App() -> impl IntoView {
                         <button class="bug-report-btn" on:click=move |_| {
                             bug_body.set(String::new());
                             bug_modal_open.set(true);
-                        }>"🐞 Report a Bug"</button>
+                        }>"\u{1f41e} Report a Bug"</button>
+                    </div>
                     </div>
                     </div> // close main-content
 
@@ -2508,7 +2513,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.4.8"
+                    "ChronX Wallet v2.4.9"
                 </p>
             </div>
         </div>
@@ -9079,11 +9084,11 @@ fn SettingsPanel(
                 let advanced_open = RwSignal::new(false);
                 let node_editing = RwSignal::new(false);
                 view! {
-                    <div class="settings-section" style="margin-top:12px;border-top:1px solid #2d3748;padding-top:12px;order:8">
-                        <div style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px"
+                    <div class="settings-section" style="order:8">
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| advanced_open.update(|v| *v = !*v)>
-                            <span style="font-size:12px;color:#9ca3af">{move || if advanced_open.get() { "\u{25BC}" } else { "\u{25B6}" }}</span>
-                            <span style="font-size:13px;color:#9ca3af;font-weight:600">"Advanced Settings"</span>
+                            <span style="font-size:14px;color:#e5e7eb">{"\u{2699}\u{fe0f} Advanced Settings"}</span>
+                            <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if advanced_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                         </div>
                         {move || if advanced_open.get() {
                             view! {
@@ -9398,7 +9403,7 @@ fn SettingsPanel(
             <div class="settings-section" style="order:3;padding-bottom:0">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
-                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f512} Privacy"}</span>
+                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f441}\u{fe0f} Privacy"}</span>
                     <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_privacy_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                 </div>
             </div>
@@ -9551,11 +9556,11 @@ fn SettingsPanel(
                 {
                     let wm_expanded = RwSignal::new(false);
                     view! {
-                        <a href="javascript:void(0)" style="display:flex;align-items:center;gap:6px;color:#e5e7eb;text-decoration:none;font-weight:600;font-size:14px"
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| wm_expanded.set(!wm_expanded.get_untracked())>
-                            <span style=move || if wm_expanded.get() { "transition:0.2s;transform:rotate(90deg)" } else { "transition:0.2s" }>{"\u{25b6}"}</span>
-                            "Backup & Recovery"
-                        </a>
+                            <span style="font-size:14px;color:#e5e7eb">{"\u{1f5c2}\u{fe0f} Backup & Recovery"}</span>
+                            <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if wm_expanded.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
+                        </div>
                         <div style:display=move || if wm_expanded.get() { "" } else { "none" }>
             <div style="margin-top:12px">
                 <p class="label">"Backup Your Wallet"</p>
