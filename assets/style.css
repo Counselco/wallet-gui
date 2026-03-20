@@ -798,6 +798,7 @@ input[type="datetime-local"] { color-scheme: dark; }
 /* ── Version footer ──────────────────────────────────────────────────────── */
 
 .version-footer {
+    display: none;
     text-align: center;
     font-size: 11px;
     color: #2d3748;
