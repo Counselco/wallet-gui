@@ -2571,7 +2571,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.3"
+                    "ChronX Wallet v2.5.4"
                 </p>
             </div>
         </div>
@@ -9046,6 +9046,7 @@ fn SettingsPanel(
     let show_mobile_rewards = RwSignal::new(false);
     // Collapsible section states (v2.4.8)
     let sec_notices_open = RwSignal::new(false);
+    let sec_rewards_open = RwSignal::new(false);
     let sec_privacy_open = RwSignal::new(false);
     let sec_security_open = RwSignal::new(false);
     // Auto-open Notices if unread notices exist
@@ -9110,7 +9111,10 @@ fn SettingsPanel(
             <div class="settings-section" style="margin-bottom:12px;order:1">
                 <div class="row" style="justify-content:space-between;align-items:center;cursor:pointer"
                     on:click=move |_| show_lang_picker.set(!show_lang_picker.get_untracked())>
-                    <span>{move || format!("\u{1f310} {}", t(&lang.get(), "settings_language"))}</span>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="width:28px;height:28px;border-radius:6px;background:#4A90D9;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:13px;font-weight:700">"EN"</span>
+                        <span>{move || t(&lang.get(), "settings_language")}</span>
+                    </div>
                     <span style="color:#DAA520">{move || {
                         let l = lang.get();
                         t(&l, &format!("lang_{}", l))
@@ -9169,35 +9173,20 @@ fn SettingsPanel(
                 }}
             </div>
 
-            // Mobile-only: History and Rewards links
-            {if !desktop {
-                view! {
-                    <div class="settings-section" style="margin-bottom:8px;order:1">
-                        <div class="row" style="cursor:pointer;padding:8px 0"
-                            on:click=move |_| show_mobile_history.set(true)>
-                            <span>{move || format!("\u{1f4dc} {} \u{2192}", t(&lang.get(), "transaction_history"))}</span>
-                        </div>
-                    </div>
-                    <div class="settings-section" style="margin-bottom:8px;order:1">
-                        <div class="row" style="cursor:pointer;padding:8px 0"
-                            on:click=move |_| show_mobile_rewards.set(true)>
-                            <span>{move || format!("\u{1f381} {} \u{2192}", t(&lang.get(), "tab_rewards"))}</span>
-                        </div>
-                    </div>
-                }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
-            }}
+            // (Mobile nav links removed in v2.5.4 — Activity tab handles History, Rewards is its own section)
 
-            // Node URL (desktop only, collapsed Advanced)
-            {if desktop {
+            // Advanced Settings (all platforms)
+            {
                 let advanced_open = RwSignal::new(false);
                 let node_editing = RwSignal::new(false);
                 view! {
                     <div class="settings-section" style="order:8">
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| advanced_open.update(|v| *v = !*v)>
-                            <span style="font-size:14px;color:#e5e7eb">{"\u{2699}\u{fe0f} Advanced Settings"}</span>
+                            <div style="display:flex;align-items:center;gap:10px">
+                                <span style="width:28px;height:28px;border-radius:6px;background:#808080;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{2699}"}</span>
+                                <span style="font-size:14px;color:#e5e7eb">"Advanced"</span>
+                            </div>
                             <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if advanced_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                         </div>
                         {move || if advanced_open.get() {
@@ -9236,11 +9225,9 @@ fn SettingsPanel(
                         }}
                     </div>
                 }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
-            }}
+            }
 
-            // Public Key
+            // Public Key (moved inside Advanced via CSS order)
             <div class="settings-section" style="order:8">
                 <p class="label" style="text-transform:uppercase;letter-spacing:1px">{move || t(&lang.get(), "settings_public_key")}</p>
                 <p class="muted" style="font-size:11px;margin-bottom:6px">
@@ -9284,7 +9271,10 @@ fn SettingsPanel(
             <div class="settings-section" style="order:2">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_notices_open.set(!sec_notices_open.get_untracked())>
-                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f514} Notices"}</span>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="width:28px;height:28px;border-radius:6px;background:#F5A623;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:13px;font-weight:700">"!"</span>
+                        <span style="font-size:14px;color:#e5e7eb">"Notices"</span>
+                    </div>
                     <div style="display:flex;align-items:center;gap:6px">
                         {move || {
                             let unread = notices.get().iter()
@@ -9376,11 +9366,31 @@ fn SettingsPanel(
                 </div> // close notices collapsible
             </div>
 
+            // Rewards (collapsible)
+            <div class="settings-section" style="order:3">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
+                    on:click=move |_| sec_rewards_open.set(!sec_rewards_open.get_untracked())>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="width:28px;height:28px;border-radius:6px;background:#FFD700;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#1a1a2e;font-size:14px;font-weight:700">{"\u{2605}"}</span>
+                        <span style="font-size:14px;color:#e5e7eb">"Rewards"</span>
+                    </div>
+                    <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_rewards_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
+                </div>
+                <div style:display=move || if sec_rewards_open.get() { "" } else { "none" }>
+                    <div style="padding:12px 0">
+                        <RewardsPanel active_tab=active_tab />
+                    </div>
+                </div>
+            </div>
+
             // Security (collapsible)
-            <div class="settings-section" style="order:4">
+            <div class="settings-section" style="order:5">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_security_open.set(!sec_security_open.get_untracked())>
-                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f510} Security"}</span>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="width:28px;height:28px;border-radius:6px;background:#50C878;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{2022}"}</span>
+                        <span style="font-size:14px;color:#e5e7eb">"Security"</span>
+                    </div>
                     <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_security_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                 </div>
                 <div style:display=move || if sec_security_open.get() { "" } else { "none" }>
@@ -9510,15 +9520,18 @@ fn SettingsPanel(
             // We handle it as its own order:4 section right after Security
 
             // ── Privacy collapsible header ──
-            <div class="settings-section" style="order:3;padding-bottom:0">
+            <div class="settings-section" style="order:4;padding-bottom:0">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
-                    <span style="font-size:14px;color:#e5e7eb">{"\u{1f441}\u{fe0f} Privacy"}</span>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="width:28px;height:28px;border-radius:6px;background:#7B68EE;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{25cf}"}</span>
+                        <span style="font-size:14px;color:#e5e7eb">"Privacy"</span>
+                    </div>
                     <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_privacy_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                 </div>
             </div>
             // ── Privacy content (inside collapsible) ──
-            <div class="settings-section" style="order:3;padding-top:0;margin-top:-8px"
+            <div class="settings-section" style="order:4;padding-top:0;margin-top:-8px"
                  style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
                 // Show badges toggle (with inline badge pills)
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
@@ -9645,7 +9658,10 @@ fn SettingsPanel(
                     view! {
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| wm_expanded.set(!wm_expanded.get_untracked())>
-                            <span style="font-size:14px;color:#e5e7eb">{"\u{1f5c2}\u{fe0f} Backup & Recovery"}</span>
+                            <div style="display:flex;align-items:center;gap:10px">
+                                <span style="width:28px;height:28px;border-radius:6px;background:#FF8C00;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{2193}"}</span>
+                                <span style="font-size:14px;color:#e5e7eb">"Backup & Recovery"</span>
+                            </div>
                             <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if wm_expanded.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                         </div>
                         <div style:display=move || if wm_expanded.get() { "" } else { "none" }>
@@ -9776,7 +9792,7 @@ fn SettingsPanel(
             </div> // close Wallet Management section
 
             // My Emails for KX Claims — inside Security (collapsed with it)
-            <div class="settings-section" style="order:5;padding-top:0;margin-top:-8px"
+            <div class="settings-section" style="order:6;padding-top:0;margin-top:-8px"
                  style:display=move || if sec_security_open.get() { "" } else { "none" }>
                 <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
