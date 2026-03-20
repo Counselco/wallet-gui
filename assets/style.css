@@ -2345,3 +2345,29 @@ input[type="range"].pct-slider {
     max-height: 600px;
     padding: 4px 0;
 }
+.send-later-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 0;
+}
+.send-later-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    color: #e6edf3;
+    font-size: 15px;
+    white-space: nowrap;
+    user-select: none;
+    padding: 0;
+    margin: 0;
+}
+.send-later-row input[type="radio"] {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    accent-color: #d4a84b;
+    cursor: pointer;
+    margin: 0;
+}

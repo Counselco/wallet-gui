@@ -1136,7 +1136,7 @@ fn App() -> impl IntoView {
     // Desktop: 0=Receive 1=Send 2=Activity 3=Request 4=Settings
     let active_tab  = RwSignal::new(0u8);
     let activity_sub = RwSignal::new(0u8); // 0=History, 1=Promises, 2=Open
-    let app_version = RwSignal::new("1.0.0".to_string());
+    let app_version = RwSignal::new("2.5.8".to_string());
     let desktop     = is_desktop();
 
     // Language signal
@@ -2572,7 +2572,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.7"
+                    "ChronX Wallet v2.5.8"
                 </p>
             </div>
         </div>
@@ -5121,10 +5121,10 @@ fn SendPanel(
                 };
                 view! {
                     <div class="send-later-options visible">
-                        <div style="display:flex;flex-direction:column;gap:6px;padding:8px 0">
+                        <div class="send-later-radio-group">
                             {presets.into_iter().map(|(val, label, secs)| {
                                 view! {
-                                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:#e5e7eb;padding:4px 0">
+                                    <label class="send-later-row">
                                         <input type="radio" name="send_later_opt"
                                             prop:checked=move || later_choice.get() == val && !show_date_picker.get()
                                             on:change=move |_| {
@@ -5152,7 +5152,7 @@ fn SendPanel(
                                 }
                             }).collect::<Vec<_>>()}
                             // "Pick a date..." option
-                            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:#e5e7eb;padding:4px 0">
+                            <label class="send-later-row">
                                 <input type="radio" name="send_later_opt"
                                     prop:checked=move || show_date_picker.get()
                                     on:change=move |_| {
@@ -5206,6 +5206,7 @@ fn SendPanel(
                                             disabled=move || sending.get() />
                                     </div>
                                 </div>
+                                <p style="font-size:11px;color:#666;margin-top:6px;font-style:italic">"Times are in your local timezone"</p>
                             }.into_any()
                         } else {
                             view! { <span></span> }.into_any()
@@ -5234,7 +5235,7 @@ fn SendPanel(
                             let mins = d.get_minutes();
                             let ampm = if hours >= 12 { "PM" } else { "AM" };
                             let h12 = if hours % 12 == 0 { 12 } else { hours % 12 };
-                            let label = format!("This KX will arrive on\n{} {}, {} at {}:{:02} {}", month_name, day, year, h12, mins, ampm);
+                            let label = format!("This KX will arrive on\n{} {}, {} at {}:{:02} {} (your local time)", month_name, day, year, h12, mins, ampm);
                             view! { <p style="color:#d4a84b;font-size:13px;margin-top:6px;font-weight:600;white-space:pre-line">{label}</p> }.into_any()
                         }}
                     </div>
@@ -5260,7 +5261,8 @@ fn SendPanel(
             {move || if send_mode.get() == 1 && is_desktop() {
                 view! {
                     <div class="beneficiary-field">
-                        <label>"Beneficiary Description "<span style="color:#666;font-size:0.8rem">"(optional \u{2014} strongly recommended for promises over 1 year)"</span></label>
+                        <label>"Beneficiary Description"</label>
+                        <p style="color:#888;font-size:12px;font-style:italic;margin:2px 0 6px">"Additional beneficiary info is strongly recommended for promises over 1 year."</p>
                         <textarea class="lp-textarea" rows="3" maxlength="1000"
                             placeholder="Who is this for? Describe the intended recipient so they can be identified in the future.\nExample: Emma Johnson, my daughter, born 2019. Last known email: emma@example.com."
                             prop:value=move || grantor_intent.get()
