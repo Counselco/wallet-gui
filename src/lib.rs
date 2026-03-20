@@ -2119,7 +2119,7 @@ fn App() -> impl IntoView {
                         <button class="bug-report-btn" on:click=move |_| {
                             bug_body.set(String::new());
                             bug_modal_open.set(true);
-                        }>"\u{1f41e} Report a Bug"</button>
+                        }>"Report a Bug"</button>
                     </div>
                     </div>
                     </div> // close main-content
@@ -2140,7 +2140,7 @@ fn App() -> impl IntoView {
                                 }
                             }>
                                 <div class="modal-box">
-                                    <p class="modal-title">"🐞 Report a Bug"</p>
+                                    <p class="modal-title">"Report a Bug"</p>
                                     <p class="label" style="font-size:12px">
                                         "Subject: " {format!("ChronX Wallet v{version} — Bug Report")}
                                     </p>
@@ -3075,9 +3075,9 @@ fn AccountPanel(
                             if !dn.is_empty() {
                                 view! { <p style="font-size:13px;color:#d4a84b;font-weight:700;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{dn}
                                     {move || match badge.get().as_str() {
-                                        "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#7c3aed;color:white;font-size:11px;font-weight:700;margin-left:4px">{"\u{1f451} Founder"}</span> }.into_any(),
-                                        "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#d4a84b;color:black;font-size:11px;font-weight:700;margin-left:4px">{"\u{1f48e} Genesis"}</span> }.into_any(),
-                                        "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#e2e8f0;color:#1a1a2e;font-size:11px;font-weight:700;margin-left:4px">{"\u{26a1} Patron"}</span> }.into_any(),
+                                        "FOUNDING_MEMBER" | "Founding Team" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#d4a84b;color:black;font-size:11px;font-weight:700;margin-left:4px">{"Founding Team"}</span> }.into_any(),
+                                        "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#d4a84b;color:black;font-size:11px;font-weight:700;margin-left:4px">{"Genesis"}</span> }.into_any(),
+                                        "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#e2e8f0;color:#1a1a2e;font-size:11px;font-weight:700;margin-left:4px">{"Patron"}</span> }.into_any(),
                                         _ => view! { <span></span> }.into_any(),
                                     }}
                                     // v2.2.2: KXGO badges (Bronze/Silver/Gold)
@@ -3086,9 +3086,9 @@ fn AccountPanel(
                                         view! {
                                             {badges.into_iter().filter_map(|b| {
                                                 let (bg, fg, label) = match b.badge_type.as_str() {
-                                                    "KXGO_BRONZE" => ("#CD7F32", "white", "\u{1f3c6} KXGO Bronze"),
-                                                    "KXGO_SILVER" => ("#C0C0C0", "#1a1a2e", "\u{1f3c6} KXGO Silver"),
-                                                    "KXGO_GOLD"   => ("#D4A84B", "black", "\u{1f3c6} KXGO Gold"),
+                                                    "KXGO_BRONZE" => ("#CD7F32", "white", "KXGO Bronze"),
+                                                    "KXGO_SILVER" => ("#C0C0C0", "#1a1a2e", "KXGO Silver"),
+                                                    "KXGO_GOLD"   => ("#D4A84B", "black", "KXGO Gold"),
                                                     _ => return None,
                                                 };
                                                 Some(view! {
@@ -3936,9 +3936,9 @@ fn AccountPanel(
                         }}
                         // Badge in profile modal
                         {move || match badge.get().as_str() {
-                            "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#7c3aed;color:white;font-size:13px;font-weight:700;margin-top:4px">{"\u{1f451} Founding Member"}</span> }.into_any(),
-                            "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#d4a84b;color:black;font-size:13px;font-weight:700;margin-top:4px">{"\u{1f48e} Genesis Member"}</span> }.into_any(),
-                            "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#e2e8f0;color:#1a1a2e;font-size:13px;font-weight:700;margin-top:4px">{"\u{26a1} Protocol Patron"}</span> }.into_any(),
+                            "FOUNDING_MEMBER" | "Founding Team" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#d4a84b;color:black;font-size:13px;font-weight:700;margin-top:4px">{"Founding Team"}</span> }.into_any(),
+                            "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#d4a84b;color:black;font-size:13px;font-weight:700;margin-top:4px">{"Genesis Member"}</span> }.into_any(),
+                            "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#e2e8f0;color:#1a1a2e;font-size:13px;font-weight:700;margin-top:4px">{"Protocol Patron"}</span> }.into_any(),
                             _ => view! { <span></span> }.into_any(),
                         }}
                         // QR code (gold on dark, using existing make_qr_svg)
@@ -8139,9 +8139,9 @@ fn HistoryPanel(
                                                                 if let Some((_, ref sw, _)) = cache.get(&rtx3) {
                                                                     if let Some(b) = badges.get(sw) {
                                                                         let (bg, fg, text) = match b.as_str() {
-                                                                            "FOUNDING_MEMBER" => ("#7c3aed", "white", "\u{1f451} Founder"),
-                                                                            "GENESIS_MEMBER" => ("#d4a84b", "black", "\u{1f48e} Genesis"),
-                                                                            "PROTOCOL_PATRON" => ("#e2e8f0", "#1a1a2e", "\u{26a1} Patron"),
+                                                                            "FOUNDING_MEMBER" | "Founding Team" => ("#d4a84b", "black", "Founding Team"),
+                                                                            "GENESIS_MEMBER" => ("#d4a84b", "black", "Genesis"),
+                                                                            "PROTOCOL_PATRON" => ("#e2e8f0", "#1a1a2e", "Patron"),
                                                                             _ => return view! { <span></span> }.into_any(),
                                                                         };
                                                                         return view! {
@@ -8963,12 +8963,12 @@ fn SettingsPanel(
                         if let Ok(wb) = call::<Vec<WalletBadge>>("get_wallet_badges", args).await {
                             let pills: Vec<(String, String, String)> = wb.iter().map(|b| {
                                 match b.badge_type.as_str() {
-                                    "FOUNDING_MEMBER" | "FOUNDER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f3c5} Founder".to_string()),
-                                    "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f48e} Genesis Member".to_string()),
+                                    "FOUNDING_MEMBER" | "FOUNDER" | "Founding Team" => ("#d4a84b".to_string(), "black".to_string(), "Founding Team".to_string()),
+                                    "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "Genesis Member".to_string()),
                                     "KXGO_BRONZE" => ("#CD7F32".to_string(), "white".to_string(), "KXGO Bronze".to_string()),
                                     "KXGO_SILVER" => ("#C0C0C0".to_string(), "#1a1a2e".to_string(), "KXGO Silver".to_string()),
                                     "KXGO_GOLD" => ("#D4A84B".to_string(), "black".to_string(), "KXGO Gold".to_string()),
-                                    _ => ("#555".to_string(), "white".to_string(), b.badge_type.clone()),
+                                    _ => (b.color.clone().unwrap_or_else(|| "#555".to_string()), "white".to_string(), b.badge_type.clone()),
                                 }
                             }).collect();
                             if !pills.is_empty() {
@@ -9286,7 +9286,7 @@ fn SettingsPanel(
                                                                 copy_to_clipboard(pk_val).await;
                                                             });
                                                         }>
-                                                        {format!("\u{1f4cb} {}", t(&lang.get(), "settings_copy_pubkey"))}
+                                                        {format!("{}", t(&lang.get(), "settings_copy_pubkey"))}
                                                     </button>
                                                 </div>
                                             }.into_any()
@@ -9529,7 +9529,7 @@ fn SettingsPanel(
                         <button on:click=move |_| {
                             cp_phase.set(0); cp_digits.set(String::new());
                             cp_msg.set(String::new()); show_change_pin.set(true);
-                        }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
+                        }>{move || format!("{}", t(&lang.get(), "settings_change_pin"))}</button>
                     }.into_any()
                 } else {
                     view! {
@@ -9544,7 +9544,7 @@ fn SettingsPanel(
                         <button on:click=move |_| {
                             cp_phase.set(0); cp_digits.set(String::new());
                             cp_msg.set(String::new()); show_change_pin.set(true);
-                        }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
+                        }>{move || format!("{}", t(&lang.get(), "settings_change_pin"))}</button>
                     }.into_any()
                 }}
 
@@ -9712,7 +9712,7 @@ fn SettingsPanel(
                         seed_loading.set(false);
                         show_seed_modal.set(true);
                     }
-                >"\u{1f331} View Seed Phrase"</button>
+                >"View Seed Phrase"</button>
                 <p class="muted" style="font-size:11px;margin-top:6px">
                     <a href="javascript:void(0)" style="color:#888;text-decoration:underline" on:click=move |_| {
                         export_confirmed.set(false);
@@ -9725,7 +9725,7 @@ fn SettingsPanel(
                 <div style="margin-top:12px">
                     <a href="javascript:void(0)" style="color:#f87171;font-size:12px;text-decoration:none"
                         on:click=move |_| compromised_expanded.set(!compromised_expanded.get_untracked())
-                    >{move || if compromised_expanded.get() { "\u{26a0}\u{fe0f} Compromised? \u{25b2}" } else { "\u{26a0}\u{fe0f} Compromised? \u{25bc}" }}</a>
+                    >{move || if compromised_expanded.get() { "Compromised? \u{25b2}" } else { "Compromised? \u{25bc}" }}</a>
                     {move || if compromised_expanded.get() {
                         view! {
                             <div style="margin-top:8px;padding:12px;background:#1a1020;border:1px solid #442;border-radius:8px">
@@ -9775,7 +9775,7 @@ fn SettingsPanel(
                     import_msg.set(String::new());
                     import_confirm.set(false);
                     show_import.set(true);
-                }>"\u{1f331} Restore from Seed Phrase"</button>
+                }>"Restore from Seed Phrase"</button>
             </div>
 
             // Cold Storage Wallet Generator (desktop only)
@@ -9790,7 +9790,7 @@ fn SettingsPanel(
                             cold_result.set(None);
                             cold_saved.set(false);
                             show_cold.set(true);
-                        }>{move || format!("\u{1f9ca} {}", t(&lang.get(), "settings_gen_cold"))}</button>
+                        }>{move || format!("{}", t(&lang.get(), "settings_gen_cold"))}</button>
                         {move || {
                             let wallets = cold_wallets.get();
                             if wallets.is_empty() {
@@ -10065,8 +10065,8 @@ fn SettingsPanel(
             // About (no section label — just centered buttons)
             <div style="order:99;text-align:center;padding:12px 0 4px">
                 <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:8px">
-                    <button on:click=move |_| show_about.set(true) style="font-size:13px">{move || format!("\u{2139}\u{fe0f} {}", t(&lang.get(), "settings_about_chronx"))}</button>
-                    <button on:click=move |_| show_updates.set(true) style="font-size:13px">{move || format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</button>
+                    <button on:click=move |_| show_about.set(true) style="font-size:13px">{move || format!("{}", t(&lang.get(), "settings_about_chronx"))}</button>
+                    <button on:click=move |_| show_updates.set(true) style="font-size:13px">{move || format!("{}", t(&lang.get(), "settings_check_updates"))}</button>
                 </div>
                 <a href="javascript:void(0)" style="display:block;text-align:center;color:#d4a84b;text-decoration:underline;font-size:13px;cursor:pointer;margin-top:8px"
                     on:click=move |_| {
@@ -10118,7 +10118,7 @@ fn SettingsPanel(
                     update_result.set(None);
                 }>
                     <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">{format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</p>
+                        <p class="modal-title">{format!("{}", t(&lang.get(), "settings_check_updates"))}</p>
                         <div class="modal-body">
                             <p class="label">{format!("{}: {}", t(&lang.get(), "settings_current_version"), version)}</p>
                             {move || {
@@ -10361,7 +10361,7 @@ fn SettingsPanel(
                     if !import_busy.get_untracked() { show_import.set(false); }
                 }>
                     <div class="modal-card" style="max-width:440px" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"\u{1f331} Restore from Seed Phrase"</p>
+                        <p class="modal-title">"Restore from Seed Phrase"</p>
                         <div class="modal-body" style="text-align:left">
                             <div class="export-warning" style="margin-bottom:12px">
                                 <p style="font-weight:700;color:#f87171;font-size:13px">
@@ -10467,7 +10467,7 @@ fn SettingsPanel(
                     if !seed_loading.get_untracked() { show_seed_modal.set(false); }
                 }>
                     <div class="modal-card" style="max-width:480px" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"\u{1f331} View Seed Phrase"</p>
+                        <p class="modal-title">"View Seed Phrase"</p>
                         <div class="modal-body" style="text-align:left">
                             {move || {
                                 let phase = seed_pin_phase.get();
@@ -10579,7 +10579,7 @@ fn SettingsPanel(
                                                 </div>
                                                 <button class="primary" style="width:100%;padding:14px;font-size:15px"
                                                     on:click=move |_| seed_revealed.set(true)
-                                                >"\u{1f441} Reveal Seed Phrase"</button>
+                                                >"Reveal Seed Phrase"</button>
                                             }.into_any()
                                         } else {
                                             // Revealed — show word grid

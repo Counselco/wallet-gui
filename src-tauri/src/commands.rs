@@ -4013,25 +4013,10 @@ pub async fn get_promises_needing_sign_of_life(_app: AppHandle) -> Result<Vec<se
 pub async fn get_verified_identity(_app: AppHandle) -> Result<Option<serde_json::Value>, String> { Ok(None) }
 
 #[tauri::command]
-pub async fn get_wallet_badges(app: AppHandle, wallet_address: Option<String>) -> Result<Vec<serde_json::Value>, String> {
+pub async fn get_wallet_badges(_app: AppHandle, wallet_address: Option<String>) -> Result<Vec<serde_json::Value>, String> {
     let addr = wallet_address.unwrap_or_default();
     if addr.is_empty() { return Ok(vec![]); }
-    let mut result = Vec::new();
-    // 1. On-chain badge from verified identity (Founder etc.)
-    let rpc = rpc_url(&app);
-    if let Ok(resp) = rpc_call(&rpc, "chronx_getVerifiedIdentity", serde_json::json!([addr])).await {
-        if let Some(badge) = resp.get("badge").and_then(|b| b.as_str()) {
-            if !badge.is_empty() {
-                result.push(serde_json::json!({
-                    "type": badge,
-                    "color": "#d4a84b",
-                    "issued_by": "ChronX (on-chain)",
-                    "verified": true,
-                }));
-            }
-        }
-    }
-    // 2. Off-chain badges from API (KXGO etc.)
+    // wallet_badges MySQL via API is the single source of truth
     let client = reqwest::Client::new();
     if let Ok(resp) = client.get(format!("https://api.chronx.io/wallet/badges/{}", addr))
         .timeout(std::time::Duration::from_secs(5))
@@ -4039,17 +4024,11 @@ pub async fn get_wallet_badges(app: AppHandle, wallet_address: Option<String>) -
     {
         if let Ok(json) = resp.json::<serde_json::Value>().await {
             if let Some(badges) = json["badges"].as_array() {
-                for b in badges {
-                    let btype = b["type"].as_str().unwrap_or("");
-                    // Skip if already added from on-chain
-                    if !result.iter().any(|r| r["type"].as_str() == Some(btype)) {
-                        result.push(b.clone());
-                    }
-                }
+                return Ok(badges.clone());
             }
         }
     }
-    Ok(result)
+    Ok(vec![])
 }
 
 #[tauri::command]
