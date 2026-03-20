@@ -9215,7 +9215,7 @@ fn SettingsPanel(
                 let advanced_open = RwSignal::new(false);
                 let node_editing = RwSignal::new(false);
                 view! {
-                    <div class="settings-section" style="order:8"
+                    <div class="settings-section" style="order:7"
                          class:open=move || advanced_open.get()>
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| advanced_open.update(|v| *v = !*v)>
@@ -9548,11 +9548,8 @@ fn SettingsPanel(
                     }.into_any()
                 }}
 
-                </div> // close security content
-            </div> // close security settings-section
-
             // ── Privacy (collapsible, top-level) ──
-            <div class="settings-section" style="order:6"
+            <div class="settings-section" style="order:4"
                  class:open=move || sec_privacy_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
@@ -9686,7 +9683,7 @@ fn SettingsPanel(
             {
                 let wm_expanded = RwSignal::new(false);
                 view! {
-            <div class="settings-section" style="order:7"
+            <div class="settings-section" style="order:6"
                  class:open=move || wm_expanded.get()>
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| wm_expanded.set(!wm_expanded.get_untracked())>
@@ -9823,9 +9820,8 @@ fn SettingsPanel(
                 }.into_any()
             }
 
-            // ── My Emails for KX Claims (standalone section) ──
-            <div class="settings-section" style="order:5">
-                <div>
+                // ── My Emails for KX Claims (inside Security) ──
+                <hr style="border:none;border-top:1px solid #2d3748;margin:12px 0" />
                 <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
                     "Enter your email address to auto-claim any KX sent to it directly to your wallet balance."
@@ -10061,8 +10057,8 @@ fn SettingsPanel(
                         view! { <p class=cls>{msg}</p> }.into_any()
                     }
                 }}
-                </div> // close emails content
-            </div> // close emails settings-section
+                </div> // close security content
+            </div> // close security settings-section
 
             // About (no section label — just centered buttons)
             <div style="order:99;text-align:center;padding:12px 0 4px">
