@@ -1331,7 +1331,7 @@ fn App() -> impl IntoView {
                         let date_str = format!("{y}-{m:02}-{d:02}");
                         let update_notice = Notice {
                             id: format!("update-{}", upd.latest),
-                            title: format!("Update Available: ChronX Wallet v{}", upd.latest),
+                            title: format!("\u{1f514} Update Available: ChronX Wallet v{}", upd.latest),
                             body: format!(
                                 "A new version of ChronX Wallet is available. Download it at https://chronx.io/wallet.html"
                             ),
@@ -1863,7 +1863,7 @@ fn App() -> impl IntoView {
                                                 .count();
                                             let has_update = update_available.get();
                                             if has_update {
-                                                view! { <span class="update-badge" title="Update available">"!"</span> }.into_any()
+                                                view! { <span class="update-badge" title="Update available">"\u{1f514}"</span> }.into_any()
                                             } else if unread > 0 {
                                                 view! { <span class="notice-badge">{unread}</span> }.into_any()
                                             } else {
@@ -1924,7 +1924,7 @@ fn App() -> impl IntoView {
                                             .count();
                                         let has_update = update_available.get();
                                         if has_update {
-                                            view! { <span class="update-badge" title="Update available">"!"</span> }.into_any()
+                                            view! { <span class="update-badge" title="Update available">"\u{1f514}"</span> }.into_any()
                                         } else if unread > 0 {
                                             view! { <span class="notice-badge">{unread}</span> }.into_any()
                                         } else {
@@ -1973,7 +1973,7 @@ fn App() -> impl IntoView {
                                         view! {
                                             <div style="background:linear-gradient(135deg,rgba(212,168,75,0.15),rgba(212,168,75,0.05));border:1px solid #d4a84b;border-radius:8px;padding:12px;margin-bottom:12px">
                                                 <p style="font-size:14px;font-weight:700;color:#d4a84b;margin:0 0 6px">
-                                                    "Payment Request"
+                                                    "\u{1f4b3} Payment Request"
                                                 </p>
                                                 <p style="font-size:13px;color:#e5e7eb;margin:0 0 4px">
                                                     {format!("Pay {} KX to {}", amount, if to_addr.len() > 20 { format!("{}...{}", &to_addr[..8], &to_addr[to_addr.len()-8..]) } else { to_addr.clone() })}
@@ -2116,7 +2116,7 @@ fn App() -> impl IntoView {
                         <button class="bug-report-btn" on:click=move |_| {
                             bug_body.set(String::new());
                             bug_modal_open.set(true);
-                        }>"Report a Bug"</button>
+                        }>"\u{1f41e} Report a Bug"</button>
                     </div>
                     </div>
                     </div> // close main-content
@@ -2137,7 +2137,7 @@ fn App() -> impl IntoView {
                                 }
                             }>
                                 <div class="modal-box">
-                                    <p class="modal-title">"Report a Bug"</p>
+                                    <p class="modal-title">"🐞 Report a Bug"</p>
                                     <p class="label" style="font-size:12px">
                                         "Subject: " {format!("ChronX Wallet v{version} — Bug Report")}
                                     </p>
@@ -2480,7 +2480,7 @@ fn PinScreen(
                     // Biometric succeeded or still waiting — show clean screen
                     return view! {
                         <div class="pin-screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding-top:40px">
-                            <span style="font-size:48px">""</span>
+                            <span style="font-size:48px">{"\u{1f9d1}\u{200d}\u{1f4bb}"}</span>
                             <p class="pin-title">"Unlock with Windows Hello"</p>
                             <p class="muted" style="font-size:13px">"Verifying your identity\u{2026}"</p>
                         </div>
@@ -2490,7 +2490,7 @@ fn PinScreen(
                     // Still loading auth_method check
                     return view! {
                         <div class="pin-screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding-top:40px">
-                            <span style="font-size:48px">""</span>
+                            <span style="font-size:48px">{"\u{1f513}"}</span>
                             <p class="pin-title">"Unlocking\u{2026}"</p>
                         </div>
                     }.into_any();
@@ -2571,7 +2571,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.6"
+                    "ChronX Wallet v2.5.5"
                 </p>
             </div>
         </div>
@@ -2583,7 +2583,7 @@ fn PinScreen(
                     if !forgot_busy.get_untracked() { show_forgot_pin.set(false); }
                 }>
                     <div class="modal-card" style="max-width:440px" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
-                        <p class="modal-title">"Reset Your PIN"</p>
+                        <p class="modal-title">"\u{1f511} Reset Your PIN"</p>
                         <div class="modal-body" style="text-align:left">
                             {move || if forgot_use_raw_key.get() {
                                 // Raw key mode
@@ -2758,7 +2758,7 @@ fn BackupKeyScreen(
                         view! {
                             <p class="section-title">"Back Up Your Recovery Phrase"</p>
                             <div class="backup-warning">
-                                "Write these 24 words down on paper. \
+                                "\u{26a0}\u{fe0f} Write these 24 words down on paper. \
                                  They are the ONLY way to recover your wallet. \
                                  Never share them with anyone."
                             </div>
@@ -2782,7 +2782,7 @@ fn BackupKeyScreen(
                         view! {
                             <p class="section-title">"Save Your Backup Key"</p>
                             <div class="backup-warning">
-                                "Save this backup key now. Anyone who has it can access your wallet. \
+                                "\u{26a0} Save this backup key now. Anyone who has it can access your wallet. \
                                  If you lose it and forget your PIN, your wallet cannot be recovered."
                             </div>
                             <textarea
@@ -3060,7 +3060,9 @@ fn AccountPanel(
                                 }}
                                 style="width:56px;height:56px;border-radius:50%;border:2px solid #d4a84b;object-fit:cover;display:block;background:#1a1a2e"
                             />
-                            <div style="position:absolute;bottom:0;right:0;background:#d4a84b;border-radius:50%;width:12px;height:12px"></div>
+                            <div style="position:absolute;bottom:0;right:0;background:#d4a84b;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:11px;line-height:1">
+                                "\u{1F4F7}"
+                            </div>
                         </div>
                     </div>
                     // Name + Balance (middle)
@@ -3070,9 +3072,9 @@ fn AccountPanel(
                             if !dn.is_empty() {
                                 view! { <p style="font-size:13px;color:#d4a84b;font-weight:700;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{dn}
                                     {move || match badge.get().as_str() {
-                                        "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#7c3aed;color:white;font-size:11px;font-weight:700;margin-left:4px">"Founder"</span> }.into_any(),
-                                        "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#d4a84b;color:black;font-size:11px;font-weight:700;margin-left:4px">"Genesis"</span> }.into_any(),
-                                        "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#e2e8f0;color:#1a1a2e;font-size:11px;font-weight:700;margin-left:4px">"Patron"</span> }.into_any(),
+                                        "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#7c3aed;color:white;font-size:11px;font-weight:700;margin-left:4px">{"\u{1f451} Founder"}</span> }.into_any(),
+                                        "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#d4a84b;color:black;font-size:11px;font-weight:700;margin-left:4px">{"\u{1f48e} Genesis"}</span> }.into_any(),
+                                        "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#e2e8f0;color:#1a1a2e;font-size:11px;font-weight:700;margin-left:4px">{"\u{26a1} Patron"}</span> }.into_any(),
                                         _ => view! { <span></span> }.into_any(),
                                     }}
                                     // v2.2.2: KXGO badges (Bronze/Silver/Gold)
@@ -3081,9 +3083,9 @@ fn AccountPanel(
                                         view! {
                                             {badges.into_iter().filter_map(|b| {
                                                 let (bg, fg, label) = match b.badge_type.as_str() {
-                                                    "KXGO_BRONZE" => ("#CD7F32", "white", "KXGO Bronze"),
-                                                    "KXGO_SILVER" => ("#C0C0C0", "#1a1a2e", "KXGO Silver"),
-                                                    "KXGO_GOLD"   => ("#D4A84B", "black", "KXGO Gold"),
+                                                    "KXGO_BRONZE" => ("#CD7F32", "white", "\u{1f3c6} KXGO Bronze"),
+                                                    "KXGO_SILVER" => ("#C0C0C0", "#1a1a2e", "\u{1f3c6} KXGO Silver"),
+                                                    "KXGO_GOLD"   => ("#D4A84B", "black", "\u{1f3c6} KXGO Gold"),
                                                     _ => return None,
                                                 };
                                                 Some(view! {
@@ -3285,8 +3287,8 @@ fn AccountPanel(
                                                     <p class="quote-detail">
                                                         {format!("Slippage: {}%  \u{00b7}  Total cost: {}%", q.slippage_pct, q.total_cost_pct)}
                                                     </p>
-                                                    {match q.warning.clone() {
-                                                        Some(w) => view! { <p class="quote-warning">{w}</p> }.into_any(),
+                                                    {match q.warning.as_deref() {
+                                                        Some(w) => view! { <p class="quote-warning">{format!("\u{26a0} {}", w)}</p> }.into_any(),
                                                         None => view! { <span></span> }.into_any(),
                                                     }}
                                                     <p class="quote-countdown">
@@ -3362,7 +3364,7 @@ fn AccountPanel(
                                                 </div>
                                             }.into_any()
                                         }}
-                                        <p style="color:#ff4444;font-size:13px;font-weight:700;margin:0 0 6px">{"Please enter ONLY a receiving USDC address on the Base network. Sending to any other address risks permanent loss of funds."}</p>
+                                        <p style="color:#ff4444;font-size:13px;font-weight:700;margin:0 0 6px">{"\u{26a0} Please enter ONLY a receiving USDC address on the Base network. Sending to any other address risks permanent loss of funds."}</p>
                                         <label style="font-size:12px;color:#9ca3af;display:block;margin-bottom:4px">"Your Base wallet address (to receive USDC)"</label>
                                         <input type="text" class="convert-input" placeholder="0x..."
                                             style="font-family:monospace;font-size:13px"
@@ -3436,7 +3438,7 @@ fn AccountPanel(
                                             view! {
                                                 <div style="background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.4);border-radius:6px;padding:8px 10px;margin-top:6px">
                                                     <p style="color:#eab308;font-size:12px;margin:0 0 6px">
-                                                        "This address has no transaction history on Base network. Double-check it\u{2019}s correct before converting."
+                                                        "\u{26a0}\u{fe0f} This address has no transaction history on Base network. Double-check it\u{2019}s correct before converting."
                                                     </p>
                                                     <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e5e7eb;cursor:pointer">
                                                         <input type="checkbox"
@@ -3558,7 +3560,7 @@ fn AccountPanel(
                                                         ).unwrap_or(no_args());
                                                         match call::<String>("convert_kx_to_usdc", args).await {
                                                             Ok(txid) => {
-                                                                convert_msg.set(format!("OK: Conversion initiated! USDC will arrive in your Base wallet within a few minutes. TxId: {}", &txid[..16.min(txid.len())]));
+                                                                convert_msg.set(format!("\u{2705} Conversion initiated! USDC will arrive in your Base wallet within a few minutes. TxId: {}", &txid[..16.min(txid.len())]));
                                                                 convert_amount.set(String::new());
                                                                 convert_quote.set(None);
                                                                 poll_balance_update(info).await;
@@ -3601,7 +3603,7 @@ fn AccountPanel(
                                 .unwrap_or_else(|| "\u{2014}".into())}
                         </p>
                         <button style="font-size:12px;padding:4px 10px" on:click=on_copy title="Copy full address">
-                            {move || if copy_success.get() { "Copied!" } else { "Copy" }}
+                            {move || if copy_success.get() { "Copied!" } else { "\u{1f4cb} Copy" }}
                         </button>
                     </div>
                     <p class="muted" style="font-size:11px;margin-top:4px">
@@ -3931,8 +3933,8 @@ fn AccountPanel(
                         }}
                         // Badge in profile modal
                         {move || match badge.get().as_str() {
-                            "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#7c3aed;color:white;font-size:13px;font-weight:700;margin-top:4px">{"Founding Member"}</span> }.into_any(),
-                            "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#d4a84b;color:black;font-size:13px;font-weight:700;margin-top:4px">{"Genesis Member"}</span> }.into_any(),
+                            "FOUNDING_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#7c3aed;color:white;font-size:13px;font-weight:700;margin-top:4px">{"\u{1f451} Founding Member"}</span> }.into_any(),
+                            "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#d4a84b;color:black;font-size:13px;font-weight:700;margin-top:4px">{"\u{1f48e} Genesis Member"}</span> }.into_any(),
                             "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#e2e8f0;color:#1a1a2e;font-size:13px;font-weight:700;margin-top:4px">{"\u{26a1} Protocol Patron"}</span> }.into_any(),
                             _ => view! { <span></span> }.into_any(),
                         }}
@@ -4218,10 +4220,7 @@ fn SendPanel(
     let email_save_state = RwSignal::new(0u8);
     let email_save_nickname = RwSignal::new(String::new());
     let email_save_msg = RwSignal::new(String::new());
-    // Send Later radio option: 0=1h, 1=tomorrow, 2=1w, 3=1m, 4=1y, 5=choose-a-date
-    let later_choice = RwSignal::new(0u8);
-    let show_date_picker = RwSignal::new(false);
-    // Legacy mobile_time_option (kept for compatibility)
+    // Mobile time picker: 0=Send Now, 1=1h, 2=24h, 3=1w, 4=1m, 5=3m, 6=6m, 7=1y
     let mobile_time_option = RwSignal::new(0u8);
     // Mobile confirmation screen
     let mobile_confirm_open = RwSignal::new(false);
@@ -4294,7 +4293,7 @@ fn SendPanel(
                 match call::<String>("send_transfer", args).await {
                     Ok(_txid) => {
                         let truncated = if to.len() > 16 { format!("{}...{}", &to[..6], &to[to.len()-6..]) } else { to.clone() };
-                        msg.set(format!("Sent!\n\n{} KX sent to {}", amt, truncated));
+                        msg.set(format!("\u{2705} Sent!\n{} KX sent to {}.", amt, truncated));
                         to_addr.set(String::new());
                         amount.set(String::new());
                         // Poll until node confirms
@@ -4438,21 +4437,21 @@ fn SendPanel(
                             "memo": memo_opt,
                             "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
-                        // Check if recipient is registered (for smart confirmation)
-                        let is_registered = {
-                            let check_args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": email_str })).unwrap_or(no_args());
-                            call::<bool>("check_email_registered", check_args).await.unwrap_or(false)
-                        };
                         match call::<()>("notify_email_recipient", notify_args).await {
                             Ok(_) => {
-                                if is_registered {
-                                    msg.set(format!("Delivered!\n\n{email_str} is registered \u{2014} KX has been sent directly to their wallet.\n\nTell them to refresh their wallet balance."));
+                                if unlock_unix == 0 {
+                                    msg.set(format!("\u{2705} Delivered!\n{email_str} has been notified.\nThey have 72 hours to claim their KX.\nClaim code: {claim_code}"));
                                 } else {
-                                    msg.set(format!("Sent!\n\nA claim email has been sent to {email_str}.\n\nThey have 72 hours to claim their KX.\n\nClaim code: {claim_code}\n\nShare this code if they need help claiming."));
+                                    let dt = {
+                                        let d = js_sys::Date::new_0();
+                                        d.set_time((unlock_unix as f64) * 1000.0);
+                                        d.to_date_string().as_string().unwrap_or_else(|| "the unlock date".to_string())
+                                    };
+                                    msg.set(format!("\u{2705} Promise created!\n{email_str} has been notified.\nThey'll receive a claim email when it unlocks on {dt}."));
                                 }
-                                spam_warn.set(!is_registered);
+                                spam_warn.set(true);
                             }
-                            Err(_) => { msg.set(format!("Sent on-chain! Email notification failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
+                            Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                         }
                         // If this send was triggered by a poke PAY NOW, confirm payment
                         let poke_id = poke_prefill_id.get_untracked();
@@ -4588,15 +4587,9 @@ fn SendPanel(
                                 "memo": memo_opt,
                                 "claimCode": claim_code.clone(),
                             })).unwrap_or(no_args());
-                            // Compute first arrival date for series
-                            let first_dt = {
-                                let d = js_sys::Date::new_0();
-                                d.set_time((unlock_unix as f64) * 1000.0);
-                                d.to_date_string().as_string().unwrap_or_else(|| "soon".to_string())
-                            };
                             match call::<()>("notify_email_recipient", notify_args).await {
-                                Ok(_) => { msg.set(format!("Series created!\n\n{count} promises sent to {email_str}.\nFirst arrives {first_dt}.")); spam_warn.set(false); }
-                                Err(_) => { msg.set(format!("Series on-chain! Email notification failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
+                                Ok(_) => { msg.set(format!("\u{2705} Series created!\n{count} promises sent. {email_str} has been notified.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                                Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Series on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
                             // Poll for balance update
                             let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
@@ -4667,26 +4660,9 @@ fn SendPanel(
                                 "memo": memo_opt,
                                 "claimCode": claim_code.clone(),
                             })).unwrap_or(no_args());
-                            // Check if recipient is registered (for smart confirmation)
-                            let is_registered = {
-                                let check_args = serde_wasm_bindgen::to_value(&serde_json::json!({ "email": email_str })).unwrap_or(no_args());
-                                call::<bool>("check_email_registered", check_args).await.unwrap_or(false)
-                            };
-                            let unlock_dt = {
-                                let d = js_sys::Date::new_0();
-                                d.set_time((unlock_unix as f64) * 1000.0);
-                                d.to_date_string().as_string().unwrap_or_else(|| "the unlock date".to_string())
-                            };
                             match call::<()>("notify_email_recipient", notify_args).await {
-                                Ok(_) => {
-                                    if is_registered {
-                                        msg.set(format!("Promise created!\n\n{email_str} will automatically receive {amt} KX on {unlock_dt}.\n\nThey've been notified by email. No action needed."));
-                                    } else {
-                                        msg.set(format!("Promise created!\n\n{email_str} has been notified.\n\nThey'll receive a claim email when the promise unlocks on {unlock_dt}."));
-                                    }
-                                    spam_warn.set(!is_registered);
-                                }
-                                Err(_) => { msg.set(format!("Sent on-chain! Email notification failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
+                                Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                                Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
                             let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
                             for i in 0..=10u8 {
@@ -4759,7 +4735,7 @@ fn SendPanel(
                 view! {
                     <div class="desktop-warning-banner">
                         <p class="desktop-warning-text">
-                            <strong>"Please read before using this screen. "</strong>
+                            <strong>"\u{26a0} Please read before using this screen. "</strong>
                             "These features allow you to send KX across time \u{2014} to wallet addresses, \
                              email recipients, or people you can only describe by name. \
                              Once sent, the ChronX protocol cannot change or reverse any transaction. \
@@ -4809,17 +4785,23 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
-            // Mode: Send Now | Send Later (both platforms)
-            <div class="send-mode-row">
-                <button type="button"
-                    class=move || if send_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
-                    on:click=move |_| { send_mode.set(0); lock_date.set(String::new()); show_date_picker.set(false); mobile_time_option.set(0); }
-                    disabled=move || sending.get()>"Send Now"</button>
-                <button type="button"
-                    class=move || if send_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
-                    on:click=move |_| { send_mode.set(1); }
-                    disabled=move || sending.get()>"Send Later"</button>
-            </div>
+            // Mode: Send Now | Send Later BETA (desktop = toggle, mobile = time picker below)
+            {if is_desktop() {
+                view! {
+                    <div class="send-mode-row">
+                        <button type="button"
+                            class=move || if send_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                            on:click=move |_| { send_mode.set(0); lock_date.set(String::new()); }
+                            disabled=move || sending.get()>"Send Now"</button>
+                        <button type="button"
+                            class=move || if send_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                            on:click=move |_| send_mode.set(1)
+                            disabled=move || sending.get()>"\u{23f3} Send Later BETA"</button>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
 
             // Recipient field — depends on recipient_mode
             {move || match recipient_mode.get() {
@@ -4888,7 +4870,7 @@ fn SendPanel(
                                         address_book_open.set(true);
                                     });
                                 }>
-                                "Address Book"
+                                "\u{1f4cb} Address Book"
                             </button>
                             <label>"Recipient Email Address"</label>
                             <div class="email-field-wrap">
@@ -4961,7 +4943,7 @@ fn SendPanel(
                                             on:click=move |_| {
                                                 email_save_nickname.set(String::new());
                                                 email_save_state.set(2);
-                                            }>"Copy"</button>
+                                            }>"\u{1f4cb}"</button>
                                     }.into_any(),
                                     3 => view! {
                                         <span class="email-save-icon saved" title="Saved">{"\u{2713}"}</span>
@@ -5049,7 +5031,7 @@ fn SendPanel(
                                 {
                                     view! {
                                         <p class="msg mining" style="margin-top:6px;font-size:13px">
-                                            "This is your registered claim email. "
+                                            "\u{26a0} This is your registered claim email. "
                                             "The KX will be sent to your own wallet automatically when you click Claim in your email."
                                         </p>
                                     }.into_any()
@@ -5114,27 +5096,47 @@ fn SendPanel(
                 <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
             </div>
 
-            // Send Later options — radio list (both platforms)
-            {move || if send_mode.get() == 1 {
+            // Mobile time picker — replaces Send Now / Send Later toggle on mobile
+            {if !is_desktop() {
                 view! {
-                    <div class="field" style="margin-top:0">
-                        <div style="display:flex;flex-direction:column;gap:8px;padding:8px 0">
+                    <div class="field">
+                        <label>{move || t(&lang.get(), "mobile_send_when")}</label>
+                        <div class="mobile-time-picker">
                             {[
-                                (0u8, "In 1 hour", 3600i64),
-                                (1, "Tomorrow", 86400),
-                                (2, "In 1 week", 604800),
-                                (3, "In 1 month", 2592000),
-                                (4, "In 1 year", 31536000),
-                            ].into_iter().map(|(val, label, secs)| {
+                                (0u8, "mobile_send_now"),
+                                (1, "mobile_send_1h"),
+                                (2, "mobile_send_24h"),
+                                (3, "mobile_send_1w"),
+                                (4, "mobile_send_1m"),
+                                (5, "mobile_send_3m"),
+                                (6, "mobile_send_6m"),
+                                (7, "mobile_send_1y"),
+                            ].into_iter().map(|(val, key)| {
+                                let key_str = key.to_string();
                                 view! {
-                                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:#e5e7eb;padding:4px 0">
-                                        <input type="radio" name="send_later_opt"
-                                            prop:checked=move || later_choice.get() == val && !show_date_picker.get()
-                                            on:change=move |_| {
-                                                later_choice.set(val);
-                                                show_date_picker.set(false);
+                                    <button type="button"
+                                        class=move || if mobile_time_option.get() == val { "mobile-time-btn active" } else { "mobile-time-btn" }
+                                        on:click=move |_| {
+                                            mobile_time_option.set(val);
+                                            if val == 0 {
+                                                send_mode.set(0);
+                                                lock_date.set(String::new());
+                                            } else {
+                                                send_mode.set(1);
+                                                // Compute future date from now
+                                                let secs: i64 = match val {
+                                                    1 => 3600,       // 1 hour
+                                                    2 => 86400,      // 24 hours
+                                                    3 => 604800,     // 1 week
+                                                    4 => 2592000,    // 1 month (~30d)
+                                                    5 => 7776000,    // 3 months (~90d)
+                                                    6 => 15552000,   // 6 months (~180d)
+                                                    7 => 31536000,   // 1 year (365d)
+                                                    _ => 0,
+                                                };
                                                 let now = (js_sys::Date::now() / 1000.0) as i64;
                                                 let target = now + secs;
+                                                // Format as datetime-local string (YYYY-MM-DDTHH:MM)
                                                 let d = js_sys::Date::new_0();
                                                 d.set_time((target as f64) * 1000.0);
                                                 let year = d.get_utc_full_year();
@@ -5144,77 +5146,74 @@ fn SendPanel(
                                                 let min = d.get_utc_minutes();
                                                 lock_date.set(format!("{:04}-{:02}-{:02}T{:02}:{:02}", year, month, day, hour, min));
                                             }
-                                            style="accent-color:#d4a84b"
-                                            disabled=move || sending.get() />
-                                        {label}
-                                    </label>
+                                        }
+                                        disabled=move || sending.get()>
+                                        {move || t(&lang.get(), &key_str)}
+                                    </button>
                                 }
                             }).collect::<Vec<_>>()}
-                            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:#e5e7eb;padding:4px 0">
-                                <input type="radio" name="send_later_opt"
-                                    prop:checked=move || show_date_picker.get()
-                                    on:change=move |_| {
-                                        show_date_picker.set(true);
-                                        lock_date.set(String::new());
-                                    }
-                                    style="accent-color:#d4a84b"
-                                    disabled=move || sending.get() />
-                                "Choose a date..."
-                            </label>
                         </div>
-                        // Date input — only when "Choose a date" is selected
-                        {move || if show_date_picker.get() {
-                            view! {
-                                <div style="margin-top:4px">
-                                    <input type="date"
-                                        style="background:#1a1d2e;border:1px solid #2a2f3e;color:#e5e7eb;padding:8px 12px;border-radius:6px;font-size:14px;width:100%"
-                                        prop:min=move || {
-                                            let d = js_sys::Date::new_0();
-                                            d.set_time(js_sys::Date::now() + 86400000.0);
-                                            format!("{:04}-{:02}-{:02}", d.get_utc_full_year(), d.get_utc_month() + 1, d.get_utc_date())
-                                        }
-                                        on:input=move |ev| {
-                                            let val = event_target_value(&ev);
-                                            if !val.is_empty() {
-                                                lock_date.set(format!("{}T00:00", val));
-                                            }
-                                        }
-                                        disabled=move || sending.get() />
-                                    {move || {
-                                        let dt_str = lock_date.get();
-                                        if dt_str.is_empty() { return view! { <span></span> }.into_any(); }
-                                        let unix = match date_str_to_unix(&dt_str) {
-                                            Some(t) => t,
-                                            None => return view! { <span></span> }.into_any(),
-                                        };
-                                        let d = js_sys::Date::new_0();
-                                        d.set_time((unix as f64) * 1000.0);
-                                        let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-                                        let m = d.get_utc_month() as usize;
-                                        let label = format!("Arrives: {} {:02}, {}", if m < 12 { months[m] } else { "?" }, d.get_utc_date(), d.get_utc_full_year());
-                                        view! { <p style="color:#d4a84b;font-size:13px;margin-top:6px;font-weight:600">{label}</p> }.into_any()
-                                    }}
-                                </div>
-                            }.into_any()
-                        } else {
-                            // Show arrival date for radio presets
-                            view! {
-                                {move || {
-                                    let dt_str = lock_date.get();
-                                    if dt_str.is_empty() { return view! { <span></span> }.into_any(); }
-                                    let unix = match date_str_to_unix(&dt_str) {
-                                        Some(t) => t,
-                                        None => return view! { <span></span> }.into_any(),
-                                    };
-                                    let d = js_sys::Date::new_0();
-                                    d.set_time((unix as f64) * 1000.0);
-                                    let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-                                    let m = d.get_utc_month() as usize;
-                                    let label = format!("Arrives: {} {:02}, {}", if m < 12 { months[m] } else { "?" }, d.get_utc_date(), d.get_utc_full_year());
-                                    view! { <p style="color:#d4a84b;font-size:13px;margin-top:2px;font-weight:600">{label}</p> }.into_any()
-                                }}
-                            }.into_any()
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
+
+            // Datetime picker — Send Later only (desktop only on mobile since time picker replaces it)
+            {move || if send_mode.get() == 1 && is_desktop() {
+                view! {
+                    <div class="field">
+                        <div class="utc-clock">
+                            "\u{1f550} Current UTC time: " {move || utc_clock.get()}
+                        </div>
+                        <label>"Unlock Date \u{0026} Time (UTC)"</label>
+                        <input type="datetime-local"
+                            prop:min=move || min_datetime_str(86400)
+                            prop:value=move || lock_date.get()
+                            on:input=move |ev| lock_date.set(event_target_value(&ev))
+                            disabled=move || sending.get() />
+                        {move || {
+                            let dt_str = lock_date.get();
+                            if dt_str.is_empty() { return view! { <span></span> }.into_any(); }
+                            let unix = match date_str_to_unix(&dt_str) {
+                                Some(t) => t,
+                                None => return view! { <span></span> }.into_any(),
+                            };
+                            let now_secs = (js_sys::Date::now() / 1000.0) as i64;
+                            let diff = unix - now_secs;
+                            if diff <= 0 {
+                                return view! { <p class="msg error" style="margin-top:4px">"Date must be in the future"</p> }.into_any();
+                            }
+                            let days  = diff / 86400;
+                            let hours = (diff % 86400) / 3600;
+                            let text  = if days > 0 {
+                                format!("Unlocks in {days} days, {hours} hours from now (UTC)")
+                            } else {
+                                let mins = (diff % 3600) / 60;
+                                format!("Unlocks in {hours} hours, {mins} minutes from now (UTC)")
+                            };
+                            view! { <p class="unlock-countdown">{text}</p> }.into_any()
                         }}
+                        <div class="quick-dates">
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_months(1); set_date(d); }
+                                disabled=move || sending.get()>"1 mo"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(1); set_date(d); }
+                                disabled=move || sending.get()>"1 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(5); set_date(d); }
+                                disabled=move || sending.get()>"5 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(10); set_date(d); }
+                                disabled=move || sending.get()>"10 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(25); set_date(d); }
+                                disabled=move || sending.get()>"25 yr"</button>
+                            <button type="button" class="pill"
+                                on:click=move |_| { let d=datetime_plus_years(100); set_date(d); }
+                                disabled=move || sending.get()>"100 yr"</button>
+                        </div>
                     </div>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
@@ -5419,7 +5418,7 @@ fn SendPanel(
                         {move || if !axiom_consented.get() {
                             view! { <p class="axiom-required">"Required: please accept the Promise Axioms and Terms of Service before sending."</p> }.into_any()
                         } else {
-                            view! { <span class="msg success" style="font-size:13px;margin:4px 0">"OK: Axiom consent recorded"</span> }.into_any()
+                            view! { <span class="msg success" style="font-size:13px;margin:4px 0">"\u{2705} Axiom consent recorded"</span> }.into_any()
                         }}
                     </div>
                 }.into_any()
@@ -5476,7 +5475,7 @@ fn SendPanel(
             {move || if send_mode.get() == 1 {
                 view! {
                     <p class="lock-warning">
-                        "You may cancel this promise from History within the cancellation window."
+                        "\u{26a0} You may cancel this promise from History within the cancellation window."
                         <br/>
                         "Once the window closes, the grantor cannot recover promised funds under any circumstances. A promise is a promise."
                     </p>
@@ -5930,15 +5929,9 @@ fn CascadeSendPanel(
                         "memo": memo_opt,
                         "claimCode": claim_code.clone(),
                     })).unwrap_or(no_args());
-                    // Compute first arrival date for cascade
-                    let first_dt = {
-                        let d = js_sys::Date::new_0();
-                        d.set_time((first_unlock as f64) * 1000.0);
-                        d.to_date_string().as_string().unwrap_or_else(|| "soon".to_string())
-                    };
                     match call::<()>("notify_email_recipient", notify_args).await {
-                        Ok(_) => { msg.set(format!("Series created!\n\n{count} promises sent to {email_str}.\nFirst arrives {first_dt}.")); spam_warn.set(false); }
-                        Err(_) => { msg.set(format!("Cascade on-chain! Email notification failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
+                        Ok(_) => { msg.set(format!("\u{2705} Cascade created!\n{count} stages sent. Recipient has been notified.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                        Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Cascade on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                     }
                     email.set(String::new());
                     memo.set(String::new());
@@ -6367,7 +6360,7 @@ fn PromisesPanel(
                 view! {
                     <div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #333">
                         <h3 class="section-title" style="margin-top:12px">
-                            "Commitments"
+                            "\u{1f512} Commitments"
                         </h3>
                         // TYPE V conditionals (game locks)
                         {cm.active_locks.iter().map(|lock| {
@@ -6390,7 +6383,7 @@ fn PromisesPanel(
                             view! {
                                 <div class="timelock-item" style="border-left:3px solid #D4A84B;padding-left:10px">
                                     <div class="tl-row">
-                                        <span style="font-size:13px;font-weight:600">{desc}</span>
+                                        <span style="font-size:13px;font-weight:600">"\u{1f512} " {desc}</span>
                                     </div>
                                     <div class="tl-row" style="justify-content:space-between">
                                         <span style="color:#5cb8ff;font-size:13px;font-weight:700">{amt}" KX"</span>
@@ -6426,7 +6419,7 @@ fn PromisesPanel(
                             view! {
                                 <div class="timelock-item" style="border-left:3px solid #3498db;padding-left:10px">
                                     <div class="tl-row">
-                                        <span style="font-size:13px;font-weight:600">"Credit: " {beneficiary}</span>
+                                        <span style="font-size:13px;font-weight:600">"\u{1f91d} Credit: " {beneficiary}</span>
                                     </div>
                                     <div class="tl-row" style="justify-content:space-between">
                                         <span style="color:#5cb8ff;font-size:13px">{drawn}" / "{ceiling}" KX drawn"</span>
@@ -6453,7 +6446,7 @@ fn PromisesPanel(
                             view! {
                                 <div class="timelock-item" style="border-left:3px solid #27ae60;padding-left:10px">
                                     <div class="tl-row">
-                                        <span style="font-size:13px;font-weight:600">"Deposit: " {obligor}" owes me"</span>
+                                        <span style="font-size:13px;font-weight:600">"\u{1f4cb} Deposit: " {obligor}" owes me"</span>
                                     </div>
                                     <div class="tl-row" style="justify-content:space-between">
                                         <span style="color:#5cb8ff;font-size:13px;font-weight:700">{total}" KX"</span>
@@ -6656,7 +6649,7 @@ fn RequestPanel(
             })).unwrap_or(no_args());
             match call::<serde_json::Value>("send_kx_request", args).await {
                 Ok(_) => {
-                    req_msg.set("OK: KX request sent!".to_string());
+                    req_msg.set("\u{2705} KX request sent!".to_string());
                     req_email.set(String::new());
                     req_amount.set(String::new());
                     req_note.set(String::new());
@@ -6720,8 +6713,8 @@ fn RequestPanel(
                                 let email_c = entry.email.clone();
                                 let email_fill = entry.email.clone();
                                 let indicator = match entry.registered {
-                                    Some(true) => "",
-                                    Some(false) => "",
+                                    Some(true) => "\u{1f7e2}",
+                                    Some(false) => "\u{1f7e1}",
                                     None => "\u{26aa}",
                                 };
                                 let display = entry.name.as_ref()
@@ -7118,12 +7111,12 @@ fn OpenPanel(
             if let Ok(commits) = call::<Vec<CommitmentInfo>>("get_commitments", no_args()).await {
                 for c in commits {
                     let (icon, badge, color, can_dismiss, tooltip) = match c.commitment_type.as_str() {
-                        "TYPE_V" | "kxgo" => ("", "KXGO".to_string(), "#7c3aed".to_string(), true, None),
-                        "TYPE_C" | "credit" => ("", "CREDIT".to_string(), "#22c55e".to_string(), true, None),
-                        "TYPE_Y" | "deposit" => ("", "DEPOSIT".to_string(), "#6b7280".to_string(), true, None),
+                        "TYPE_V" | "kxgo" => ("\u{1f3ae}", "KXGO".to_string(), "#7c3aed".to_string(), true, None),
+                        "TYPE_C" | "credit" => ("\u{1f91d}", "CREDIT".to_string(), "#22c55e".to_string(), true, None),
+                        "TYPE_Y" | "deposit" => ("\u{1f4cb}", "DEPOSIT".to_string(), "#6b7280".to_string(), true, None),
                         "sign_of_life" | "checkin" => ("\u{2764}\u{fe0f}", "CHECK-IN".to_string(), "#ef4444".to_string(), false, Some("Promise Check-in cannot be dismissed".to_string())),
-                        "misai" => ("", "MISAI".to_string(), "#d4a84b".to_string(), false, Some("AI management active".to_string())),
-                        _ => ("", c.commitment_type.clone(), "#6b7280".to_string(), true, None),
+                        "misai" => ("\u{1f916}", "MISAI".to_string(), "#d4a84b".to_string(), false, Some("AI management active".to_string())),
+                        _ => ("\u{1f4cb}", c.commitment_type.clone(), "#6b7280".to_string(), true, None),
                     };
                     all.push(OpenItem {
                         id: c.commitment_id.clone(),
@@ -7147,7 +7140,7 @@ fn OpenPanel(
                     all.push(OpenItem {
                         id: inv.invoice_id.clone(),
                         item_type: "invoice".to_string(),
-                        icon: "",
+                        icon: "\u{1f4c4}",
                         badge_label: "INVOICE".to_string(),
                         badge_color: "#d4a84b".to_string(),
                         description: if inv.from_display.is_empty() {
@@ -7178,7 +7171,7 @@ fn OpenPanel(
                             all.push(OpenItem {
                                 id: p.request_id.clone(),
                                 item_type: "poke".to_string(),
-                                icon: "",
+                                icon: "\u{1f44b}",
                                 badge_label: "REQUEST".to_string(),
                                 badge_color: "#3b82f6".to_string(),
                                 description: format!("From {}", p.from_email.as_deref().unwrap_or("unknown")),
@@ -7223,7 +7216,7 @@ fn OpenPanel(
                     all.push(OpenItem {
                         id: r.request_id.clone(),
                         item_type: "request".to_string(),
-                        icon: "",
+                        icon: "\u{1f44b}",
                         badge_label: "REQUEST".to_string(),
                         badge_color: "#3b82f6".to_string(),
                         description: format!("{} wants {} KX", if r.from_name.is_empty() { &r.from_email } else { &r.from_name }, r.amount_kx),
@@ -7332,7 +7325,7 @@ fn OpenPanel(
                                     } else {
                                         let tip = item.dismiss_tooltip.clone().unwrap_or_default();
                                         view! {
-                                            <span style="color:#555;font-size:14px;flex-shrink:0" title=tip>"-"</span>
+                                            <span style="color:#555;font-size:14px;flex-shrink:0" title=tip>"\u{1f512}"</span>
                                         }.into_any()
                                     }}
                                 </div>
@@ -7721,7 +7714,7 @@ fn HistoryPanel(
                 } else if total == 0 && h_err.get().is_empty() {
                     view! {
                         <div class="empty-state">
-                            <p>"No transactions yet"</p>
+                            <p>"\u{1f552} No transactions yet"</p>
                             <p class="muted">"Transactions will appear here once confirmed on-chain."</p>
                         </div>
                     }.into_any()
@@ -7746,12 +7739,12 @@ fn HistoryPanel(
                                     "Transfer Received" | "Email Claimed" | "Promise Kept" | "Incoming Promise");
                                 let type_icon = match entry.tx_type.as_str() {
                                     "Promise Sent" | "TimeLockCreate" => "\u{23f3}",
-                                    "TimeLockClaim" => "OK:",
-                                    "Email Send" => "",
+                                    "TimeLockClaim" => "\u{2705}",
+                                    "Email Send" => "\u{1f4e7}",
                                     "Transfer Received" => "\u{2199}",
-                                    "Email Claimed" => "",
-                                    "Promise Kept" => "",
-                                    "Incoming Promise" => "",
+                                    "Email Claimed" => "\u{1f4ec}",
+                                    "Promise Kept" => "\u{1f381}",
+                                    "Incoming Promise" => "\u{1f4e5}",
                                     _ => "\u{2197}",
                                 };
                                 // Type label badge
@@ -8119,8 +8112,8 @@ fn HistoryPanel(
                                                                 if let Some((_, ref sw, _)) = cache.get(&rtx3) {
                                                                     if let Some(b) = badges.get(sw) {
                                                                         let (bg, fg, text) = match b.as_str() {
-                                                                            "FOUNDING_MEMBER" => ("#7c3aed", "white", "Founder"),
-                                                                            "GENESIS_MEMBER" => ("#d4a84b", "black", "Genesis"),
+                                                                            "FOUNDING_MEMBER" => ("#7c3aed", "white", "\u{1f451} Founder"),
+                                                                            "GENESIS_MEMBER" => ("#d4a84b", "black", "\u{1f48e} Genesis"),
                                                                             "PROTOCOL_PATRON" => ("#e2e8f0", "#1a1a2e", "\u{26a1} Patron"),
                                                                             _ => return view! { <span></span> }.into_any(),
                                                                         };
@@ -8307,7 +8300,7 @@ fn HistoryPanel(
                                                                                 match call::<ClaimByCodeResult>("claim_by_code", args).await {
                                                                                     Ok(result) => {
                                                                                         let kx = format_kx(&result.total_chronos);
-                                                                                        inline_claim_result.set(format!("OK: Claimed {kx} KX!"));
+                                                                                        inline_claim_result.set(format!("\u{2705} Claimed {kx} KX!"));
                                                                                         inline_claim_code.set(String::new());
                                                                                         inline_claim_open.set(None);
                                                                                         reload();
@@ -8323,7 +8316,7 @@ fn HistoryPanel(
                                                                     </button>
                                                                 </div>
                                                                 {if !result_msg.is_empty() {
-                                                                    let cls = if result_msg.starts_with("Error") { "color:#ef4444" } else if result_msg.starts_with("OK:") { "color:#4ade80" } else { "color:#d4a84b" };
+                                                                    let cls = if result_msg.starts_with("Error") { "color:#ef4444" } else if result_msg.starts_with("\u{2705}") { "color:#4ade80" } else { "color:#d4a84b" };
                                                                     view! { <p style={format!("font-size:12px;margin:4px 0 0;{}", cls)}>{result_msg}</p> }.into_any()
                                                                 } else { view! { <span></span> }.into_any() }}
                                                             }.into_any()
@@ -8394,7 +8387,7 @@ fn HistoryPanel(
                                                                             ev.stop_propagation();
                                                                             let c = code_copy.clone();
                                                                             spawn_local(async move { copy_to_clipboard(c).await; });
-                                                                        }>"Copy Code"</button>
+                                                                        }>"📋 Copy Code"</button>
                                                                     </div>
                                                                 }.into_any()
                                                             } else { view! { <span></span> }.into_any() }
@@ -8674,7 +8667,7 @@ fn RewardsPanel(active_tab: RwSignal<u8>) -> impl IntoView {
 
     view! {
         <div class="card">
-            <p class="section-title">"ChronX Rewards"</p>
+            <p class="section-title">"🎁 ChronX Rewards"</p>
             <p class="label" style="color:var(--muted);margin-bottom:16px;">
                 "Earn free KX for being part of the ChronX community. Register your wallet to receive rewards, announcements, and exclusive airdrops."
             </p>
@@ -8694,7 +8687,7 @@ fn RewardsPanel(active_tab: RwSignal<u8>) -> impl IntoView {
                     // Pending confirmation — user registered but hasn't clicked the email link
                     view! {
                         <div style="text-align:center;padding:20px 0;">
-                            <div style="font-size:14px;margin-bottom:10px;color:#d4a84b;font-weight:700">"Email Sent"</div>
+                            <div style="font-size:32px;margin-bottom:10px;">"📧"</div>
                             <p style="font-weight:700;color:var(--gold);margin-bottom:8px;font-size:15px;">
                                 "Check your email!"
                             </p>
@@ -8935,8 +8928,8 @@ fn SettingsPanel(
                         if let Ok(wb) = call::<Vec<WalletBadge>>("get_wallet_badges", args).await {
                             let pills: Vec<(String, String, String)> = wb.iter().map(|b| {
                                 match b.badge_type.as_str() {
-                                    "FOUNDING_MEMBER" | "FOUNDER" => ("#d4a84b".to_string(), "black".to_string(), "Founder".to_string()),
-                                    "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "Genesis Member".to_string()),
+                                    "FOUNDING_MEMBER" | "FOUNDER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f3c5} Founder".to_string()),
+                                    "GENESIS_MEMBER" => ("#d4a84b".to_string(), "black".to_string(), "\u{1f48e} Genesis Member".to_string()),
                                     "KXGO_BRONZE" => ("#CD7F32".to_string(), "white".to_string(), "KXGO Bronze".to_string()),
                                     "KXGO_SILVER" => ("#C0C0C0".to_string(), "#1a1a2e".to_string(), "KXGO Silver".to_string()),
                                     "KXGO_GOLD" => ("#D4A84B".to_string(), "black".to_string(), "KXGO Gold".to_string()),
@@ -9129,17 +9122,17 @@ fn SettingsPanel(
                 </div>
                 {move || if show_lang_picker.get() {
                     let langs = vec![
-                        ("en", "English"),
-                        ("fr", "Fran\u{e7}ais"),
-                        ("de", "Deutsch"),
-                        ("zh", "\u{4e2d}\u{6587}"),
-                        ("es", "Espa\u{f1}ol"),
-                        ("ru", "\u{0420}\u{0443}\u{0441}\u{0441}\u{043a}\u{0438}\u{0439}"),
-                        ("ar", "\u{0627}\u{0644}\u{0639}\u{0631}\u{0628}\u{064a}\u{0629}"),
-                        ("ur", "\u{0627}\u{0631}\u{062f}\u{0648}"),
+                        ("en", "\u{1f1fa}\u{1f1f8} English"),
+                        ("fr", "\u{1f1eb}\u{1f1f7} Fran\u{e7}ais"),
+                        ("de", "\u{1f1e9}\u{1f1ea} Deutsch"),
+                        ("zh", "\u{1f1e8}\u{1f1f3} \u{4e2d}\u{6587}"),
+                        ("es", "\u{1f1ea}\u{1f1f8} Espa\u{f1}ol"),
+                        ("ru", "\u{1f1f7}\u{1f1fa} \u{0420}\u{0443}\u{0441}\u{0441}\u{043a}\u{0438}\u{0439}"),
+                        ("ar", "\u{1f1f8}\u{1f1e6} \u{0627}\u{0644}\u{0639}\u{0631}\u{0628}\u{064a}\u{0629}"),
+                        ("ur", "\u{1f1f5}\u{1f1f0} \u{0627}\u{0631}\u{062f}\u{0648}"),
                     ];
                     view! {
-                        <div class="lang-picker" style="margin-top:8px;font-family:-apple-system,'PingFang SC','Hiragino Sans GB','Noto Sans','Arial Unicode MS',sans-serif">
+                        <div class="lang-picker" style="margin-top:8px">
                             {langs.into_iter().map(|(code, label)| {
                                 let code_str = code.to_string();
                                 let code_for_click = code_str.clone();
@@ -9258,7 +9251,7 @@ fn SettingsPanel(
                                                                 copy_to_clipboard(pk_val).await;
                                                             });
                                                         }>
-                                                        {move || t(&lang.get(), "settings_copy_pubkey")}
+                                                        {format!("\u{1f4cb} {}", t(&lang.get(), "settings_copy_pubkey"))}
                                                     </button>
                                                 </div>
                                             }.into_any()
@@ -9299,7 +9292,7 @@ fn SettingsPanel(
                     view! {
                         <div class="update-card" style="background:rgba(201,168,76,0.1);border:1px solid rgba(201,168,76,0.3);border-radius:8px;padding:12px;margin-bottom:8px">
                             <p style="font-weight:700;color:#c9a84c;font-size:13px">
-                                {t(&lang.get(), "settings_update_available")}
+                                {format!("\u{1f514} {}", t(&lang.get(), "settings_update_available"))}
                             </p>
                             <p class="muted" style="font-size:12px;margin-top:4px">
                                 {t(&lang.get(), "settings_update_go")}
@@ -9340,7 +9333,7 @@ fn SettingsPanel(
                                     let on_mark_n = on_mark_c.clone();
                                     let url = n.url.clone();
                                     let url_label = n.url_label.clone();
-                                    let icon = "";
+                                    let icon = if n.severity == "reward" { "🎁 " } else { "" };
                                     view! {
                                         <div class=format!("notice-card {}", n.severity)
                                              style=format!("opacity:{};cursor:pointer", if is_read { "0.55" } else { "1" })
@@ -9448,7 +9441,7 @@ fn SettingsPanel(
                                             ).unwrap_or(no_args());
                                             let _ = call::<()>("set_auth_method", args).await;
                                             auth_method.set("biometric".to_string());
-                                            cp_msg.set("OK: Biometric login enabled".to_string());
+                                            cp_msg.set("\u{2705} Biometric login enabled".to_string());
                                         }
                                         Err(e) => {
                                             cp_msg.set(e);
@@ -9467,7 +9460,7 @@ fn SettingsPanel(
                 {move || {
                     let m = cp_msg.get();
                     if m.is_empty() || m.starts_with("PIN changed") { view! { <span></span> }.into_any() }
-                    else if m.starts_with("OK:") { view! { <p class="msg success" style="margin-bottom:8px">{m}</p> }.into_any() }
+                    else if m.starts_with("\u{2705}") { view! { <p class="msg success" style="margin-bottom:8px">{m}</p> }.into_any() }
                     else { view! { <p class="msg error" style="margin-bottom:8px">{m}</p> }.into_any() }
                 }}
 
@@ -9501,7 +9494,7 @@ fn SettingsPanel(
                         <button on:click=move |_| {
                             cp_phase.set(0); cp_digits.set(String::new());
                             cp_msg.set(String::new()); show_change_pin.set(true);
-                        }>{move || t(&lang.get(), "settings_change_pin")}</button>
+                        }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
                     }.into_any()
                 } else {
                     view! {
@@ -9516,17 +9509,20 @@ fn SettingsPanel(
                         <button on:click=move |_| {
                             cp_phase.set(0); cp_digits.set(String::new());
                             cp_msg.set(String::new()); show_change_pin.set(true);
-                        }>{move || t(&lang.get(), "settings_change_pin")}</button>
+                        }>{move || format!("\u{1f510} {}", t(&lang.get(), "settings_change_pin"))}</button>
                     }.into_any()
                 }}
 
                 // ── My Emails section (inside Security collapsible) ──
                 <hr style="border:none;border-top:1px solid #2d3748;margin:12px 0" />
-                </div> // close security content
-            </div> // close security settings-section
+                </div> // close security collapsible
+            </div>
 
-            // ── Privacy (collapsible) ──
-            <div class="settings-section" style="order:4"
+            // My Emails for KX Claims — visually part of Security, but ordered separately for CSS
+            // We handle it as its own order:4 section right after Security
+
+            // ── Privacy collapsible header ──
+            <div class="settings-section" style="order:4;padding-bottom:0"
                  class:open=move || sec_privacy_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
@@ -9536,7 +9532,10 @@ fn SettingsPanel(
                     </div>
                     <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_privacy_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                 </div>
-                <div style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
+            </div>
+            // ── Privacy content (inside collapsible) ──
+            <div class="settings-section" style="order:4;padding-top:0;margin-top:-8px"
+                 style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
                 // Show badges toggle (with inline badge pills)
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                     <span style="font-size:13px;color:#e5e7eb;white-space:nowrap">"Show badges when sending?"</span>
@@ -9653,8 +9652,7 @@ fn SettingsPanel(
                         </div>
                     }
                 }
-            </div> // close privacy content
-            </div> // close privacy settings-section
+            </div>
 
             // ── Wallet Management (collapsed by default) ──
             {
@@ -9686,7 +9684,7 @@ fn SettingsPanel(
                         seed_loading.set(false);
                         show_seed_modal.set(true);
                     }
-                >"View Seed Phrase"</button>
+                >"\u{1f331} View Seed Phrase"</button>
                 <p class="muted" style="font-size:11px;margin-top:6px">
                     <a href="javascript:void(0)" style="color:#888;text-decoration:underline" on:click=move |_| {
                         export_confirmed.set(false);
@@ -9699,7 +9697,7 @@ fn SettingsPanel(
                 <div style="margin-top:12px">
                     <a href="javascript:void(0)" style="color:#f87171;font-size:12px;text-decoration:none"
                         on:click=move |_| compromised_expanded.set(!compromised_expanded.get_untracked())
-                    >{move || if compromised_expanded.get() { "Compromised? \u{25b2}" } else { "Compromised? \u{25bc}" }}</a>
+                    >{move || if compromised_expanded.get() { "\u{26a0}\u{fe0f} Compromised? \u{25b2}" } else { "\u{26a0}\u{fe0f} Compromised? \u{25bc}" }}</a>
                     {move || if compromised_expanded.get() {
                         view! {
                             <div style="margin-top:8px;padding:12px;background:#1a1020;border:1px solid #442;border-radius:8px">
@@ -9749,7 +9747,7 @@ fn SettingsPanel(
                     import_msg.set(String::new());
                     import_confirm.set(false);
                     show_import.set(true);
-                }>"Restore from Seed Phrase"</button>
+                }>"\u{1f331} Restore from Seed Phrase"</button>
             </div>
 
             // Cold Storage Wallet Generator (desktop only)
@@ -9764,7 +9762,7 @@ fn SettingsPanel(
                             cold_result.set(None);
                             cold_saved.set(false);
                             show_cold.set(true);
-                        }>{move || t(&lang.get(), "settings_gen_cold")}</button>
+                        }>{move || format!("\u{1f9ca} {}", t(&lang.get(), "settings_gen_cold"))}</button>
                         {move || {
                             let wallets = cold_wallets.get();
                             if wallets.is_empty() {
@@ -9799,7 +9797,6 @@ fn SettingsPanel(
 
             // My Emails for KX Claims — inside Security (collapsed with it)
             <div class="settings-section" style="order:6;padding-top:0;margin-top:-8px"
-                 class:open=move || sec_security_open.get()
                  style:display=move || if sec_security_open.get() { "" } else { "none" }>
                 <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
@@ -9830,7 +9827,7 @@ fn SettingsPanel(
                                         } else {
                                             view! {
                                                 <span style="font-size:11px;white-space:nowrap">
-                                                    <span style="color:#f59e0b" title="Unverified">"! "</span>
+                                                    <span style="color:#f59e0b" title="Unverified">"\u{26a0} "</span>
                                                     <a href="#" style="color:#d4a84b;text-decoration:underline;font-size:11px" on:click=move |ev| {
                                                         ev.prevent_default();
                                                         let e = email_for_reverify.clone();
@@ -9861,7 +9858,7 @@ fn SettingsPanel(
                                                 </span>
                                             }.into_any()
                                         }}
-                                        <button style="font-size:16px;padding:2px 8px;color:#ef4444;background:transparent;border:1px solid #ef4444;border-radius:4px;font-weight:bold;cursor:pointer"
+                                        <button style="font-size:12px;padding:4px 8px;color:#f87171;background:transparent;border:1px solid #f87171;border-radius:4px"
                                             on:click=move |_| {
                                                 claim_emails.update(|list| { if idx < list.len() { list.remove(idx); } });
                                                 let remaining = claim_emails.get_untracked();
@@ -9872,7 +9869,7 @@ fn SettingsPanel(
                                                     let _ = call::<()>("set_claim_emails", args).await;
                                                 });
                                             }
-                                        >{"\u{00d7}"}</button>
+                                        >"\u{2716}"</button>
                                     </div>
                                 }
                             }).collect();
@@ -10041,8 +10038,8 @@ fn SettingsPanel(
             // About (no section label — just centered buttons)
             <div style="order:99;text-align:center;padding:12px 0 4px">
                 <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:8px">
-                    <button on:click=move |_| show_about.set(true) style="font-size:13px">{move || t(&lang.get(), "settings_about_chronx")}</button>
-                    <button on:click=move |_| show_updates.set(true) style="font-size:13px">{move || t(&lang.get(), "settings_check_updates")}</button>
+                    <button on:click=move |_| show_about.set(true) style="font-size:13px">{move || format!("\u{2139}\u{fe0f} {}", t(&lang.get(), "settings_about_chronx"))}</button>
+                    <button on:click=move |_| show_updates.set(true) style="font-size:13px">{move || format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</button>
                 </div>
                 {move || {
                     let version = app_version.get();
@@ -10089,7 +10086,7 @@ fn SettingsPanel(
                     update_result.set(None);
                 }>
                     <div class="modal-card" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">{move || t(&lang.get(), "settings_check_updates")}</p>
+                        <p class="modal-title">{format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</p>
                         <div class="modal-body">
                             <p class="label">{format!("{}: {}", t(&lang.get(), "settings_current_version"), version)}</p>
                             {move || {
@@ -10099,7 +10096,7 @@ fn SettingsPanel(
                                     if info.up_to_date {
                                         view! {
                                             <p class="update-up-to-date">
-                                                "OK: You are running the latest version ("
+                                                "\u{2705} You are running the latest version ("
                                                 {info.current.clone()} ")"
                                             </p>
                                         }.into_any()
@@ -10129,7 +10126,7 @@ fn SettingsPanel(
                                         view! {
                                             <div class="update-info">
                                                 <p class="update-available">
-                                                    "Version " {info.latest.clone()} " is available"
+                                                    "\u{1f504} Version " {info.latest.clone()} " is available"
                                                 </p>
                                                 {if !info.release_notes.is_empty() {
                                                     view! {
@@ -10237,7 +10234,7 @@ fn SettingsPanel(
                     if !export_loading.get_untracked() { show_export.set(false); }
                 }>
                     <div class="modal-card" style="max-width:440px" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"Export Private Key"</p>
+                        <p class="modal-title">"🔑 Export Private Key"</p>
                         {move || {
                             if !export_confirmed.get() {
                                 // Step 1: Warning + confirmation
@@ -10245,7 +10242,7 @@ fn SettingsPanel(
                                     <div class="modal-body" style="text-align:left">
                                         <div class="export-warning">
                                             <p style="font-weight:700;color:#f87171;margin-bottom:8px">
-                                                "Read carefully before proceeding:"
+                                                "⚠ Read carefully before proceeding:"
                                             </p>
                                             <ul style="font-size:13px;line-height:1.8;color:#c7cdd4;padding-left:18px">
                                                 <li>"Your private key is the ONLY way to access your KX."</li>
@@ -10296,7 +10293,7 @@ fn SettingsPanel(
                                                 <button class="primary" on:click=move |_| {
                                                     let k = key_copy.clone();
                                                     spawn_local(async move { copy_to_clipboard(k).await; });
-                                                }>"Copy to Clipboard"</button>
+                                                }>"📋 Copy to Clipboard"</button>
                                                 {
                                                     let key_file = key.clone();
                                                     view! {
@@ -10332,11 +10329,11 @@ fn SettingsPanel(
                     if !import_busy.get_untracked() { show_import.set(false); }
                 }>
                     <div class="modal-card" style="max-width:440px" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"Restore from Seed Phrase"</p>
+                        <p class="modal-title">"\u{1f331} Restore from Seed Phrase"</p>
                         <div class="modal-body" style="text-align:left">
                             <div class="export-warning" style="margin-bottom:12px">
                                 <p style="font-weight:700;color:#f87171;font-size:13px">
-                                    "Restoring will replace your current wallet. Make sure you have backed up your current seed phrase first."
+                                    "\u{26a0} Restoring will replace your current wallet. Make sure you have backed up your current seed phrase first."
                                 </p>
                             </div>
                             <p class="label" style="margin-bottom:6px">"Enter your 24-word seed phrase or paste legacy backup key:"</p>
@@ -10438,7 +10435,7 @@ fn SettingsPanel(
                     if !seed_loading.get_untracked() { show_seed_modal.set(false); }
                 }>
                     <div class="modal-card" style="max-width:480px" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"View Seed Phrase"</p>
+                        <p class="modal-title">"\u{1f331} View Seed Phrase"</p>
                         <div class="modal-body" style="text-align:left">
                             {move || {
                                 let phase = seed_pin_phase.get();
@@ -10541,7 +10538,7 @@ fn SettingsPanel(
                                             view! {
                                                 <div style="background:#2a1a1a;border:1px solid #f87171;border-radius:8px;padding:16px;margin-bottom:12px">
                                                     <p style="color:#f87171;font-weight:700;font-size:13px;margin-bottom:8px">
-                                                        "Ensure no one can see your screen."
+                                                        "\u{26a0}\u{fe0f} Ensure no one can see your screen."
                                                     </p>
                                                     <p class="muted" style="font-size:12px">
                                                         "Your seed phrase gives full access to your wallet and all your KX. \
@@ -10550,7 +10547,7 @@ fn SettingsPanel(
                                                 </div>
                                                 <button class="primary" style="width:100%;padding:14px;font-size:15px"
                                                     on:click=move |_| seed_revealed.set(true)
-                                                >"Reveal Seed Phrase"</button>
+                                                >"\u{1f441} Reveal Seed Phrase"</button>
                                             }.into_any()
                                         } else {
                                             // Revealed — show word grid
@@ -10597,7 +10594,7 @@ fn SettingsPanel(
             view! {
                 <div class="modal-overlay" on:click=move |_| show_balance_warning.set(false)>
                     <div class="modal-card" style="max-width:440px" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
-                        <p class="modal-title">"You Have KX in This Wallet"</p>
+                        <p class="modal-title">"\u{26a0}\u{fe0f} You Have KX in This Wallet"</p>
                         <div class="modal-body" style="text-align:left">
                             <div style="background:#2a1010;border:1px solid #f87171;border-radius:8px;padding:12px;margin-bottom:12px">
                                 <p style="color:#f87171;font-size:13px;font-weight:700;line-height:1.5">
@@ -10637,7 +10634,7 @@ fn SettingsPanel(
                     }
                 }>
                     <div class="modal-card" style="max-width:480px" on:click=move |ev| ev.stop_propagation()>
-                        <p class="modal-title">"Create New Wallet"</p>
+                        <p class="modal-title">"\u{26a0}\u{fe0f} Create New Wallet"</p>
                         <div class="modal-body" style="text-align:left">
                             {move || {
                                 let mnemonic = new_wallet_mnemonic.get();
@@ -10711,12 +10708,12 @@ fn SettingsPanel(
                                     view! {
                                         <div style="background:#1a2a1a;border:1px solid #4a4;border-radius:8px;padding:12px;margin-bottom:12px">
                                             <p style="color:#4a4;font-weight:700;font-size:13px">
-                                                "OK: New wallet created!"
+                                                "\u{2705} New wallet created!"
                                             </p>
                                         </div>
                                         <div style="background:#2a2010;border:1px solid #daa520;border-radius:8px;padding:12px;margin-bottom:12px">
                                             <p style="color:#daa520;font-weight:700;font-size:13px">
-                                                "Important: Your email is no longer registered \
+                                                "\u{26a0}\u{fe0f} Important: Your email is no longer registered \
                                                  to this wallet. Go to Settings \u{2192} My Emails to \
                                                  re-register your email for automatic KX delivery."
                                             </p>
@@ -10771,7 +10768,7 @@ fn SettingsPanel(
                                     view! {
                                         <div class="export-warning" style="margin-bottom:10px">
                                             <p style="font-weight:700;color:#f87171;font-size:13px">
-                                                "Save this private key NOW. It will not be shown again."
+                                                "⚠ Save this private key NOW. It will not be shown again."
                                             </p>
                                         </div>
                                         <p class="label" style="margin-bottom:4px">"Account ID (send KX here):"</p>
