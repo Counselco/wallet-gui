@@ -2333,3 +2333,15 @@ input[type="range"].pct-slider {
     display: flex;
     flex-direction: column;
 }
+
+/* Send Later radio list animation */
+.send-later-options {
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.3s ease;
+    padding: 0;
+}
+.send-later-options.visible {
+    max-height: 600px;
+    padding: 4px 0;
+}

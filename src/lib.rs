@@ -755,16 +755,17 @@ fn unix_to_datetime_local_str(unix: i64) -> String {
     )
 }
 
-/// Parse "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM" as UTC Unix seconds.
+/// Parse "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM" as local-time Unix seconds.
 fn date_str_to_unix(s: &str) -> Option<i64> {
-    let utc_str = if s.len() == 10 {
-        format!("{s}T00:00:00Z")
+    // Parse as LOCAL time (no "Z" suffix = JavaScript treats as local timezone)
+    let local_str = if s.len() == 10 {
+        format!("{s}T00:00:00")
     } else if s.len() >= 16 {
-        format!("{}:00Z", &s[..16])
+        format!("{}:00", &s[..16])
     } else {
         return None;
     };
-    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(&utc_str));
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(&local_str));
     let ms = d.get_time();
     if ms.is_nan() { return None; }
     Some((ms / 1000.0) as i64)
@@ -2571,7 +2572,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.5"
+                    "ChronX Wallet v2.5.7"
                 </p>
             </div>
         </div>
@@ -4222,6 +4223,11 @@ fn SendPanel(
     let email_save_msg = RwSignal::new(String::new());
     // Mobile time picker: 0=Send Now, 1=1h, 2=24h, 3=1w, 4=1m, 5=3m, 6=6m, 7=1y
     let mobile_time_option = RwSignal::new(0u8);
+    // Send Later radio option: 255=none selected
+    let later_choice = RwSignal::new(255u8);
+    let show_date_picker = RwSignal::new(false);
+    let custom_date = RwSignal::new(String::new());
+    let custom_time = RwSignal::new(String::new());
     // Mobile confirmation screen
     let mobile_confirm_open = RwSignal::new(false);
     let mobile_confirm_to_display = RwSignal::new(String::new());
@@ -4785,23 +4791,17 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
-            // Mode: Send Now | Send Later BETA (desktop = toggle, mobile = time picker below)
-            {if is_desktop() {
-                view! {
-                    <div class="send-mode-row">
-                        <button type="button"
-                            class=move || if send_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
-                            on:click=move |_| { send_mode.set(0); lock_date.set(String::new()); }
-                            disabled=move || sending.get()>"Send Now"</button>
-                        <button type="button"
-                            class=move || if send_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
-                            on:click=move |_| send_mode.set(1)
-                            disabled=move || sending.get()>"\u{23f3} Send Later BETA"</button>
-                    </div>
-                }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
-            }}
+            // Mode: Send Now | Send Later (both platforms)
+            <div class="send-mode-row">
+                <button type="button"
+                    class=move || if send_mode.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                    on:click=move |_| { send_mode.set(0); lock_date.set(String::new()); later_choice.set(255); show_date_picker.set(false); mobile_time_option.set(0); }
+                    disabled=move || sending.get()>"Send Now"</button>
+                <button type="button"
+                    class=move || if send_mode.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                    on:click=move |_| { send_mode.set(1); }
+                    disabled=move || sending.get()>"Send Later"</button>
+            </div>
 
             // Recipient field — depends on recipient_mode
             {move || match recipient_mode.get() {
@@ -5096,82 +5096,121 @@ fn SendPanel(
                 <p class="fee-free-line">"✓ No transaction fees. The recipient receives exactly what you send."</p>
             </div>
 
-            // Mobile time picker — replaces Send Now / Send Later toggle on mobile
-            {if !is_desktop() {
+            // (Mobile time picker removed — unified Send Now / Send Later toggle above)
+
+            // Send Later options — radio presets + date picker (both platforms)
+            {move || if send_mode.get() == 1 {
+                let is_mobile = !is_desktop();
+                let presets: Vec<(u8, &str, i64)> = if is_mobile {
+                    vec![
+                        (0, "In 1 day", 86400),
+                        (1, "In 1 week", 604800),
+                        (2, "In 1 month", 2592000),
+                        (3, "In 1 year", 31536000),
+                    ]
+                } else {
+                    vec![
+                        (0, "In 1 day", 86400),
+                        (1, "In 1 week", 604800),
+                        (2, "In 1 month", 2592000),
+                        (3, "In 1 year", 31536000),
+                        (4, "In 5 years", 157680000),
+                        (5, "In 20 years", 630720000),
+                        (6, "In 100 years", 3153600000),
+                    ]
+                };
                 view! {
-                    <div class="field">
-                        <label>{move || t(&lang.get(), "mobile_send_when")}</label>
-                        <div class="mobile-time-picker">
-                            {[
-                                (0u8, "mobile_send_now"),
-                                (1, "mobile_send_1h"),
-                                (2, "mobile_send_24h"),
-                                (3, "mobile_send_1w"),
-                                (4, "mobile_send_1m"),
-                                (5, "mobile_send_3m"),
-                                (6, "mobile_send_6m"),
-                                (7, "mobile_send_1y"),
-                            ].into_iter().map(|(val, key)| {
-                                let key_str = key.to_string();
+                    <div class="send-later-options visible">
+                        <div style="display:flex;flex-direction:column;gap:6px;padding:8px 0">
+                            {presets.into_iter().map(|(val, label, secs)| {
                                 view! {
-                                    <button type="button"
-                                        class=move || if mobile_time_option.get() == val { "mobile-time-btn active" } else { "mobile-time-btn" }
-                                        on:click=move |_| {
-                                            mobile_time_option.set(val);
-                                            if val == 0 {
-                                                send_mode.set(0);
-                                                lock_date.set(String::new());
-                                            } else {
-                                                send_mode.set(1);
-                                                // Compute future date from now
-                                                let secs: i64 = match val {
-                                                    1 => 3600,       // 1 hour
-                                                    2 => 86400,      // 24 hours
-                                                    3 => 604800,     // 1 week
-                                                    4 => 2592000,    // 1 month (~30d)
-                                                    5 => 7776000,    // 3 months (~90d)
-                                                    6 => 15552000,   // 6 months (~180d)
-                                                    7 => 31536000,   // 1 year (365d)
-                                                    _ => 0,
-                                                };
-                                                let now = (js_sys::Date::now() / 1000.0) as i64;
-                                                let target = now + secs;
-                                                // Format as datetime-local string (YYYY-MM-DDTHH:MM)
+                                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:#e5e7eb;padding:4px 0">
+                                        <input type="radio" name="send_later_opt"
+                                            prop:checked=move || later_choice.get() == val && !show_date_picker.get()
+                                            on:change=move |_| {
+                                                later_choice.set(val);
+                                                show_date_picker.set(false);
+                                                custom_date.set(String::new());
+                                                custom_time.set(String::new());
+                                                // Compute target as local time
+                                                let now_ms = js_sys::Date::now();
+                                                let target_ms = now_ms + (secs as f64) * 1000.0;
                                                 let d = js_sys::Date::new_0();
-                                                d.set_time((target as f64) * 1000.0);
-                                                let year = d.get_utc_full_year();
-                                                let month = d.get_utc_month() + 1;
-                                                let day = d.get_utc_date();
-                                                let hour = d.get_utc_hours();
-                                                let min = d.get_utc_minutes();
+                                                d.set_time(target_ms);
+                                                // Format as local datetime string
+                                                let year = d.get_full_year();
+                                                let month = d.get_month() + 1;
+                                                let day = d.get_date();
+                                                let hour = d.get_hours();
+                                                let min = d.get_minutes();
                                                 lock_date.set(format!("{:04}-{:02}-{:02}T{:02}:{:02}", year, month, day, hour, min));
                                             }
-                                        }
-                                        disabled=move || sending.get()>
-                                        {move || t(&lang.get(), &key_str)}
-                                    </button>
+                                            style="accent-color:#d4a84b"
+                                            disabled=move || sending.get() />
+                                        {label}
+                                    </label>
                                 }
                             }).collect::<Vec<_>>()}
+                            // "Pick a date..." option
+                            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:#e5e7eb;padding:4px 0">
+                                <input type="radio" name="send_later_opt"
+                                    prop:checked=move || show_date_picker.get()
+                                    on:change=move |_| {
+                                        show_date_picker.set(true);
+                                        later_choice.set(255);
+                                        lock_date.set(String::new());
+                                    }
+                                    style="accent-color:#d4a84b"
+                                    disabled=move || sending.get() />
+                                "Pick a date..."
+                            </label>
                         </div>
-                    </div>
-                }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
-            }}
-
-            // Datetime picker — Send Later only (desktop only on mobile since time picker replaces it)
-            {move || if send_mode.get() == 1 && is_desktop() {
-                view! {
-                    <div class="field">
-                        <div class="utc-clock">
-                            "\u{1f550} Current UTC time: " {move || utc_clock.get()}
-                        </div>
-                        <label>"Unlock Date \u{0026} Time (UTC)"</label>
-                        <input type="datetime-local"
-                            prop:min=move || min_datetime_str(86400)
-                            prop:value=move || lock_date.get()
-                            on:input=move |ev| lock_date.set(event_target_value(&ev))
-                            disabled=move || sending.get() />
+                        // Date + Time picker (shown when "Pick a date..." selected)
+                        {move || if show_date_picker.get() {
+                            view! {
+                                <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+                                    <div style="flex:1;min-width:140px">
+                                        <label style="font-size:12px;color:#888;margin-bottom:4px;display:block">"Date"</label>
+                                        <input type="date"
+                                            style="background:#1a1d2e;border:1px solid #2a2f3e;color:#e5e7eb;padding:8px 12px;border-radius:6px;font-size:14px;width:100%"
+                                            prop:min=move || {
+                                                let d = js_sys::Date::new_0();
+                                                d.set_time(js_sys::Date::now() + 86400000.0);
+                                                format!("{:04}-{:02}-{:02}", d.get_full_year(), d.get_month() + 1, d.get_date())
+                                            }
+                                            prop:value=move || custom_date.get()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                custom_date.set(val.clone());
+                                                let time_val = custom_time.get_untracked();
+                                                if !val.is_empty() {
+                                                    let t = if time_val.is_empty() { "00:00".to_string() } else { time_val };
+                                                    lock_date.set(format!("{}T{}", val, t));
+                                                }
+                                            }
+                                            disabled=move || sending.get() />
+                                    </div>
+                                    <div style="flex:1;min-width:120px">
+                                        <label style="font-size:12px;color:#888;margin-bottom:4px;display:block">"Time"</label>
+                                        <input type="time"
+                                            style="background:#1a1d2e;border:1px solid #2a2f3e;color:#e5e7eb;padding:8px 12px;border-radius:6px;font-size:14px;width:100%"
+                                            prop:value=move || custom_time.get()
+                                            on:input=move |ev| {
+                                                let val = event_target_value(&ev);
+                                                custom_time.set(val.clone());
+                                                let date_val = custom_date.get_untracked();
+                                                if !date_val.is_empty() {
+                                                    lock_date.set(format!("{}T{}", date_val, val));
+                                                }
+                                            }
+                                            disabled=move || sending.get() />
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
+                        // Arrival date confirmation (shown when lock_date is set)
                         {move || {
                             let dt_str = lock_date.get();
                             if dt_str.is_empty() { return view! { <span></span> }.into_any(); }
@@ -5180,40 +5219,24 @@ fn SendPanel(
                                 None => return view! { <span></span> }.into_any(),
                             };
                             let now_secs = (js_sys::Date::now() / 1000.0) as i64;
-                            let diff = unix - now_secs;
-                            if diff <= 0 {
-                                return view! { <p class="msg error" style="margin-top:4px">"Date must be in the future"</p> }.into_any();
+                            if unix <= now_secs {
+                                return view! { <p class="msg error" style="margin-top:4px">"Please select a future date and time"</p> }.into_any();
                             }
-                            let days  = diff / 86400;
-                            let hours = (diff % 86400) / 3600;
-                            let text  = if days > 0 {
-                                format!("Unlocks in {days} days, {hours} hours from now (UTC)")
-                            } else {
-                                let mins = (diff % 3600) / 60;
-                                format!("Unlocks in {hours} hours, {mins} minutes from now (UTC)")
-                            };
-                            view! { <p class="unlock-countdown">{text}</p> }.into_any()
+                            // Format arrival in local time
+                            let d = js_sys::Date::new_0();
+                            d.set_time((unix as f64) * 1000.0);
+                            let months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+                            let m = d.get_month() as usize;
+                            let month_name = if m < 12 { months[m] } else { "?" };
+                            let day = d.get_date();
+                            let year = d.get_full_year();
+                            let hours = d.get_hours();
+                            let mins = d.get_minutes();
+                            let ampm = if hours >= 12 { "PM" } else { "AM" };
+                            let h12 = if hours % 12 == 0 { 12 } else { hours % 12 };
+                            let label = format!("This KX will arrive on\n{} {}, {} at {}:{:02} {}", month_name, day, year, h12, mins, ampm);
+                            view! { <p style="color:#d4a84b;font-size:13px;margin-top:6px;font-weight:600;white-space:pre-line">{label}</p> }.into_any()
                         }}
-                        <div class="quick-dates">
-                            <button type="button" class="pill"
-                                on:click=move |_| { let d=datetime_plus_months(1); set_date(d); }
-                                disabled=move || sending.get()>"1 mo"</button>
-                            <button type="button" class="pill"
-                                on:click=move |_| { let d=datetime_plus_years(1); set_date(d); }
-                                disabled=move || sending.get()>"1 yr"</button>
-                            <button type="button" class="pill"
-                                on:click=move |_| { let d=datetime_plus_years(5); set_date(d); }
-                                disabled=move || sending.get()>"5 yr"</button>
-                            <button type="button" class="pill"
-                                on:click=move |_| { let d=datetime_plus_years(10); set_date(d); }
-                                disabled=move || sending.get()>"10 yr"</button>
-                            <button type="button" class="pill"
-                                on:click=move |_| { let d=datetime_plus_years(25); set_date(d); }
-                                disabled=move || sending.get()>"25 yr"</button>
-                            <button type="button" class="pill"
-                                on:click=move |_| { let d=datetime_plus_years(100); set_date(d); }
-                                disabled=move || sending.get()>"100 yr"</button>
-                        </div>
                     </div>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
