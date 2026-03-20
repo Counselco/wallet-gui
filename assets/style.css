@@ -2311,6 +2311,20 @@ input[type="range"].pct-slider {
     border-bottom: none;
 }
 
+/* Settings expanded section card effect */
+.settings-section {
+    border-radius: 12px;
+    margin: 2px 0;
+    transition: background 0.2s ease, border 0.2s ease, padding 0.2s ease;
+    border: 1px solid transparent;
+}
+.settings-section.open {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 0 12px;
+    margin: 6px 0;
+}
+
 /* Settings max-width container with flex ordering */
 .settings-content-wrap {
     max-width: 680px;

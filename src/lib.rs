@@ -2571,7 +2571,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.4"
+                    "ChronX Wallet v2.5.5"
                 </p>
             </div>
         </div>
@@ -9180,7 +9180,8 @@ fn SettingsPanel(
                 let advanced_open = RwSignal::new(false);
                 let node_editing = RwSignal::new(false);
                 view! {
-                    <div class="settings-section" style="order:8">
+                    <div class="settings-section" style="order:8"
+                         class:open=move || advanced_open.get()>
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| advanced_open.update(|v| *v = !*v)>
                             <div style="display:flex;align-items:center;gap:10px">
@@ -9218,6 +9219,44 @@ fn SettingsPanel(
                                             view! { <p class=cls>{s}</p> }.into_any()
                                         }
                                     }}
+                                    // ── My Public Key (inside Advanced) ──
+                                    <hr style="border:none;border-top:1px solid #2d3748;margin:12px 0" />
+                                    <p class="label" style="text-transform:uppercase;letter-spacing:1px">{move || t(&lang.get(), "settings_public_key")}</p>
+                                    <p class="muted" style="font-size:11px;margin-bottom:6px">
+                                        {move || format!("({})", t(&lang.get(), "settings_public_key_sub"))}
+                                    </p>
+                                    <button on:click=on_show_pubkey disabled=move || pk_loading.get()>
+                                        {move || if pk_loading.get() {
+                                            "\u{2026}".to_string()
+                                        } else if pubkey_hex.get().is_empty() {
+                                            t(&lang.get(), "settings_show_pubkey")
+                                        } else {
+                                            t(&lang.get(), "settings_hide_pubkey")
+                                        }}
+                                    </button>
+                                    {move || {
+                                        let pk = pubkey_hex.get();
+                                        if pk.is_empty() { view! { <span></span> }.into_any() }
+                                        else {
+                                            let pk_for_copy = pk.clone();
+                                            view! {
+                                                <div>
+                                                    <div style="max-height:120px;overflow-y:auto;background:#0f1117;border-radius:6px;padding:8px;margin-top:8px">
+                                                        <p class="mono" style="font-size:10px;word-break:break-all;line-height:1.6;color:#9ca3af;margin:0">{pk}</p>
+                                                    </div>
+                                                    <button style="font-size:12px;padding:4px 10px;margin-top:6px"
+                                                        on:click=move |_: web_sys::MouseEvent| {
+                                                            let pk_val = pk_for_copy.clone();
+                                                            spawn_local(async move {
+                                                                copy_to_clipboard(pk_val).await;
+                                                            });
+                                                        }>
+                                                        {format!("\u{1f4cb} {}", t(&lang.get(), "settings_copy_pubkey"))}
+                                                    </button>
+                                                </div>
+                                            }.into_any()
+                                        }
+                                    }}
                                 </div>
                             }.into_any()
                         } else {
@@ -9227,48 +9266,9 @@ fn SettingsPanel(
                 }.into_any()
             }
 
-            // Public Key (moved inside Advanced via CSS order)
-            <div class="settings-section" style="order:8">
-                <p class="label" style="text-transform:uppercase;letter-spacing:1px">{move || t(&lang.get(), "settings_public_key")}</p>
-                <p class="muted" style="font-size:11px;margin-bottom:6px">
-                    {move || format!("({})", t(&lang.get(), "settings_public_key_sub"))}
-                </p>
-                <button on:click=on_show_pubkey disabled=move || pk_loading.get()>
-                    {move || if pk_loading.get() {
-                        "\u{2026}".to_string()
-                    } else if pubkey_hex.get().is_empty() {
-                        t(&lang.get(), "settings_show_pubkey")
-                    } else {
-                        t(&lang.get(), "settings_hide_pubkey")
-                    }}
-                </button>
-                {move || {
-                    let pk = pubkey_hex.get();
-                    if pk.is_empty() { view! { <span></span> }.into_any() }
-                    else {
-                        let pk_for_copy = pk.clone();
-                        view! {
-                            <div>
-                                <div style="max-height:120px;overflow-y:auto;background:#0f1117;border-radius:6px;padding:8px;margin-top:8px">
-                                    <p class="mono" style="font-size:10px;word-break:break-all;line-height:1.6;color:#9ca3af;margin:0">{pk}</p>
-                                </div>
-                                <button style="font-size:12px;padding:4px 10px;margin-top:6px"
-                                    on:click=move |_: web_sys::MouseEvent| {
-                                        let pk_val = pk_for_copy.clone();
-                                        spawn_local(async move {
-                                            copy_to_clipboard(pk_val).await;
-                                        });
-                                    }>
-                                    {format!("\u{1f4cb} {}", t(&lang.get(), "settings_copy_pubkey"))}
-                                </button>
-                            </div>
-                        }.into_any()
-                    }
-                }}
-            </div>
-
             // Notices (collapsible)
-            <div class="settings-section" style="order:2">
+            <div class="settings-section" style="order:2"
+                 class:open=move || sec_notices_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_notices_open.set(!sec_notices_open.get_untracked())>
                     <div style="display:flex;align-items:center;gap:10px">
@@ -9367,7 +9367,8 @@ fn SettingsPanel(
             </div>
 
             // Rewards (collapsible)
-            <div class="settings-section" style="order:3">
+            <div class="settings-section" style="order:3"
+                 class:open=move || sec_rewards_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_rewards_open.set(!sec_rewards_open.get_untracked())>
                     <div style="display:flex;align-items:center;gap:10px">
@@ -9384,7 +9385,8 @@ fn SettingsPanel(
             </div>
 
             // Security (collapsible)
-            <div class="settings-section" style="order:5">
+            <div class="settings-section" style="order:5"
+                 class:open=move || sec_security_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_security_open.set(!sec_security_open.get_untracked())>
                     <div style="display:flex;align-items:center;gap:10px">
@@ -9520,7 +9522,8 @@ fn SettingsPanel(
             // We handle it as its own order:4 section right after Security
 
             // ── Privacy collapsible header ──
-            <div class="settings-section" style="order:4;padding-bottom:0">
+            <div class="settings-section" style="order:4;padding-bottom:0"
+                 class:open=move || sec_privacy_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
                     <div style="display:flex;align-items:center;gap:10px">
@@ -9652,10 +9655,11 @@ fn SettingsPanel(
             </div>
 
             // ── Wallet Management (collapsed by default) ──
-            <div class="settings-section" style="order:7">
-                {
-                    let wm_expanded = RwSignal::new(false);
-                    view! {
+            {
+                let wm_expanded = RwSignal::new(false);
+                view! {
+            <div class="settings-section" style="order:7"
+                 class:open=move || wm_expanded.get()>
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| wm_expanded.set(!wm_expanded.get_untracked())>
                             <div style="display:flex;align-items:center;gap:10px">
@@ -9787,9 +9791,9 @@ fn SettingsPanel(
             }}
 
             </div> // close wm_expanded div
-                    }
-                }
-            </div> // close Wallet Management section
+            </div> // close settings-section
+                }.into_any()
+            }
 
             // My Emails for KX Claims — inside Security (collapsed with it)
             <div class="settings-section" style="order:6;padding-top:0;margin-top:-8px"
