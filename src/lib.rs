@@ -9419,7 +9419,8 @@ fn SettingsPanel(
                 </div>
             </div>
 
-            // Security (collapsible)
+            // ─── SETTINGS SECTION: SECURITY (order:5) ──────────────────────
+            // TOP-LEVEL — contains MY EMAILS FOR KX CLAIMS
             <div class="settings-section" style="order:5"
                  class:open=move || sec_security_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
@@ -9547,278 +9548,6 @@ fn SettingsPanel(
                         }>{move || format!("{}", t(&lang.get(), "settings_change_pin"))}</button>
                     }.into_any()
                 }}
-
-            // ── Privacy (collapsible, top-level) ──
-            <div class="settings-section" style="order:4"
-                 class:open=move || sec_privacy_open.get()>
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
-                    on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
-                    <div style="display:flex;align-items:center;gap:10px">
-                        <span style="width:28px;height:28px;border-radius:6px;background:#7B68EE;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{25cf}"}</span>
-                        <span style="font-size:14px;color:#e5e7eb">"Privacy"</span>
-                    </div>
-                    <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_privacy_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
-                </div>
-                <div style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
-                // Show badges toggle (with inline badge pills)
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                    <span style="font-size:13px;color:#e5e7eb;white-space:nowrap">"Show badges when sending?"</span>
-                    {move || {
-                        let badges = settings_badge_list.get();
-                        view! {
-                            <div style="display:flex;flex-wrap:wrap;gap:4px;flex:1;min-width:0">
-                                {badges.into_iter().map(|(bg, fg, label)| {
-                                    view! {
-                                        <span style={format!("display:inline-block;padding:2px 8px;border-radius:4px;background:{bg};color:{fg};font-size:10px;font-weight:700")}>{label}</span>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        }
-                    }}
-                    <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
-                        <input type="checkbox" style="opacity:0;width:0;height:0"
-                            prop:checked=move || settings_badges_on.get()
-                            on:change=move |ev| {
-                                use wasm_bindgen::JsCast;
-                                let checked = ev.target()
-                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                    .map(|i| i.checked()).unwrap_or(true);
-                                settings_badges_on.set(checked);
-                                spawn_local(async move {
-                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "show": checked })).unwrap_or(no_args());
-                                    let _ = call::<()>("set_show_badges", args).await;
-                                });
-                            } />
-                        <span style=move || format!(
-                            "position:absolute;inset:0;border-radius:12px;transition:0.2s;{}",
-                            if settings_badges_on.get() { "background:#d4a84b" } else { "background:#444" }
-                        )></span>
-                        <span style=move || format!(
-                            "position:absolute;top:2px;width:20px;height:20px;border-radius:50%;background:white;transition:0.2s;{}",
-                            if settings_badges_on.get() { "left:22px" } else { "left:2px" }
-                        )></span>
-                    </label>
-                </div>
-                <p class="muted" style="font-size:11px;margin-bottom:12px">
-                    "When off, badges are hidden from recipients when you send KX."
-                </p>
-
-                <hr style="border:none;border-top:1px solid #2d3748;margin:8px 0" />
-
-                // Show identity toggle
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:4px">
-                    <span style="font-size:13px;color:#e5e7eb">"Show my name to recipients?"</span>
-                    <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
-                        <input type="checkbox" style="opacity:0;width:0;height:0"
-                            prop:checked=move || settings_identity_on.get()
-                            on:change=move |ev| {
-                                use wasm_bindgen::JsCast;
-                                let checked = ev.target()
-                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                    .map(|i| i.checked()).unwrap_or(true);
-                                settings_identity_on.set(checked);
-                                spawn_local(async move {
-                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "show": checked })).unwrap_or(no_args());
-                                    let _ = call::<()>("set_show_identity", args).await;
-                                });
-                            } />
-                        <span style=move || format!(
-                            "position:absolute;inset:0;border-radius:12px;transition:0.2s;{}",
-                            if settings_identity_on.get() { "background:#d4a84b" } else { "background:#444" }
-                        )></span>
-                        <span style=move || format!(
-                            "position:absolute;top:2px;width:20px;height:20px;border-radius:50%;background:white;transition:0.2s;{}",
-                            if settings_identity_on.get() { "left:22px" } else { "left:2px" }
-                        )></span>
-                    </label>
-                </div>
-                <p class="muted" style="font-size:11px;margin-bottom:12px">
-                    "When off, recipients see your wallet address instead of your name."
-                </p>
-
-                <hr style="border:none;border-top:1px solid #2d3748;margin:8px 0" />
-
-                // KX Request permissions
-                <p class="muted" style="font-size:12px;margin-bottom:6px">"Who can request KX from me?"</p>
-                {
-                    let rp = RwSignal::new("anyone".to_string());
-                    Effect::new(move |_| {
-                        spawn_local(async move {
-                            let p = call::<String>("get_request_permission", no_args()).await.unwrap_or_else(|_| "anyone".to_string());
-                            rp.set(p);
-                        });
-                    });
-                    let set_perm = move |val: &str| {
-                        let v = val.to_string();
-                        rp.set(v.clone());
-                        spawn_local(async move {
-                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "permission": v })).unwrap_or(no_args());
-                            let _ = call::<()>("set_request_permission", args).await;
-                        });
-                    };
-                    view! {
-                        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:12px;width:100%">
-                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
-                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "anyone"
-                                    on:change=move |_| set_perm("anyone") style="accent-color:#d4a84b" />
-                                "Anyone"
-                            </label>
-                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
-                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "address_book"
-                                    on:change=move |_| set_perm("address_book") style="accent-color:#d4a84b" />
-                                "My Address Book only"
-                            </label>
-                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
-                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "nobody"
-                                    on:change=move |_| set_perm("nobody") style="accent-color:#d4a84b" />
-                                "Nobody"
-                            </label>
-                        </div>
-                    }
-                }
-            </div> // close privacy content
-            </div> // close privacy settings-section
-
-            // ── Wallet Management (collapsed by default) ──
-            {
-                let wm_expanded = RwSignal::new(false);
-                view! {
-            <div class="settings-section" style="order:6"
-                 class:open=move || wm_expanded.get()>
-                        <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
-                            on:click=move |_| wm_expanded.set(!wm_expanded.get_untracked())>
-                            <div style="display:flex;align-items:center;gap:10px">
-                                <span style="width:28px;height:28px;border-radius:6px;background:#FF8C00;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{2193}"}</span>
-                                <span style="font-size:14px;color:#e5e7eb">"Backup & Recovery"</span>
-                            </div>
-                            <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if wm_expanded.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
-                        </div>
-                        <div style:display=move || if wm_expanded.get() { "" } else { "none" }>
-            <div style="margin-top:12px">
-                <p class="label">"Backup Your Wallet"</p>
-                <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    "These 24 words are the ONLY way to recover your wallet. Write them down and store them safely offline."
-                </p>
-                <button style="background:linear-gradient(135deg,#b8860b,#daa520);color:#000;font-weight:700"
-                    on:click=move |_| {
-                        seed_pin_phase.set(0);
-                        seed_pin_input.set(String::new());
-                        seed_pin_msg.set(String::new());
-                        seed_words.set(String::new());
-                        seed_revealed.set(false);
-                        seed_loading.set(false);
-                        show_seed_modal.set(true);
-                    }
-                >"View Seed Phrase"</button>
-                <p class="muted" style="font-size:11px;margin-top:6px">
-                    <a href="javascript:void(0)" style="color:#888;text-decoration:underline" on:click=move |_| {
-                        export_confirmed.set(false);
-                        export_key.set(String::new());
-                        show_export.set(true);
-                    }>"Export raw key (advanced)"</a>
-                </p>
-
-                // ── Compromised? expandable section ──
-                <div style="margin-top:12px">
-                    <a href="javascript:void(0)" style="color:#f87171;font-size:12px;text-decoration:none"
-                        on:click=move |_| compromised_expanded.set(!compromised_expanded.get_untracked())
-                    >{move || if compromised_expanded.get() { "Compromised? \u{25b2}" } else { "Compromised? \u{25bc}" }}</a>
-                    {move || if compromised_expanded.get() {
-                        view! {
-                            <div style="margin-top:8px;padding:12px;background:#1a1020;border:1px solid #442;border-radius:8px">
-                                <p style="font-size:13px;font-weight:700;color:#daa520;margin-bottom:6px">"Create New Wallet"</p>
-                                <p class="muted" style="font-size:12px;margin-bottom:10px">
-                                    "If your seed phrase was compromised or lost, you can create a new wallet with a new address. \
-                                     You will need to send your KX balance to the new address manually. \
-                                     This action creates a new wallet \u{2014} it does not change your current one."
-                                </p>
-                                <button style="border:2px solid #daa520;background:transparent;color:#daa520;font-weight:700"
-                                    on:click=move |_| {
-                                        new_wallet_confirm_input.set(String::new());
-                                        new_wallet_msg.set(String::new());
-                                        new_wallet_mnemonic.set(String::new());
-                                        new_wallet_address.set(String::new());
-                                        new_wallet_busy.set(false);
-                                        // Check balance before proceeding
-                                        spawn_local(async move {
-                                            if let Ok(acct) = call::<AccountInfo>("get_account_info", no_args()).await {
-                                                let bal: u128 = acct.balance_chronos.parse().unwrap_or(0);
-                                                if bal > 0 {
-                                                    balance_warning_kx.set(format_kx(&acct.balance_chronos));
-                                                    show_balance_warning.set(true);
-                                                    return;
-                                                }
-                                            }
-                                            show_new_wallet.set(true);
-                                        });
-                                    }
-                                >"Create New Wallet"</button>
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! { <span></span> }.into_any()
-                    }}
-                </div>
-            </div>
-
-            // ── Restore Wallet (Seed Phrase) ──
-            <div class="settings-section">
-                <p class="label">"Restore Wallet"</p>
-                <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    "Enter your 24-word seed phrase or legacy private key to restore your wallet on this device."
-                </p>
-                <button on:click=move |_| {
-                    import_key.set(String::new());
-                    import_msg.set(String::new());
-                    import_confirm.set(false);
-                    show_import.set(true);
-                }>"Restore from Seed Phrase"</button>
-            </div>
-
-            // Cold Storage Wallet Generator (desktop only)
-            {if desktop {
-                view! {
-                    <div class="settings-section">
-                        <p class="label">{move || t(&lang.get(), "settings_cold_storage")}</p>
-                        <p class="muted" style="font-size:12px;margin-bottom:8px">
-                            {move || t(&lang.get(), "settings_cold_sub")}
-                        </p>
-                        <button on:click=move |_| {
-                            cold_result.set(None);
-                            cold_saved.set(false);
-                            show_cold.set(true);
-                        }>{move || format!("{}", t(&lang.get(), "settings_gen_cold"))}</button>
-                        {move || {
-                            let wallets = cold_wallets.get();
-                            if wallets.is_empty() {
-                                view! { <span></span> }.into_any()
-                            } else {
-                                view! {
-                                    <div style="margin-top:8px">
-                                        <p class="muted" style="font-size:11px;margin-bottom:4px">
-                                            {format!("{} ({})", t(&lang.get(), "settings_cold_wallets"), wallets.len())}
-                                        </p>
-                                        {wallets.into_iter().map(|w| {
-                                            view! {
-                                                <p class="muted" style="font-size:11px;font-family:monospace;word-break:break-all;padding:2px 0">
-                                                    {w}
-                                                </p>
-                                            }
-                                        }).collect::<Vec<_>>()}
-                                    </div>
-                                }.into_any()
-                            }
-                        }}
-                    </div>
-                }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
-            }}
-
-            </div> // close wm_expanded div
-            </div> // close settings-section
-                }.into_any()
-            }
 
                 // ── My Emails for KX Claims (inside Security) ──
                 <hr style="border:none;border-top:1px solid #2d3748;margin:12px 0" />
@@ -10057,8 +9786,287 @@ fn SettingsPanel(
                         view! { <p class=cls>{msg}</p> }.into_any()
                     }
                 }}
+
                 </div> // close security content
             </div> // close security settings-section
+
+            // ─── SETTINGS SECTION: PRIVACY (order:4) ───────────────────────
+            // TOP-LEVEL — never nest inside another section
+            // Always visible regardless of badge load status
+            // ── Privacy (collapsible, top-level) ──
+            <div class="settings-section" style="order:4"
+                 class:open=move || sec_privacy_open.get()>
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
+                    on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="width:28px;height:28px;border-radius:6px;background:#7B68EE;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{25cf}"}</span>
+                        <span style="font-size:14px;color:#e5e7eb">"Privacy"</span>
+                    </div>
+                    <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_privacy_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
+                </div>
+                <div style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
+                // Show badges toggle (with inline badge pills)
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                    <span style="font-size:13px;color:#e5e7eb;white-space:nowrap">"Show badges when sending?"</span>
+                    {move || {
+                        let badges = settings_badge_list.get();
+                        view! {
+                            <div style="display:flex;flex-wrap:wrap;gap:4px;flex:1;min-width:0">
+                                {badges.into_iter().map(|(bg, fg, label)| {
+                                    view! {
+                                        <span style={format!("display:inline-block;padding:2px 8px;border-radius:4px;background:{bg};color:{fg};font-size:10px;font-weight:700")}>{label}</span>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        }
+                    }}
+                    <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
+                        <input type="checkbox" style="opacity:0;width:0;height:0"
+                            prop:checked=move || settings_badges_on.get()
+                            on:change=move |ev| {
+                                use wasm_bindgen::JsCast;
+                                let checked = ev.target()
+                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                    .map(|i| i.checked()).unwrap_or(true);
+                                settings_badges_on.set(checked);
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "show": checked })).unwrap_or(no_args());
+                                    let _ = call::<()>("set_show_badges", args).await;
+                                });
+                            } />
+                        <span style=move || format!(
+                            "position:absolute;inset:0;border-radius:12px;transition:0.2s;{}",
+                            if settings_badges_on.get() { "background:#d4a84b" } else { "background:#444" }
+                        )></span>
+                        <span style=move || format!(
+                            "position:absolute;top:2px;width:20px;height:20px;border-radius:50%;background:white;transition:0.2s;{}",
+                            if settings_badges_on.get() { "left:22px" } else { "left:2px" }
+                        )></span>
+                    </label>
+                </div>
+                <p class="muted" style="font-size:11px;margin-bottom:12px">
+                    "When off, badges are hidden from recipients when you send KX."
+                </p>
+
+                <hr style="border:none;border-top:1px solid #2d3748;margin:8px 0" />
+
+                // Show identity toggle
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:4px">
+                    <span style="font-size:13px;color:#e5e7eb">"Show my name to recipients?"</span>
+                    <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;cursor:pointer">
+                        <input type="checkbox" style="opacity:0;width:0;height:0"
+                            prop:checked=move || settings_identity_on.get()
+                            on:change=move |ev| {
+                                use wasm_bindgen::JsCast;
+                                let checked = ev.target()
+                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                    .map(|i| i.checked()).unwrap_or(true);
+                                settings_identity_on.set(checked);
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "show": checked })).unwrap_or(no_args());
+                                    let _ = call::<()>("set_show_identity", args).await;
+                                });
+                            } />
+                        <span style=move || format!(
+                            "position:absolute;inset:0;border-radius:12px;transition:0.2s;{}",
+                            if settings_identity_on.get() { "background:#d4a84b" } else { "background:#444" }
+                        )></span>
+                        <span style=move || format!(
+                            "position:absolute;top:2px;width:20px;height:20px;border-radius:50%;background:white;transition:0.2s;{}",
+                            if settings_identity_on.get() { "left:22px" } else { "left:2px" }
+                        )></span>
+                    </label>
+                </div>
+                <p class="muted" style="font-size:11px;margin-bottom:12px">
+                    "When off, recipients see your wallet address instead of your name."
+                </p>
+
+                <hr style="border:none;border-top:1px solid #2d3748;margin:8px 0" />
+
+                // KX Request permissions
+                <p class="muted" style="font-size:12px;margin-bottom:6px">"Who can request KX from me?"</p>
+                {
+                    let rp = RwSignal::new("anyone".to_string());
+                    Effect::new(move |_| {
+                        spawn_local(async move {
+                            let p = call::<String>("get_request_permission", no_args()).await.unwrap_or_else(|_| "anyone".to_string());
+                            rp.set(p);
+                        });
+                    });
+                    let set_perm = move |val: &str| {
+                        let v = val.to_string();
+                        rp.set(v.clone());
+                        spawn_local(async move {
+                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "permission": v })).unwrap_or(no_args());
+                            let _ = call::<()>("set_request_permission", args).await;
+                        });
+                    };
+                    view! {
+                        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:12px;width:100%">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
+                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "anyone"
+                                    on:change=move |_| set_perm("anyone") style="accent-color:#d4a84b" />
+                                "Anyone"
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
+                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "address_book"
+                                    on:change=move |_| set_perm("address_book") style="accent-color:#d4a84b" />
+                                "My Address Book only"
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e5e7eb;white-space:nowrap">
+                                <input type="radio" name="req_perm" prop:checked=move || rp.get() == "nobody"
+                                    on:change=move |_| set_perm("nobody") style="accent-color:#d4a84b" />
+                                "Nobody"
+                            </label>
+                        </div>
+                    }
+                }
+            </div> // close privacy content
+            </div> // close privacy settings-section
+
+            // ─── SETTINGS SECTION: BACKUP (order:6) ────────────────────────
+            // TOP-LEVEL — never nest inside another section
+            // ── Wallet Management (collapsed by default) ──
+            {
+                let wm_expanded = RwSignal::new(false);
+                view! {
+            <div class="settings-section" style="order:6"
+                 class:open=move || wm_expanded.get()>
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
+                            on:click=move |_| wm_expanded.set(!wm_expanded.get_untracked())>
+                            <div style="display:flex;align-items:center;gap:10px">
+                                <span style="width:28px;height:28px;border-radius:6px;background:#FF8C00;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{2193}"}</span>
+                                <span style="font-size:14px;color:#e5e7eb">"Backup & Recovery"</span>
+                            </div>
+                            <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if wm_expanded.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
+                        </div>
+                        <div style:display=move || if wm_expanded.get() { "" } else { "none" }>
+            <div style="margin-top:12px">
+                <p class="label">"Backup Your Wallet"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                    "These 24 words are the ONLY way to recover your wallet. Write them down and store them safely offline."
+                </p>
+                <button style="background:linear-gradient(135deg,#b8860b,#daa520);color:#000;font-weight:700"
+                    on:click=move |_| {
+                        seed_pin_phase.set(0);
+                        seed_pin_input.set(String::new());
+                        seed_pin_msg.set(String::new());
+                        seed_words.set(String::new());
+                        seed_revealed.set(false);
+                        seed_loading.set(false);
+                        show_seed_modal.set(true);
+                    }
+                >"View Seed Phrase"</button>
+                <p class="muted" style="font-size:11px;margin-top:6px">
+                    <a href="javascript:void(0)" style="color:#888;text-decoration:underline" on:click=move |_| {
+                        export_confirmed.set(false);
+                        export_key.set(String::new());
+                        show_export.set(true);
+                    }>"Export raw key (advanced)"</a>
+                </p>
+
+                // ── Compromised? expandable section ──
+                <div style="margin-top:12px">
+                    <a href="javascript:void(0)" style="color:#f87171;font-size:12px;text-decoration:none"
+                        on:click=move |_| compromised_expanded.set(!compromised_expanded.get_untracked())
+                    >{move || if compromised_expanded.get() { "Compromised? \u{25b2}" } else { "Compromised? \u{25bc}" }}</a>
+                    {move || if compromised_expanded.get() {
+                        view! {
+                            <div style="margin-top:8px;padding:12px;background:#1a1020;border:1px solid #442;border-radius:8px">
+                                <p style="font-size:13px;font-weight:700;color:#daa520;margin-bottom:6px">"Create New Wallet"</p>
+                                <p class="muted" style="font-size:12px;margin-bottom:10px">
+                                    "If your seed phrase was compromised or lost, you can create a new wallet with a new address. \
+                                     You will need to send your KX balance to the new address manually. \
+                                     This action creates a new wallet \u{2014} it does not change your current one."
+                                </p>
+                                <button style="border:2px solid #daa520;background:transparent;color:#daa520;font-weight:700"
+                                    on:click=move |_| {
+                                        new_wallet_confirm_input.set(String::new());
+                                        new_wallet_msg.set(String::new());
+                                        new_wallet_mnemonic.set(String::new());
+                                        new_wallet_address.set(String::new());
+                                        new_wallet_busy.set(false);
+                                        // Check balance before proceeding
+                                        spawn_local(async move {
+                                            if let Ok(acct) = call::<AccountInfo>("get_account_info", no_args()).await {
+                                                let bal: u128 = acct.balance_chronos.parse().unwrap_or(0);
+                                                if bal > 0 {
+                                                    balance_warning_kx.set(format_kx(&acct.balance_chronos));
+                                                    show_balance_warning.set(true);
+                                                    return;
+                                                }
+                                            }
+                                            show_new_wallet.set(true);
+                                        });
+                                    }
+                                >"Create New Wallet"</button>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }}
+                </div>
+            </div>
+
+            // ── Restore Wallet (Seed Phrase) ──
+            <div class="settings-section">
+                <p class="label">"Restore Wallet"</p>
+                <p class="muted" style="font-size:12px;margin-bottom:8px">
+                    "Enter your 24-word seed phrase or legacy private key to restore your wallet on this device."
+                </p>
+                <button on:click=move |_| {
+                    import_key.set(String::new());
+                    import_msg.set(String::new());
+                    import_confirm.set(false);
+                    show_import.set(true);
+                }>"Restore from Seed Phrase"</button>
+            </div>
+
+            // Cold Storage Wallet Generator (desktop only)
+            {if desktop {
+                view! {
+                    <div class="settings-section">
+                        <p class="label">{move || t(&lang.get(), "settings_cold_storage")}</p>
+                        <p class="muted" style="font-size:12px;margin-bottom:8px">
+                            {move || t(&lang.get(), "settings_cold_sub")}
+                        </p>
+                        <button on:click=move |_| {
+                            cold_result.set(None);
+                            cold_saved.set(false);
+                            show_cold.set(true);
+                        }>{move || format!("{}", t(&lang.get(), "settings_gen_cold"))}</button>
+                        {move || {
+                            let wallets = cold_wallets.get();
+                            if wallets.is_empty() {
+                                view! { <span></span> }.into_any()
+                            } else {
+                                view! {
+                                    <div style="margin-top:8px">
+                                        <p class="muted" style="font-size:11px;margin-bottom:4px">
+                                            {format!("{} ({})", t(&lang.get(), "settings_cold_wallets"), wallets.len())}
+                                        </p>
+                                        {wallets.into_iter().map(|w| {
+                                            view! {
+                                                <p class="muted" style="font-size:11px;font-family:monospace;word-break:break-all;padding:2px 0">
+                                                    {w}
+                                                </p>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                }.into_any()
+                            }
+                        }}
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
+
+            </div> // close wm_expanded div
+            </div> // close settings-section
+                }.into_any()
+            }
+
 
             // About (no section label — just centered buttons)
             <div style="order:99;text-align:center;padding:12px 0 4px">
