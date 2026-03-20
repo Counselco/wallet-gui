@@ -1136,7 +1136,7 @@ fn App() -> impl IntoView {
     // Desktop: 0=Receive 1=Send 2=Activity 3=Request 4=Settings
     let active_tab  = RwSignal::new(0u8);
     let activity_sub = RwSignal::new(0u8); // 0=History, 1=Promises, 2=Open
-    let app_version = RwSignal::new("2.5.8".to_string());
+    let app_version = RwSignal::new("2.5.9".to_string());
     let desktop     = is_desktop();
 
     // Language signal
@@ -2084,6 +2084,8 @@ fn App() -> impl IntoView {
                                         email_locks=email_locks
                                         on_email_check=check_email
                                         active_tab=active_tab
+                                        bug_modal_open=bug_modal_open
+                                        bug_body=bug_body
                                         on_mark_seen=move |id: String| {
                                             let mut ids = seen_ids.get_untracked();
                                             if !ids.contains(&id) {
@@ -2572,7 +2574,7 @@ fn PinScreen(
                 }}
 
                 <p class="version-footer" style="margin-top:auto;padding-top:12px;opacity:0.4;font-size:11px">
-                    "ChronX Wallet v2.5.8"
+                    "ChronX Wallet v2.5.9"
                 </p>
             </div>
         </div>
@@ -5252,7 +5254,7 @@ fn SendPanel(
                             prop:value=move || memo.get()
                             on:input=move |ev| memo.set(event_target_value(&ev))
                             disabled=move || sending.get()></textarea>
-                        <p style="font-size:0.75rem;color:#888;font-style:italic;margin:4px 0 0">"Note: memos are stored on the blockchain and are publicly visible."</p>
+                        <p style="font-size:0.75rem;color:#d4a84b;font-style:italic;margin:4px 0 0">"Memos are publicly visible on the blockchain. Do not include sensitive personal information."</p>
                     </div>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
@@ -6056,7 +6058,7 @@ fn CascadeSendPanel(
                             prop:value=move || memo.get()
                             on:input=move |ev| memo.set(event_target_value(&ev))
                             disabled=move || sending.get() />
-                        <p style="font-size:0.75rem;color:#888;font-style:italic;margin:4px 0 0">"Note: memos are stored on the blockchain and are publicly visible."</p>
+                        <p style="font-size:0.75rem;color:#d4a84b;font-style:italic;margin:4px 0 0">"Memos are publicly visible on the blockchain. Do not include sensitive personal information."</p>
                     </div>
                     // Stage builder
                     <div style="margin-bottom:8px">
@@ -8771,9 +8773,15 @@ fn RewardsPanel(active_tab: RwSignal<u8>) -> impl IntoView {
                             } else {
                                 view! { <span></span> }.into_any()
                             }}
-                            <p style="font-size:13px;color:var(--muted);">
+                            <p style="font-size:13px;color:var(--muted);margin-bottom:12px">
                                 "Watch your inbox for free KX opportunities!"
                             </p>
+                            <button style="color:#ef4444;border:1px solid #ef4444;background:transparent;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer"
+                                on:click=move |_| {
+                                    // Reset to unregistered state
+                                    phase.set(1);
+                                    reg_msg.set("You have been unsubscribed from Rewards.".to_string());
+                                }>"Unsubscribe from Rewards"</button>
                         </div>
                     }.into_any()
                 }
@@ -8843,6 +8851,8 @@ fn SettingsPanel(
     email_locks: RwSignal<Vec<TimeLockInfo>>,
     on_email_check: impl Fn() + Clone + 'static,
     active_tab: RwSignal<u8>,
+    bug_modal_open: RwSignal<bool>,
+    bug_body: RwSignal<String>,
 ) -> impl IntoView {
     let node_url   = RwSignal::new(String::new());
     let save_msg   = RwSignal::new(String::new());
@@ -9540,14 +9550,9 @@ fn SettingsPanel(
 
                 // ── My Emails section (inside Security collapsible) ──
                 <hr style="border:none;border-top:1px solid #2d3748;margin:12px 0" />
-                </div> // close security collapsible
-            </div>
 
-            // My Emails for KX Claims — visually part of Security, but ordered separately for CSS
-            // We handle it as its own order:4 section right after Security
-
-            // ── Privacy collapsible header ──
-            <div class="settings-section" style="order:4;padding-bottom:0"
+            // ── Privacy (collapsible) ──
+            <div class="settings-section" style="order:4"
                  class:open=move || sec_privacy_open.get()>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                     on:click=move |_| sec_privacy_open.set(!sec_privacy_open.get_untracked())>
@@ -9557,10 +9562,7 @@ fn SettingsPanel(
                     </div>
                     <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if sec_privacy_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
                 </div>
-            </div>
-            // ── Privacy content (inside collapsible) ──
-            <div class="settings-section" style="order:4;padding-top:0;margin-top:-8px"
-                 style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
+                <div style:display=move || if sec_privacy_open.get() { "" } else { "none" }>
                 // Show badges toggle (with inline badge pills)
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                     <span style="font-size:13px;color:#e5e7eb;white-space:nowrap">"Show badges when sending?"</span>
@@ -9677,7 +9679,8 @@ fn SettingsPanel(
                         </div>
                     }
                 }
-            </div>
+            </div> // close privacy content
+            </div> // close privacy settings-section
 
             // ── Wallet Management (collapsed by default) ──
             {
@@ -9820,12 +9823,10 @@ fn SettingsPanel(
                 }.into_any()
             }
 
-            // My Emails for KX Claims — inside Security (collapsed with it)
-            <div class="settings-section" style="order:6;padding-top:0;margin-top:-8px"
-                 style:display=move || if sec_security_open.get() { "" } else { "none" }>
+                // My Emails for KX Claims — inside Security card
                 <p class="label">{move || t(&lang.get(), "settings_claim_emails")}</p>
                 <p class="muted" style="font-size:12px;margin-bottom:8px">
-                    {move || t(&lang.get(), "settings_claim_emails_sub_v2")}
+                    "Enter your email address to auto-claim any KX sent to it directly to your wallet balance."
                 </p>
                 // List of existing emails with verified/unverified badges
                 <div class="claim-emails-list">
@@ -10058,7 +10059,8 @@ fn SettingsPanel(
                         view! { <p class=cls>{msg}</p> }.into_any()
                     }
                 }}
-            </div>
+                </div> // close security content
+            </div> // close security settings-section
 
             // About (no section label — just centered buttons)
             <div style="order:99;text-align:center;padding:12px 0 4px">
@@ -10066,10 +10068,15 @@ fn SettingsPanel(
                     <button on:click=move |_| show_about.set(true) style="font-size:13px">{move || format!("\u{2139}\u{fe0f} {}", t(&lang.get(), "settings_about_chronx"))}</button>
                     <button on:click=move |_| show_updates.set(true) style="font-size:13px">{move || format!("\u{1f504} {}", t(&lang.get(), "settings_check_updates"))}</button>
                 </div>
+                <a href="javascript:void(0)" style="display:block;text-align:center;color:#d4a84b;text-decoration:underline;font-size:13px;cursor:pointer;margin-top:8px"
+                    on:click=move |_| {
+                        bug_body.set(String::new());
+                        bug_modal_open.set(true);
+                    }>"Report a Bug"</a>
                 {move || {
                     let version = app_version.get();
                     view! {
-                        <p style="font-size:11px;color:#555;margin:0">"ChronX Wallet v" {version}</p>
+                        <p style="font-size:11px;color:#555;margin:0;margin-top:4px">"ChronX Wallet v" {version}</p>
                     }
                 }}
             </div>
