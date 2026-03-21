@@ -4276,19 +4276,23 @@ pub async fn withdraw_loan_offer(app: AppHandle, loan_id_hex: String, reason: Op
 
 /// Fetch loans for a wallet address (as lender or borrower).
 #[tauri::command]
-pub async fn get_wallet_loans(app: AppHandle, wallet_address: String) -> Result<serde_json::Value, String> {
+pub async fn get_wallet_loans(app: AppHandle) -> Result<serde_json::Value, String> {
     let url = rpc_url(&app);
-    let result = rpc_call(&url, "chronx_getLoansByWallet", serde_json::json!([wallet_address]))
+    let kp = load_keypair(&app)?;
+    let wallet = kp.account_id.to_b58();
+    let result = rpc_call(&url, "chronx_getLoansByWallet", serde_json::json!([wallet]))
         .await
         .map_err(|e| format!("Failed to fetch loans: {e}"))?;
     Ok(result)
 }
 
-/// Fetch pending loan offers for a borrower wallet.
+/// Fetch pending loan offers where this wallet is borrower.
 #[tauri::command]
-pub async fn get_loan_offers(app: AppHandle, wallet_address: String) -> Result<serde_json::Value, String> {
+pub async fn get_loan_offers(app: AppHandle) -> Result<serde_json::Value, String> {
     let url = rpc_url(&app);
-    let result = rpc_call(&url, "chronx_getLoanOffers", serde_json::json!([wallet_address]))
+    let kp = load_keypair(&app)?;
+    let wallet = kp.account_id.to_b58();
+    let result = rpc_call(&url, "chronx_getLoanOffers", serde_json::json!([wallet]))
         .await
         .map_err(|e| format!("Failed to fetch loan offers: {e}"))?;
     Ok(result)

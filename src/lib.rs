@@ -1176,6 +1176,7 @@ fn App() -> impl IntoView {
     let wiz_success = RwSignal::new(false);
     // Loan list data (fetched from RPC)
     let loans_data = RwSignal::new(serde_json::Value::Null);
+    let loan_offers = RwSignal::new(serde_json::Value::Null);
 
     // Pay deep link pre-fill signals
     let pay_link_to = RwSignal::new(String::new());
@@ -2120,15 +2121,13 @@ fn App() -> impl IntoView {
                                 }.into_any(),
                                 // Tab 4: Loans (desktop only)
                                 4 if desktop => {
-                                    // Fetch loans on tab load
+                                    // Fetch loans + offers on tab load
                                     spawn_local(async move {
-                                        if let Ok(info_val) = call::<serde_json::Value>("get_account_info", no_args()).await {
-                                            if let Some(aid) = info_val.get("account_id").and_then(|v| v.as_str()) {
-                                                let loan_args = serde_wasm_bindgen::to_value(&serde_json::json!({"walletAddress": aid})).unwrap_or(no_args());
-                                                if let Ok(loans_val) = call::<serde_json::Value>("get_wallet_loans", loan_args).await {
-                                                    loans_data.set(loans_val);
-                                                }
-                                            }
+                                        if let Ok(loans_val) = call::<serde_json::Value>("get_wallet_loans", no_args()).await {
+                                            loans_data.set(loans_val);
+                                        }
+                                        if let Ok(offers_val) = call::<serde_json::Value>("get_loan_offers", no_args()).await {
+                                            loan_offers.set(offers_val);
                                         }
                                     });
                                     view! {
@@ -2240,6 +2239,72 @@ fn App() -> impl IntoView {
                                             // ════════════════════════════════════
                                             view! {
                                                 <div>
+                                                    // ── Incoming Loan Offers ──
+                                                    {move || {
+                                                        let data = loan_offers.get();
+                                                        let offers = data.as_array();
+                                                        if let Some(arr) = offers {
+                                                            if !arr.is_empty() {
+                                                                let cards: Vec<_> = arr.iter().map(|offer| {
+                                                                    let lender = offer.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+                                                                    let lender_short = if lender.len() > 16 { format!("{}...{}", &lender[..6], &lender[lender.len()-4..]) } else { lender.clone() };
+                                                                    let principal = offer.get("principal_kx").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                                    let loan_id = offer.get("loan_id_hex").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                    let lid = loan_id.clone();
+                                                                    let lid2 = loan_id.clone();
+                                                                    view! {
+                                                                        <div class="offer-card">
+                                                                            <div class="offer-card-left">
+                                                                                <div style="font-size:14px;font-weight:600;color:#e5e7eb">
+                                                                                    {"\u{1f4cb} Loan Offer"}
+                                                                                </div>
+                                                                                <div style="font-size:12px;color:rgba(232,232,216,0.5);margin-top:2px">
+                                                                                    {format!("From: {}", lender_short)}
+                                                                                </div>
+                                                                                <div style="font-size:13px;color:#d4a84b;margin-top:4px;font-weight:600">
+                                                                                    {format!("{} KX", principal)}
+                                                                                </div>
+                                                                            </div>
+                                                                            <div class="offer-card-actions">
+                                                                                <button class="offer-accept-btn"
+                                                                                    on:click=move |_| {
+                                                                                        let id = lid.clone();
+                                                                                        spawn_local(async move {
+                                                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
+                                                                                            match call::<String>("accept_loan_offer", args).await {
+                                                                                                Ok(_) => {
+                                                                                                    if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); }
+                                                                                                }
+                                                                                                Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Accept failed: {}", e)).ok(); }
+                                                                                            }
+                                                                                        });
+                                                                                    }>
+                                                                                    {"\u{2713} Accept"}
+                                                                                </button>
+                                                                                <button class="offer-decline-btn"
+                                                                                    on:click=move |_| {
+                                                                                        let id = lid2.clone();
+                                                                                        spawn_local(async move {
+                                                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
+                                                                                            match call::<String>("decline_loan_offer", args).await {
+                                                                                                Ok(_) => {
+                                                                                                    if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); }
+                                                                                                }
+                                                                                                Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Decline failed: {}", e)).ok(); }
+                                                                                            }
+                                                                                        });
+                                                                                    }>
+                                                                                    {"\u{2717} Decline"}
+                                                                                </button>
+                                                                            </div>
+                                                                        </div>
+                                                                    }
+                                                                }).collect();
+                                                                return view! { <div style="margin-bottom:16px">{cards}</div> }.into_any();
+                                                            }
+                                                        }
+                                                        view! { <span></span> }.into_any()
+                                                    }}
                                                     // ── Next Payment Card ──
                                                     <div class="next-payment-card">
                                                         <div class="npc-left">
@@ -2756,13 +2821,8 @@ fn App() -> impl IntoView {
                                                                 wiz_submitting.set(false);
                                                                 wiz_success.set(true);
                                                                 // Refresh loans list
-                                                                if let Ok(info_val) = call::<serde_json::Value>("get_account_info", no_args()).await {
-                                                                    if let Some(aid) = info_val.get("account_id").and_then(|v| v.as_str()) {
-                                                                        let loan_args = serde_wasm_bindgen::to_value(&serde_json::json!({"walletAddress": aid})).unwrap_or(no_args());
-                                                                        if let Ok(loans_val) = call::<serde_json::Value>("get_wallet_loans", loan_args).await {
-                                                                            loans_data.set(loans_val);
-                                                                        }
-                                                                    }
+                                                                if let Ok(loans_val) = call::<serde_json::Value>("get_wallet_loans", no_args()).await {
+                                                                    loans_data.set(loans_val);
                                                                 }
                                                             }
                                                             Err(e) => {

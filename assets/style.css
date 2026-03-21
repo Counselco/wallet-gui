@@ -2831,3 +2831,35 @@ select option:hover {
     background-color: #d4a84b !important;
     color: #0c0c10 !important;
 }
+
+/* -- LOAN OFFER CARDS -- */
+.offer-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(135deg, rgba(212,168,75,0.08), rgba(212,168,75,0.02));
+    border: 1px solid rgba(212,168,75,0.25);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 8px;
+}
+.offer-card-left { flex: 1; }
+.offer-card-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.offer-accept-btn {
+    background: rgba(92,224,138,0.15);
+    border: 1px solid rgba(92,224,138,0.4);
+    color: #5ce08a;
+    font-size: 13px; font-weight: 600;
+    padding: 8px 16px; border-radius: 8px;
+    cursor: pointer; transition: all .2s;
+}
+.offer-accept-btn:hover { background: rgba(92,224,138,0.25); }
+.offer-decline-btn {
+    background: rgba(224,92,92,0.1);
+    border: 1px solid rgba(224,92,92,0.3);
+    color: #e05c5c;
+    font-size: 13px; font-weight: 600;
+    padding: 8px 16px; border-radius: 8px;
+    cursor: pointer; transition: all .2s;
+}
+.offer-decline-btn:hover { background: rgba(224,92,92,0.2); }
