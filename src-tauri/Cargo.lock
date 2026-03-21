@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "chronx-core"
-version = "0.1.0"
+version = "9.0.1"
 dependencies = [
  "bincode",
  "bs58",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "chronx-crypto"
-version = "0.1.0"
+version = "9.0.1"
 dependencies = [
  "blake3",
  "chronx-core",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "chronx-wallet-gui"
-version = "2.5.13"
+version = "2.5.14"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

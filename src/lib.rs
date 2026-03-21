@@ -1146,6 +1146,8 @@ fn App() -> impl IntoView {
     let send_cascade_mode = RwSignal::new(0u8);
     // Send tab mode: 0=Send KX, 1=Request KX
     let send_tab_mode = RwSignal::new(0u8);
+    // Loans tab view: 0=Lender, 1=Borrower
+    let loans_view = RwSignal::new(0u8);
 
     // Pay deep link pre-fill signals
     let pay_link_to = RwSignal::new(String::new());
@@ -1853,10 +1855,14 @@ fn App() -> impl IntoView {
                                         on:click=move |_| active_tab.set(3)>
                                         {move || t(&lang.get(), "tab_request")}
                                     </button>
-                                </nav>
-                                <div class="sidebar-bottom">
                                     <button class=move || if active_tab.get()==4 {"sidebar-tab active"} else {"sidebar-tab"}
                                         on:click=move |_| active_tab.set(4)>
+                                        "Loans"
+                                    </button>
+                                </nav>
+                                <div class="sidebar-bottom">
+                                    <button class=move || if active_tab.get()==5 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(5)>
                                         {move || t(&lang.get(), "tab_settings")}
                                         {move || {
                                             let unread = notices.get().iter()
@@ -1942,7 +1948,7 @@ fn App() -> impl IntoView {
                     <div class=if desktop { "main-body" } else { "" }>
                         {move || {
                             let tab = active_tab.get();
-                            let settings_tab: u8 = if desktop { 4 } else { 3 };
+                            let settings_tab: u8 = if desktop { 5 } else { 3 };
                             match tab {
                                 // Tab 0: Receive
                                 0 => view! {
@@ -2017,6 +2023,25 @@ fn App() -> impl IntoView {
                                             } else {
                                                 view! { <span></span> }.into_any()
                                             }}
+                                            // Desktop only: Future Send with Beneficiary banner
+                                            {if desktop {
+                                                view! {
+                                                    <div class="future-send-banner">
+                                                        <div style="display:flex;align-items:center;gap:12px;flex:1">
+                                                            <span style="font-size:22px">{"\u{1f3db}\u{FE0E}"}</span>
+                                                            <div>
+                                                                <strong style="color:#e5e7eb;font-size:13px">"Future Send with Beneficiary"</strong>
+                                                                <span style="color:rgba(232,232,216,0.5);font-size:12px">
+                                                                    " \u{2014} Estate planning, gifts up to 100 years. Includes beneficiary context for Verifas delivery."
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <button class="send-mode-btn" style="font-size:13px;padding:8px 16px;flex-shrink:0">"Open \u{2192}"</button>
+                                                    </div>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
                                             {move || if send_cascade_mode.get() == 0 {
                                                 view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact pay_link_to=pay_link_to pay_link_amount=pay_link_amount pay_link_memo=pay_link_memo pay_link_show=pay_link_show /> }.into_any()
                                             } else {
@@ -2065,7 +2090,181 @@ fn App() -> impl IntoView {
                                 3 if desktop => view! {
                                     <RequestPanel info=info lang=lang />
                                 }.into_any(),
-                                // Settings tab (3 on mobile, 4 on desktop)
+                                // Tab 4: Loans (desktop only)
+                                4 if desktop => view! {
+                                    <div class="loans-panel">
+                                        // View toggle + header
+                                        <div class="loans-header">
+                                            <h2 style="font-size:20px;font-weight:700;color:#e5e7eb;margin:0">"Loan Portfolio"</h2>
+                                            <div style="display:flex;gap:6px">
+                                                <button
+                                                    class=move || if loans_view.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                                                    style="font-size:13px;padding:8px 16px"
+                                                    on:click=move |_| loans_view.set(0)>
+                                                    "Lender View"
+                                                </button>
+                                                <button
+                                                    class=move || if loans_view.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                                                    style="font-size:13px;padding:8px 16px"
+                                                    on:click=move |_| loans_view.set(1)>
+                                                    "Borrower View"
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {move || if loans_view.get() == 0 {
+                                            // ════════════════════════════════════
+                                            // LENDER VIEW
+                                            // ════════════════════════════════════
+                                            view! {
+                                                <div>
+                                                    <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+                                                        <button class="send-mode-btn active" style="font-size:13px;padding:8px 16px">"+ New Loan"</button>
+                                                    </div>
+                                                    <div class="loans-summary">
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-label">"Active Loans"</span>
+                                                        </div>
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-label">"Total Lent"</span>
+                                                        </div>
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-label">"Next Payment Due"</span>
+                                                        </div>
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"0"</span>
+                                                            <span class="loan-stat-label">"Defaults"</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="loans-table">
+                                                        <div class="loans-table-header">
+                                                            <span>"Borrower"</span>
+                                                            <span>"Principal"</span>
+                                                            <span>"Currency"</span>
+                                                            <span>"Type"</span>
+                                                            <span>"Next Payment"</span>
+                                                            <span>"Status"</span>
+                                                            <span></span>
+                                                        </div>
+                                                        <div class="loans-empty">
+                                                            <div style="font-size:40px;margin-bottom:16px">"\u{1f4cb}"</div>
+                                                            <div style="font-size:16px;font-weight:600;color:#e5e7eb;margin-bottom:8px">"No loans issued"</div>
+                                                            <div style="font-size:13px;color:rgba(232,232,216,0.5);line-height:1.6;max-width:400px;margin:0 auto">
+                                                                "Create your first loan using the New Loan wizard. "
+                                                                "Loans are recorded on the ChronX blockchain via Genesis 10 primitives."
+                                                            </div>
+                                                            <button class="send-mode-btn active" style="margin-top:20px;padding:10px 24px;font-size:14px">"Create First Loan"</button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            // ════════════════════════════════════
+                                            // BORROWER VIEW
+                                            // ════════════════════════════════════
+                                            view! {
+                                                <div>
+                                                    // ── Next Payment Card ──
+                                                    <div class="next-payment-card">
+                                                        <div class="npc-left">
+                                                            <div class="npc-label">"Next payment due"</div>
+                                                            <div class="npc-due">"\u{2014} days"</div>
+                                                            <div class="npc-amounts">
+                                                                <span class="npc-kx">"\u{2014} KX"</span>
+                                                                <span class="npc-fiat">{"\u{2248} $\u{2014} USD"}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div class="npc-actions">
+                                                            <button class="send-mode-btn active" style="padding:10px 20px;font-size:13px">
+                                                                "Pay with KX"
+                                                            </button>
+                                                            <button class="send-mode-btn" style="padding:10px 20px;font-size:13px">
+                                                                "Pay via XChan"
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    // ── Auto-Pay Setup ──
+                                                    <div class="autopay-card">
+                                                        <div style="display:flex;align-items:center;justify-content:space-between">
+                                                            <div style="display:flex;align-items:center;gap:12px">
+                                                                <span style="font-size:20px">{"\u{1f504}"}</span>
+                                                                <div>
+                                                                    <div style="font-size:14px;font-weight:600;color:#e5e7eb">"Auto-Pay"</div>
+                                                                    <div style="font-size:12px;color:rgba(232,232,216,0.5)">"Creates a TYPE C Credit Authorization on-chain"</div>
+                                                                </div>
+                                                            </div>
+                                                            <label class="toggle-switch">
+                                                                <input type="checkbox" disabled=true />
+                                                                <span class="toggle-slider"></span>
+                                                            </label>
+                                                        </div>
+                                                        <div style="margin-top:10px;padding:10px 12px;background:rgba(255,255,255,0.02);border-radius:6px;font-size:12px;color:rgba(232,232,216,0.45);line-height:1.5">
+                                                            "Auto-pay inactive. When enabled, up to X KX will be drawn on the 1st of each month. Requires sufficient KX balance at payment time."
+                                                        </div>
+                                                    </div>
+
+                                                    // ── Loans Owed Summary ──
+                                                    <div class="loans-summary" style="margin-top:20px">
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-label">"Loans Owed"</span>
+                                                        </div>
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-label">"Total Owed"</span>
+                                                        </div>
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-label">"Next Due"</span>
+                                                        </div>
+                                                        <div class="loan-stat-card">
+                                                            <span class="loan-stat-val">"0"</span>
+                                                            <span class="loan-stat-label">"Missed"</span>
+                                                        </div>
+                                                    </div>
+
+                                                    // ── Loans Owed Table ──
+                                                    <div class="loans-table" style="margin-top:16px">
+                                                        <div class="loans-table-header" style="grid-template-columns:2fr 1fr 1fr 1.5fr 1fr 1fr">
+                                                            <span>"Lender"</span>
+                                                            <span>"Principal"</span>
+                                                            <span>"Currency"</span>
+                                                            <span>"Next Due"</span>
+                                                            <span>"Amount Due"</span>
+                                                            <span>"Status"</span>
+                                                        </div>
+                                                        <div class="loans-empty">
+                                                            <div style="font-size:36px;margin-bottom:12px">"\u{1f4e5}"</div>
+                                                            <div style="font-size:15px;font-weight:600;color:#e5e7eb;margin-bottom:6px">"No loans owed"</div>
+                                                            <div style="font-size:13px;color:rgba(232,232,216,0.5);line-height:1.5;max-width:380px;margin:0 auto">
+                                                                "When you borrow KX via a ChronX loan, it will appear here with payment schedules and status."
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    // ── My Credit Record ──
+                                                    <div style="margin-top:24px">
+                                                        <h3 style="font-size:15px;font-weight:700;color:#e5e7eb;margin-bottom:12px">"My Credit Record"</h3>
+                                                        <div class="credit-record-panel">
+                                                            <div class="credit-empty">
+                                                                <div style="font-size:28px;margin-bottom:8px">{"\u{1f4dc}"}</div>
+                                                                <div style="font-size:13px;color:rgba(232,232,216,0.5);line-height:1.6;max-width:360px;margin:0 auto">
+                                                                    "No loan history yet \u{2014} your on-chain credit record will appear here. "
+                                                                    "Completed loans show as green entries. Defaults show in red with lender annotations."
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }.into_any()
+                                        }}
+                                    </div>
+                                }.into_any(),
+                                // Settings tab (3 on mobile, 5 on desktop)
                                 _ if tab == settings_tab => view! {
                                     <SettingsPanel
                                         online=online
@@ -9220,7 +9419,7 @@ fn SettingsPanel(
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.06)"
                             on:click=move |_| advanced_open.update(|v| *v = !*v)>
                             <div style="display:flex;align-items:center;gap:10px">
-                                <span style="width:28px;height:28px;border-radius:6px;background:#808080;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:14px;font-weight:700">{"\u{2699}"}</span>
+                                <span style="width:28px;height:28px;border-radius:6px;background:#808080;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-size:16px;font-weight:700">{"\u{2699}\u{FE0E}"}</span>
                                 <span style="font-size:14px;color:#e5e7eb">"Advanced"</span>
                             </div>
                             <span style=move || format!("color:#888;font-size:12px;transition:transform 0.2s;display:inline-block;{}", if advanced_open.get() { "transform:rotate(90deg)" } else { "" })>{"\u{203a}"}</span>
