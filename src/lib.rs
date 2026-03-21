@@ -2674,8 +2674,16 @@ fn App() -> impl IntoView {
                                                             } else { view! { <span></span> }.into_any() }}}
                                                         </div>
                                                         {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
+                                                        {move || { let c = wiz_collateral_id.get(); if c.trim().is_empty() && !wiz_success.get() {
+                                                            view! { <div style="margin-top:8px;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b">{"\u{26a0} No collateral locked \u{2014} borrower accepts on trust"}</div> }.into_any()
+                                                        } else { view! { <span></span> }.into_any() }}}
                                                         {move || if wiz_success.get() {
-                                                            view! { <div class="wiz-success">{"\u{2705} Offer sent \u{2014} waiting for borrower acceptance."}</div> }.into_any()
+                                                            view! {
+                                                                <div class="wiz-success">
+                                                                    <div style="font-size:15px;margin-bottom:8px">{"\u{2705} Offer sent \u{2014} waiting for borrower acceptance."}</div>
+                                                                    <div style="font-size:11px;color:rgba(232,232,216,0.5);margin-top:4px">"Save these \u{2014} your on-chain proof."</div>
+                                                                </div>
+                                                            }.into_any()
                                                         } else { view! { <span></span> }.into_any() }}
                                                     </div>
                                                 }.into_any(),
