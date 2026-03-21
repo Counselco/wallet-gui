@@ -2084,10 +2084,13 @@ fn App() -> impl IntoView {
                                 }.into_any(),
                                 // Tab 2: Activity (History/Promises/Open sub-tabs)
                                 2 => {
-                                    // Fetch loan offers on Activity tab load
+                                    // Fetch loan offers + active loans on Activity tab load
                                     spawn_local(async move {
                                         if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await {
                                             loan_offers.set(v);
+                                        }
+                                        if let Ok(v) = call::<serde_json::Value>("get_wallet_loans", no_args()).await {
+                                            loans_data.set(v);
                                         }
                                     });
                                     view! {
@@ -2149,7 +2152,10 @@ fn App() -> impl IntoView {
                                                                                 spawn_local(async move {
                                                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
                                                                                     match call::<String>("accept_loan_offer", args).await {
-                                                                                        Ok(_) => { if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); } }
+                                                                                        Ok(_) => {
+                                                                                            if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); }
+                                                                                            if let Ok(v) = call::<serde_json::Value>("get_wallet_loans", no_args()).await { loans_data.set(v); }
+                                                                                        }
                                                                                         Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Accept failed: {}", e)).ok(); }
                                                                                     }
                                                                                 });
@@ -2170,6 +2176,42 @@ fn App() -> impl IntoView {
                                                             }
                                                         }).collect();
                                                         return view! { <div style="margin-bottom:12px">{cards}</div> }.into_any();
+                                                    }
+                                                }
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                            // Active loans display
+                                            {move || {
+                                                let data = loans_data.get();
+                                                if let Some(arr) = data.as_array() {
+                                                    let active: Vec<_> = arr.iter().filter(|l| {
+                                                        l.get("status").and_then(|s| s.as_str()) == Some("active")
+                                                    }).collect();
+                                                    if !active.is_empty() {
+                                                        let cards: Vec<_> = active.iter().map(|loan| {
+                                                            let bw = loan.get("borrower_wallet").and_then(|v| v.as_str()).unwrap_or("\u{2014}").to_string();
+                                                            let bw_short = if bw.len() > 14 { format!("{}...{}", &bw[..6], &bw[bw.len()-4..]) } else { bw };
+                                                            let pk = loan.get("principal_kx").and_then(|v| v.as_u64())
+                                                                .or_else(|| loan.get("principal_chronos").and_then(|v| v.as_u64()).map(|c| c / 1_000_000))
+                                                                .unwrap_or(0);
+                                                            let is_rev = loan.get("loan_type").map(|v| v.to_string().contains("Revolving")).unwrap_or(false);
+                                                            view! {
+                                                                <div class="active-loan-card">
+                                                                    <div class="loan-card-icon">{"\u{1f7e2}"}</div>
+                                                                    <div class="loan-card-body">
+                                                                        <div class="loan-card-title">{format!("Active Loan \u{00b7} {}", if is_rev { "Revolving" } else { "Fixed" })}</div>
+                                                                        <div class="loan-card-detail">{format!("{} KX \u{00b7} Borrower: {}", pk, bw_short)}</div>
+                                                                    </div>
+                                                                    <span class="loan-status-badge active">"ACTIVE"</span>
+                                                                </div>
+                                                            }
+                                                        }).collect();
+                                                        return view! {
+                                                            <div style="margin-bottom:12px">
+                                                                <div style="font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:rgba(232,232,216,0.5);margin-bottom:8px">"Active Loans"</div>
+                                                                {cards}
+                                                            </div>
+                                                        }.into_any();
                                                     }
                                                 }
                                                 view! { <span></span> }.into_any()
@@ -2259,20 +2301,30 @@ fn App() -> impl IntoView {
                                                             if let Some(arr) = loans {
                                                                 if !arr.is_empty() {
                                                                     let rows: Vec<_> = arr.iter().map(|loan| {
-                                                                        let borrower = loan.get("borrower").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+                                                                        let borrower = loan.get("borrower_wallet").and_then(|v| v.as_str()).unwrap_or("\u{2014}").to_string();
                                                                         let borrower_short = if borrower.len() > 16 { format!("{}...{}", &borrower[..6], &borrower[borrower.len()-4..]) } else { borrower };
-                                                                        let principal = loan.get("principal_kx").and_then(|v| v.as_str()).unwrap_or("—").to_string();
-                                                                        let pay_as = loan.get("pay_as").and_then(|v| v.as_str()).unwrap_or("KX").to_string();
-                                                                        let status = loan.get("status").and_then(|v| v.as_str()).unwrap_or("Active").to_string();
-                                                                        let loan_id = loan.get("loan_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                        let principal_kx = loan.get("principal_kx").and_then(|v| v.as_u64())
+                                                                            .or_else(|| loan.get("principal_chronos").and_then(|v| v.as_u64()).map(|c| c / 1_000_000))
+                                                                            .unwrap_or(0);
+                                                                        let has_pay_as = loan.get("pay_as").is_some() && !loan.get("pay_as").unwrap().is_null();
+                                                                        let pay_as = if has_pay_as { "USD" } else { "KX" };
+                                                                        let status = loan.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string();
+                                                                        let is_revolving = loan.get("loan_type").map(|v| v.to_string().contains("Revolving")).unwrap_or(false);
+                                                                        let loan_type_str = if is_revolving { "Revolving" } else { "Fixed" };
+                                                                        let status_class = match status.as_str() {
+                                                                            "active" => "loan-status-badge active",
+                                                                            "pending" => "loan-status-badge pending",
+                                                                            "declined" | "defaulted" => "loan-status-badge defaulted",
+                                                                            _ => "loan-status-badge",
+                                                                        };
                                                                         view! {
                                                                             <div class="loans-table-row">
                                                                                 <span>{borrower_short}</span>
-                                                                                <span>{format!("{} KX", principal)}</span>
+                                                                                <span>{format!("{} KX", principal_kx)}</span>
                                                                                 <span>{pay_as}</span>
-                                                                                <span>"Fixed"</span>
+                                                                                <span>{loan_type_str}</span>
                                                                                 <span>"\u{2014}"</span>
-                                                                                <span class="loan-status-badge">{status}</span>
+                                                                                <span class=status_class>{status.to_uppercase()}</span>
                                                                                 <span></span>
                                                                             </div>
                                                                         }
@@ -2695,7 +2747,7 @@ fn App() -> impl IntoView {
                                                         } else {
                                                             view! {
                                                                 <div>
-                                                                    <p class="wiz-step-sub">"Configure exit rights and renewal conditions."</p>
+                                                                    <p class="wiz-step-sub">"Configure exit rights, interest collection, and conditions."</p>
                                                                     <div class="wiz-field">
                                                                         <label>"Exit Rights"</label>
                                                                         <select prop:value=move || wiz_exit_rights.get().to_string()
@@ -2704,6 +2756,31 @@ fn App() -> impl IntoView {
                                                                             <option value="1">"Lender only"</option>
                                                                             <option value="2">"Borrower only"</option>
                                                                             <option value="3">"Mutual consent"</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Exit Notice Period"</label>
+                                                                        <select>
+                                                                            <option value="3600">"1 hour"</option>
+                                                                            <option value="21600">"6 hours"</option>
+                                                                            <option value="86400" selected>"24 hours (default)"</option>
+                                                                            <option value="172800">"48 hours"</option>
+                                                                            <option value="604800">"7 days"</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Interest Collection"</label>
+                                                                        <select>
+                                                                            <option value="exit" selected>"At Exit (default) \u{2014} settles when loan closes"</option>
+                                                                            <option value="daily">"Daily \u{2014} borrower pays interest each day"</option>
+                                                                            <option value="weekly">"Weekly \u{2014} every 7 renewal periods"</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Default Triggers (optional)"</label>
+                                                                        <select>
+                                                                            <option value="none" selected>"None"</option>
+                                                                            <option value="missed">"Missed payment \u{2014} with grace period"</option>
                                                                         </select>
                                                                     </div>
                                                                     <div class="wiz-field">

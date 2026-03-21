@@ -2863,3 +2863,34 @@ select option:hover {
     cursor: pointer; transition: all .2s;
 }
 .offer-decline-btn:hover { background: rgba(224,92,92,0.2); }
+
+/* -- ACTIVE LOAN CARDS (Activity/Open) -- */
+.active-loan-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(92,224,138,0.05);
+    border: 1px solid rgba(92,224,138,0.18);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+}
+.loan-card-icon { font-size: 18px; flex-shrink: 0; }
+.loan-card-body { flex: 1; }
+.loan-card-title { font-size: 13px; font-weight: 600; color: #e5e7eb; }
+.loan-card-detail { font-size: 12px; color: rgba(232,232,216,0.5); margin-top: 2px; }
+.loan-status-badge.active {
+    background: rgba(92,224,138,0.12);
+    border: 1px solid rgba(92,224,138,0.3);
+    color: #5ce08a;
+}
+.loan-status-badge.pending {
+    background: rgba(212,168,75,0.12);
+    border: 1px solid rgba(212,168,75,0.3);
+    color: #d4a84b;
+}
+.loan-status-badge.defaulted {
+    background: rgba(224,92,92,0.12);
+    border: 1px solid rgba(224,92,92,0.3);
+    color: #e05c5c;
+}
