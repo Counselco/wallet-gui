@@ -4069,33 +4069,28 @@ pub async fn reject_invoice(_app: AppHandle, _invoice_id: String) -> Result<(), 
     Err("Invoice rejection not yet available in current node version".to_string())
 }
 
-// ── v2.5.16 — Loan Wizard RPC ────────────────────────────────────────────────
+// ── v2.5.17 — Loan Offer Protocol Commands ───────────────────────────────────
 
-/// Create a loan on-chain via LoanCreate action.
+/// Create a loan offer on-chain (lender signs, borrower must accept separately).
 #[tauri::command]
-pub async fn create_loan(
+pub async fn create_loan_offer(
     app: AppHandle,
     borrower_address: String,
     principal_kx: f64,
     pay_as_currency: String,
     interest_rate_annual_pct: f64,
-    // Fixed schedule fields
-    term_months: Option<u32>,
-    schedule_type: Option<u8>, // 0=Bullet, 1=Amortizing, 2=Custom
-    // Revolving fields (if loan_type_revolving is true)
     loan_type_revolving: bool,
     renewal_period_idx: Option<u8>,
     rate_cap_pct: Option<f64>,
     exit_rights_idx: Option<u8>,
-    // Protection
+    offer_expiry_seconds: Option<u64>,
     collateral_lock_hex: Option<String>,
-    payment_match_idx: Option<u8>,
     servicer_url: Option<String>,
     memo: Option<String>,
 ) -> Result<String, String> {
     use chronx_core::transaction::{
-        PayAsDenomination, LoanPaymentStage, LoanPaymentType,
-        LateFeeSchedule, PrepaymentTerms, OraclePolicy,
+        LoanOffer, InterestRate, LoanType, ExitRights, RevivalCondition,
+        PaymentSourcePolicy, AuthorizedPayer, PayAsDenomination,
     };
 
     let url = rpc_url(&app);
@@ -4107,71 +4102,174 @@ pub async fn create_loan(
     if principal_kx <= 0.0 {
         return Err("Principal must be greater than 0".to_string());
     }
-    let principal = (principal_kx * CHRONOS_PER_KX as f64) as u64;
+    let principal_chronos = (principal_kx * CHRONOS_PER_KX as f64) as u64;
 
     let pay_as = match pay_as_currency.as_str() {
-        "USD" => PayAsDenomination::UsdEquivalentAtMaturity,
-        "EUR" => PayAsDenomination::EurEquivalentAtMaturity,
-        _ => PayAsDenomination::FixedKX,
+        "USD" => Some(PayAsDenomination::UsdEquivalentAtMaturity),
+        "EUR" => Some(PayAsDenomination::EurEquivalentAtMaturity),
+        _ => None,
     };
 
-    // Build payment stages
-    let stages = if loan_type_revolving {
-        // Revolving: single placeholder stage
-        vec![LoanPaymentStage {
-            due_at: 0,
-            amount_kx: principal,
-            pay_as: pay_as.clone(),
-            payment_type: LoanPaymentType::BulletFinal,
-            stage_index: 0,
-        }]
-    } else {
-        let months = term_months.unwrap_or(12);
-        let stype = schedule_type.unwrap_or(0);
-        match stype {
-            0 => {
-                // Bullet — single payment at maturity
-                let due = chrono::Utc::now().timestamp() as u64 + (months as u64 * 30 * 86400);
-                let total = principal + ((principal as f64 * interest_rate_annual_pct / 100.0 * months as f64 / 12.0) as u64);
-                vec![LoanPaymentStage {
-                    due_at: due,
-                    amount_kx: total,
-                    pay_as: pay_as.clone(),
-                    payment_type: LoanPaymentType::BulletFinal,
-                    stage_index: 0,
-                }]
-            }
-            _ => {
-                // Amortizing / Custom — equal monthly payments
-                let monthly_principal = principal / months as u64;
-                let monthly_interest = (principal as f64 * interest_rate_annual_pct / 100.0 / 12.0) as u64;
-                let now = chrono::Utc::now().timestamp() as u64;
-                (0..months).map(|i| LoanPaymentStage {
-                    due_at: now + ((i as u64 + 1) * 30 * 86400),
-                    amount_kx: monthly_principal + monthly_interest,
-                    pay_as: pay_as.clone(),
-                    payment_type: LoanPaymentType::PrincipalAndInterest,
-                    stage_index: i,
-                }).collect()
-            }
+    let rate_bps = (interest_rate_annual_pct * 100.0) as u32;
+    let interest_rate = InterestRate::Fixed(rate_bps);
+
+    let loan_type = if loan_type_revolving {
+        let renewal_secs: [u64; 6] = [1, 3600, 86400, 604800, 2592000, 31536000];
+        let idx = renewal_period_idx.unwrap_or(2) as usize;
+        let period = if idx < 6 { renewal_secs[idx] } else { 86400 };
+        let cap = rate_cap_pct.map(|p| (p * 100.0) as u32).unwrap_or(0);
+        let exit = match exit_rights_idx.unwrap_or(0) {
+            1 => ExitRights::LenderOnly,
+            2 => ExitRights::BorrowerOnly,
+            3 => ExitRights::MutualConsent,
+            _ => ExitRights::EitherParty,
+        };
+        LoanType::Revolving {
+            renewal_period_seconds: period,
+            rate_cap_per_period_bps: cap,
+            renewal_fee_bps: 0,
+            min_notice_seconds: 86400,
+            exit_rights: exit,
+            max_term_seconds: None,
+            revival_condition: RevivalCondition::Always,
         }
+    } else {
+        LoanType::FixedSchedule
     };
 
-    let actions = vec![Action::LoanCreate {
+    let collateral_lock_id = collateral_lock_hex
+        .and_then(|h| {
+            let bytes = hex::decode(h.trim()).ok()?;
+            if bytes.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                Some(arr)
+            } else { None }
+        });
+
+    // Generate deterministic loan_id
+    let loan_id: [u8; 32] = {
+        let mut h = blake3::Hasher::new();
+        h.update(&kp.account_id.0);
+        h.update(&borrower.0);
+        h.update(&principal_chronos.to_le_bytes());
+        let ts = chrono::Utc::now().timestamp() as u64;
+        h.update(&ts.to_le_bytes());
+        *h.finalize().as_bytes()
+    };
+
+    let lender_sig = kp.sign(&loan_id);
+
+    let offer = LoanOffer {
+        loan_id,
         lender_wallet: kp.account_id.clone(),
         borrower_wallet: borrower,
-        principal_kx: principal,
+        principal_chronos,
         pay_as,
-        stages,
-        grace_period_days: 7,
-        late_fee_schedule: LateFeeSchedule::None,
-        prepayment: PrepaymentTerms::AllowedAtPar,
-        hedge_requirement: None,
-        oracle_policy: OraclePolicy::default(),
-        agreement_hash: None,
+        interest_rate,
+        rate_source_description: None,
+        loan_type,
+        payment_match: None,
+        default_triggers: vec![],
+        collateral_lock_id,
+        liquidation_threshold_pct: None,
+        escrow_required: false,
+        escrow_id: None,
+        servicer_portal_url: servicer_url,
+        authorized_payers: vec![],
+        payment_source_policy: PaymentSourcePolicy::default(),
+        offer_expiry_seconds,
         memo,
-    }];
+        lender_signature: lender_sig,
+    };
 
+    let actions = vec![Action::LoanOffer(offer)];
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(txid)
+}
+
+/// Borrower accepts a pending loan offer.
+#[tauri::command]
+pub async fn accept_loan_offer(app: AppHandle, loan_id_hex: String) -> Result<String, String> {
+    use chronx_core::transaction::LoanAcceptance;
+
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let bytes = hex::decode(loan_id_hex.trim())
+        .map_err(|e| format!("Invalid loan ID hex: {e}"))?;
+    if bytes.len() != 32 { return Err("Loan ID must be 32 bytes".into()); }
+    let mut loan_id = [0u8; 32];
+    loan_id.copy_from_slice(&bytes);
+
+    let now = chrono::Utc::now().timestamp() as u64;
+    let sig = kp.sign(&loan_id);
+
+    let acceptance = LoanAcceptance {
+        loan_id,
+        accepted_at: now,
+        borrower_signature: sig,
+    };
+
+    let actions = vec![Action::LoanAcceptance(acceptance)];
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(txid)
+}
+
+/// Borrower declines a pending loan offer.
+#[tauri::command]
+pub async fn decline_loan_offer(app: AppHandle, loan_id_hex: String, reason: Option<String>) -> Result<String, String> {
+    use chronx_core::transaction::LoanDecline;
+
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let bytes = hex::decode(loan_id_hex.trim())
+        .map_err(|e| format!("Invalid loan ID hex: {e}"))?;
+    if bytes.len() != 32 { return Err("Loan ID must be 32 bytes".into()); }
+    let mut loan_id = [0u8; 32];
+    loan_id.copy_from_slice(&bytes);
+
+    let now = chrono::Utc::now().timestamp() as u64;
+    let sig = kp.sign(&loan_id);
+
+    let decline = LoanDecline {
+        loan_id,
+        reason,
+        declined_at: now,
+        borrower_signature: sig,
+    };
+
+    let actions = vec![Action::LoanDecline(decline)];
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(txid)
+}
+
+/// Lender withdraws a pending loan offer.
+#[tauri::command]
+pub async fn withdraw_loan_offer(app: AppHandle, loan_id_hex: String, reason: Option<String>) -> Result<String, String> {
+    use chronx_core::transaction::LoanOfferWithdrawn;
+
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let bytes = hex::decode(loan_id_hex.trim())
+        .map_err(|e| format!("Invalid loan ID hex: {e}"))?;
+    if bytes.len() != 32 { return Err("Loan ID must be 32 bytes".into()); }
+    let mut loan_id = [0u8; 32];
+    loan_id.copy_from_slice(&bytes);
+
+    let now = chrono::Utc::now().timestamp() as u64;
+    let sig = kp.sign(&loan_id);
+
+    let withdrawal = LoanOfferWithdrawn {
+        loan_id,
+        reason,
+        withdrawn_at: now,
+        lender_signature: sig,
+    };
+
+    let actions = vec![Action::LoanOfferWithdrawn(withdrawal)];
     let txid = build_sign_mine_submit(&kp, actions, &url).await?;
     Ok(txid)
 }
@@ -4183,5 +4281,15 @@ pub async fn get_wallet_loans(app: AppHandle, wallet_address: String) -> Result<
     let result = rpc_call(&url, "chronx_getLoansByWallet", serde_json::json!([wallet_address]))
         .await
         .map_err(|e| format!("Failed to fetch loans: {e}"))?;
+    Ok(result)
+}
+
+/// Fetch pending loan offers for a borrower wallet.
+#[tauri::command]
+pub async fn get_loan_offers(app: AppHandle, wallet_address: String) -> Result<serde_json::Value, String> {
+    let url = rpc_url(&app);
+    let result = rpc_call(&url, "chronx_getLoanOffers", serde_json::json!([wallet_address]))
+        .await
+        .map_err(|e| format!("Failed to fetch loan offers: {e}"))?;
     Ok(result)
 }

@@ -2620,8 +2620,8 @@ fn App() -> impl IntoView {
                                                 }.into_any(),
                                                 _ => view! {
                                                     <div>
-                                                        <h3 class="wiz-step-title">"Step 6: Review & Sign"</h3>
-                                                        <p class="wiz-step-sub">"Confirm all details before signing."</p>
+                                                        <h3 class="wiz-step-title">"Step 6: Review & Send Offer"</h3>
+                                                        <p class="wiz-step-sub">"Your signed offer will be sent to the borrower. The loan activates only after they accept."</p>
                                                         <div class="wiz-review">
                                                             <div class="wiz-review-row">
                                                                 <span class="wiz-review-label">"Type"</span>
@@ -2675,7 +2675,7 @@ fn App() -> impl IntoView {
                                                         </div>
                                                         {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
                                                         {move || if wiz_success.get() {
-                                                            view! { <div class="wiz-success">{"\u{2705} Loan created successfully! Transaction submitted to the network."}</div> }.into_any()
+                                                            view! { <div class="wiz-success">{"\u{2705} Offer sent \u{2014} waiting for borrower acceptance."}</div> }.into_any()
                                                         } else { view! { <span></span> }.into_any() }}
                                                     </div>
                                                 }.into_any(),
@@ -2739,10 +2739,11 @@ fn App() -> impl IntoView {
                                                         "collateralLockHex": coll_hex,
                                                         "paymentMatchIdx": wiz_payment_match.get_untracked(),
                                                         "servicerUrl": svc_url,
+                                                        "offerExpirySeconds": Option::<u64>::None,
                                                         "memo": memo_str,
                                                     })).unwrap_or(no_args());
                                                     spawn_local(async move {
-                                                        match call::<String>("create_loan", args).await {
+                                                        match call::<String>("create_loan_offer", args).await {
                                                             Ok(txid) => {
                                                                 wiz_submitting.set(false);
                                                                 wiz_success.set(true);
@@ -2762,7 +2763,7 @@ fn App() -> impl IntoView {
                                                             }
                                                         }
                                                     });
-                                                }>{move || if wiz_submitting.get() { "Signing..." } else { "\u{270d}\u{FE0E} Sign & Submit" }}</button> }.into_any()
+                                                }>{move || if wiz_submitting.get() { "Signing..." } else { "\u{270d}\u{FE0E} Send Offer" }}</button> }.into_any()
                                             } else {
                                                 view! { <button class="send-mode-btn active" style="padding:10px 20px;font-size:13px" on:click=move |_| wizard_open.set(false)>"Done"</button> }.into_any()
                                             }}
