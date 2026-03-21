@@ -2083,7 +2083,14 @@ fn App() -> impl IntoView {
                                     }}
                                 }.into_any(),
                                 // Tab 2: Activity (History/Promises/Open sub-tabs)
-                                2 => view! {
+                                2 => {
+                                    // Fetch loan offers on Activity tab load
+                                    spawn_local(async move {
+                                        if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await {
+                                            loan_offers.set(v);
+                                        }
+                                    });
+                                    view! {
                                     // Sub-tab pill buttons
                                     <div style="display:flex;gap:6px;margin-bottom:14px">
                                         <button
@@ -2111,10 +2118,67 @@ fn App() -> impl IntoView {
                                             <PromisesPanel info=info lang=lang />
                                         }.into_any(),
                                         _ => view! {
+                                            // Incoming loan offers (mobile + desktop)
+                                            {move || {
+                                                let data = loan_offers.get();
+                                                let offers = data.as_array();
+                                                if let Some(arr) = offers {
+                                                    if !arr.is_empty() {
+                                                        let cards: Vec<_> = arr.iter().map(|offer| {
+                                                            let lender = offer.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("\u{2014}").to_string();
+                                                            let lender_short = if lender.len() > 16 { format!("{}...{}", &lender[..6], &lender[lender.len()-4..]) } else { lender.clone() };
+                                                            let principal = offer.get("principal_kx").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                            let rate = offer.get("interest_rate").and_then(|v| v.get("Fixed")).and_then(|v| v.as_u64()).unwrap_or(0);
+                                                            let rate_pct = rate as f64 / 100.0;
+                                                            let loan_id = offer.get("loan_id_hex").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                            let lid = loan_id.clone();
+                                                            let lid2 = loan_id.clone();
+                                                            view! {
+                                                                <div class="offer-card">
+                                                                    <div class="offer-card-left">
+                                                                        <div style="font-size:14px;font-weight:600;color:#e5e7eb">{"\u{1f4cb} Loan Offer"}</div>
+                                                                        <div style="font-size:12px;color:rgba(232,232,216,0.5);margin-top:2px">{format!("From: {}", lender_short)}</div>
+                                                                        <div style="font-size:13px;color:#d4a84b;margin-top:4px;font-weight:600">
+                                                                            {format!("{} KX \u{00b7} {}% \u{00b7} Daily", principal, rate_pct)}
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="offer-card-actions">
+                                                                        <button class="offer-accept-btn"
+                                                                            on:click=move |_| {
+                                                                                let id = lid.clone();
+                                                                                spawn_local(async move {
+                                                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
+                                                                                    match call::<String>("accept_loan_offer", args).await {
+                                                                                        Ok(_) => { if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); } }
+                                                                                        Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Accept failed: {}", e)).ok(); }
+                                                                                    }
+                                                                                });
+                                                                            }>{"\u{2713} Accept"}</button>
+                                                                        <button class="offer-decline-btn"
+                                                                            on:click=move |_| {
+                                                                                let id = lid2.clone();
+                                                                                spawn_local(async move {
+                                                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
+                                                                                    match call::<String>("decline_loan_offer", args).await {
+                                                                                        Ok(_) => { if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); } }
+                                                                                        Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Decline failed: {}", e)).ok(); }
+                                                                                    }
+                                                                                });
+                                                                            }>{"\u{2717} Decline"}</button>
+                                                                    </div>
+                                                                </div>
+                                                            }
+                                                        }).collect();
+                                                        return view! { <div style="margin-bottom:12px">{cards}</div> }.into_any();
+                                                    }
+                                                }
+                                                view! { <span></span> }.into_any()
+                                            }}
                                             <OpenPanel info=info lang=lang />
                                         }.into_any(),
                                     }}
-                                }.into_any(),
+                                }.into_any()
+                                },
                                 // Tab 3: Request (desktop only) OR Settings (mobile)
                                 3 if desktop => view! {
                                     <RequestPanel info=info lang=lang />
