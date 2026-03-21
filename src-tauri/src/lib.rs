@@ -131,6 +131,8 @@ pub fn run() {
             contacts::check_if_contact,
             commands::upload_avatar,
             commands::upload_avatar_bytes,
+            commands::create_loan,
+            commands::get_wallet_loans,
             commands::get_avatar_meta,
             commands::update_display_name,
             commands::get_sender_info,

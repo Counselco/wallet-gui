@@ -1174,6 +1174,8 @@ fn App() -> impl IntoView {
     let wiz_submitting = RwSignal::new(false);
     let wiz_error = RwSignal::new(String::new());
     let wiz_success = RwSignal::new(false);
+    // Loan list data (fetched from RPC)
+    let loans_data = RwSignal::new(serde_json::Value::Null);
 
     // Pay deep link pre-fill signals
     let pay_link_to = RwSignal::new(String::new());
@@ -2117,7 +2119,19 @@ fn App() -> impl IntoView {
                                     <RequestPanel info=info lang=lang />
                                 }.into_any(),
                                 // Tab 4: Loans (desktop only)
-                                4 if desktop => view! {
+                                4 if desktop => {
+                                    // Fetch loans on tab load
+                                    spawn_local(async move {
+                                        if let Ok(info_val) = call::<serde_json::Value>("get_account_info", no_args()).await {
+                                            if let Some(aid) = info_val.get("account_id").and_then(|v| v.as_str()) {
+                                                let loan_args = serde_wasm_bindgen::to_value(&serde_json::json!({"walletAddress": aid})).unwrap_or(no_args());
+                                                if let Ok(loans_val) = call::<serde_json::Value>("get_wallet_loans", loan_args).await {
+                                                    loans_data.set(loans_val);
+                                                }
+                                            }
+                                        }
+                                    });
+                                    view! {
                                     <div class="loans-panel">
                                         // View toggle + header
                                         <div class="loans-header">
@@ -2176,16 +2190,47 @@ fn App() -> impl IntoView {
                                                             <span>"Status"</span>
                                                             <span></span>
                                                         </div>
-                                                        <div class="loans-empty">
-                                                            <div style="font-size:40px;margin-bottom:16px">"\u{1f4cb}"</div>
-                                                            <div style="font-size:16px;font-weight:600;color:#e5e7eb;margin-bottom:8px">"No loans issued"</div>
-                                                            <div style="font-size:13px;color:rgba(232,232,216,0.5);line-height:1.6;max-width:400px;margin:0 auto">
-                                                                "Create your first loan using the New Loan wizard. "
-                                                                "Loans are recorded on the ChronX blockchain via Genesis 10 primitives."
-                                                            </div>
-                                                            <button class="send-mode-btn active" style="margin-top:20px;padding:10px 24px;font-size:14px"
-                                                                on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wizard_open.set(true); }>"Create First Loan"</button>
-                                                        </div>
+                                                        {move || {
+                                                            let data = loans_data.get();
+                                                            let loans = data.as_array();
+                                                            if let Some(arr) = loans {
+                                                                if !arr.is_empty() {
+                                                                    let rows: Vec<_> = arr.iter().map(|loan| {
+                                                                        let borrower = loan.get("borrower").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+                                                                        let borrower_short = if borrower.len() > 16 { format!("{}...{}", &borrower[..6], &borrower[borrower.len()-4..]) } else { borrower };
+                                                                        let principal = loan.get("principal_kx").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+                                                                        let pay_as = loan.get("pay_as").and_then(|v| v.as_str()).unwrap_or("KX").to_string();
+                                                                        let status = loan.get("status").and_then(|v| v.as_str()).unwrap_or("Active").to_string();
+                                                                        let loan_id = loan.get("loan_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                        view! {
+                                                                            <div class="loans-table-row">
+                                                                                <span>{borrower_short}</span>
+                                                                                <span>{format!("{} KX", principal)}</span>
+                                                                                <span>{pay_as}</span>
+                                                                                <span>"Fixed"</span>
+                                                                                <span>"\u{2014}"</span>
+                                                                                <span class="loan-status-badge">{status}</span>
+                                                                                <span></span>
+                                                                            </div>
+                                                                        }
+                                                                    }).collect();
+                                                                    return view! { <div>{rows}</div> }.into_any();
+                                                                }
+                                                            }
+                                                            // Empty state
+                                                            view! {
+                                                                <div class="loans-empty">
+                                                                    <div style="font-size:40px;margin-bottom:16px">"\u{1f4cb}"</div>
+                                                                    <div style="font-size:16px;font-weight:600;color:#e5e7eb;margin-bottom:8px">"No loans issued"</div>
+                                                                    <div style="font-size:13px;color:rgba(232,232,216,0.5);line-height:1.6;max-width:400px;margin:0 auto">
+                                                                        "Create your first loan using the New Loan wizard. "
+                                                                        "Loans are recorded on the ChronX blockchain via Genesis 10 primitives."
+                                                                    </div>
+                                                                    <button class="send-mode-btn active" style="margin-top:20px;padding:10px 24px;font-size:14px"
+                                                                        on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wizard_open.set(true); }>"Create First Loan"</button>
+                                                                </div>
+                                                            }.into_any()
+                                                        }}
                                                     </div>
                                                 </div>
                                             }.into_any()
@@ -2291,7 +2336,8 @@ fn App() -> impl IntoView {
                                             }.into_any()
                                         }}
                                     </div>
-                                }.into_any(),
+                                }.into_any()
+                                },
                                 // Settings tab (3 on mobile, 5 on desktop)
                                 _ if tab == settings_tab => view! {
                                     <SettingsPanel
@@ -2670,14 +2716,52 @@ fn App() -> impl IntoView {
                                                 view! { <button class="send-mode-btn active" style="padding:10px 20px;font-size:13px;background:#d4a84b;color:#111" disabled=move || wiz_submitting.get() on:click=move |_| {
                                                     wiz_error.set(String::new());
                                                     wiz_submitting.set(true);
-                                                    // TODO: Build LoanCreate tx and submit via RPC
-                                                    // For now simulate success after brief delay
-                                                    let cb = wasm_bindgen::prelude::Closure::once(move || {
-                                                        wiz_submitting.set(false);
-                                                        wiz_success.set(true);
+                                                    let is_revolving = wiz_loan_type.get_untracked() == 1;
+                                                    let sched = if !is_revolving { Some(wiz_schedule_type.get_untracked()) } else { None::<u8> };
+                                                    let renew_idx = if is_revolving { Some(wiz_renewal_period.get_untracked()) } else { None::<u8> };
+                                                    let rcap = if is_revolving { wiz_rate_cap.get_untracked().trim().parse::<f64>().ok() } else { None::<f64> };
+                                                    let exit_r = if is_revolving { Some(wiz_exit_rights.get_untracked()) } else { None::<u8> };
+                                                    let coll_hex = { let c = wiz_collateral_id.get_untracked(); if c.trim().is_empty() { None::<String> } else { Some(c) } };
+                                                    let svc_url = { let s = wiz_servicer_url.get_untracked(); if s.trim().is_empty() { None::<String> } else { Some(s) } };
+                                                    let nick = wiz_nickname.get_untracked();
+                                                    let memo_str = if nick.is_empty() { None::<String> } else { Some(format!("Borrower: {}", nick)) };
+                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                        "borrowerAddress": wiz_borrower.get_untracked(),
+                                                        "principalKx": wiz_amount.get_untracked().trim().parse::<f64>().unwrap_or(0.0),
+                                                        "payAsCurrency": wiz_currency.get_untracked(),
+                                                        "interestRateAnnualPct": wiz_rate_bps.get_untracked().trim().parse::<f64>().unwrap_or(0.0),
+                                                        "termMonths": wiz_term_months.get_untracked().trim().parse::<u32>().ok(),
+                                                        "scheduleType": sched,
+                                                        "loanTypeRevolving": is_revolving,
+                                                        "renewalPeriodIdx": renew_idx,
+                                                        "rateCapPct": rcap,
+                                                        "exitRightsIdx": exit_r,
+                                                        "collateralLockHex": coll_hex,
+                                                        "paymentMatchIdx": wiz_payment_match.get_untracked(),
+                                                        "servicerUrl": svc_url,
+                                                        "memo": memo_str,
+                                                    })).unwrap_or(no_args());
+                                                    spawn_local(async move {
+                                                        match call::<String>("create_loan", args).await {
+                                                            Ok(txid) => {
+                                                                wiz_submitting.set(false);
+                                                                wiz_success.set(true);
+                                                                // Refresh loans list
+                                                                if let Ok(info_val) = call::<serde_json::Value>("get_account_info", no_args()).await {
+                                                                    if let Some(aid) = info_val.get("account_id").and_then(|v| v.as_str()) {
+                                                                        let loan_args = serde_wasm_bindgen::to_value(&serde_json::json!({"walletAddress": aid})).unwrap_or(no_args());
+                                                                        if let Ok(loans_val) = call::<serde_json::Value>("get_wallet_loans", loan_args).await {
+                                                                            loans_data.set(loans_val);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                wiz_submitting.set(false);
+                                                                wiz_error.set(format!("Failed: {}", e));
+                                                            }
+                                                        }
                                                     });
-                                                    let _ = web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), 1500);
-                                                    cb.forget();
                                                 }>{move || if wiz_submitting.get() { "Signing..." } else { "\u{270d}\u{FE0E} Sign & Submit" }}</button> }.into_any()
                                             } else {
                                                 view! { <button class="send-mode-btn active" style="padding:10px 20px;font-size:13px" on:click=move |_| wizard_open.set(false)>"Done"</button> }.into_any()
