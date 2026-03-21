@@ -2820,3 +2820,14 @@ input[type="range"].pct-slider {
     font-weight: 600;
     text-align: right;
 }
+
+/* -- DARK DROPDOWN OPTIONS (all selects) -- */
+select option {
+    background-color: #1a1f2e !important;
+    color: #e8e8e8 !important;
+}
+select option:checked,
+select option:hover {
+    background-color: #d4a84b !important;
+    color: #0c0c10 !important;
+}

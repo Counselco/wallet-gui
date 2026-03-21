@@ -1162,7 +1162,7 @@ fn App() -> impl IntoView {
     // Fixed schedule fields
     let wiz_schedule_type = RwSignal::new(0u8); // 0=Bullet, 1=Amortizing, 2=Custom
     // Revolving fields
-    let wiz_renewal_period = RwSignal::new(4u8); // index: 0=sec,1=hour,2=daily,3=weekly,4=monthly,5=yearly
+    let wiz_renewal_period = RwSignal::new(2u8); // index: 0=sec,1=hour,2=daily,3=weekly,4=monthly,5=yearly
     let wiz_rate_cap = RwSignal::new(String::new()); // % per period
     let wiz_exit_rights = RwSignal::new(0u8); // 0=Either,1=Lender,2=Borrower,3=Mutual
     let wiz_revival = RwSignal::new(0u8); // 0=Always
@@ -2525,10 +2525,10 @@ fn App() -> impl IntoView {
                                                                 </div>
                                                                 <div class="wiz-field">
                                                                     <label>{move || {
-                                                                        let labels = ["Max % per second", "Max % per hour", "Max % per day", "Max % per week", "Max % per month", "Max % per year"];
+                                                                        let labels = ["Auto-terminate if cost/sec exceeds (%)", "Auto-terminate if hourly cost exceeds (%)", "Auto-terminate if daily cost exceeds (%) \u{2014} optional", "Auto-terminate if weekly cost exceeds (%)", "Auto-terminate if monthly cost exceeds (%)", "Auto-terminate if yearly cost exceeds (%)"];
                                                                         labels[wiz_renewal_period.get() as usize].to_string()
                                                                     }}</label>
-                                                                    <input type="text" placeholder="e.g. 0.20"
+                                                                    <input type="text" placeholder="e.g. 0.50 — or leave blank for no cap"
                                                                         prop:value=move || wiz_rate_cap.get()
                                                                         on:input=move |ev| wiz_rate_cap.set(event_target_value(&ev)) />
                                                                 </div>
