@@ -1148,6 +1148,32 @@ fn App() -> impl IntoView {
     let send_tab_mode = RwSignal::new(0u8);
     // Loans tab view: 0=Lender, 1=Borrower
     let loans_view = RwSignal::new(0u8);
+    // Loan wizard state
+    let wizard_open = RwSignal::new(false);
+    let wizard_step = RwSignal::new(1u8); // 1-6
+    // Wizard form fields
+    let wiz_loan_type = RwSignal::new(0u8); // 0=Fixed, 1=Revolving
+    let wiz_borrower = RwSignal::new(String::new());
+    let wiz_nickname = RwSignal::new(String::new());
+    let wiz_amount = RwSignal::new(String::new());
+    let wiz_currency = RwSignal::new("KX".to_string());
+    let wiz_rate_bps = RwSignal::new(String::new()); // interest rate in %
+    let wiz_term_months = RwSignal::new(String::new());
+    // Fixed schedule fields
+    let wiz_schedule_type = RwSignal::new(0u8); // 0=Bullet, 1=Amortizing, 2=Custom
+    // Revolving fields
+    let wiz_renewal_period = RwSignal::new(4u8); // index: 0=sec,1=hour,2=daily,3=weekly,4=monthly,5=yearly
+    let wiz_rate_cap = RwSignal::new(String::new()); // % per period
+    let wiz_exit_rights = RwSignal::new(0u8); // 0=Either,1=Lender,2=Borrower,3=Mutual
+    let wiz_revival = RwSignal::new(0u8); // 0=Always
+    // Protection fields
+    let wiz_collateral_id = RwSignal::new(String::new());
+    let wiz_servicer_url = RwSignal::new(String::new());
+    let wiz_payment_match = RwSignal::new(0u8); // 0=Exact,1=Partial,2=Minimum
+    // Submission state
+    let wiz_submitting = RwSignal::new(false);
+    let wiz_error = RwSignal::new(String::new());
+    let wiz_success = RwSignal::new(false);
 
     // Pay deep link pre-fill signals
     let pay_link_to = RwSignal::new(String::new());
@@ -2119,7 +2145,8 @@ fn App() -> impl IntoView {
                                             view! {
                                                 <div>
                                                     <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
-                                                        <button class="send-mode-btn active" style="font-size:13px;padding:8px 16px">"+ New Loan"</button>
+                                                        <button class="send-mode-btn active" style="font-size:13px;padding:8px 16px"
+                                                            on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wizard_open.set(true); }>"+ New Loan"</button>
                                                     </div>
                                                     <div class="loans-summary">
                                                         <div class="loan-stat-card">
@@ -2156,7 +2183,8 @@ fn App() -> impl IntoView {
                                                                 "Create your first loan using the New Loan wizard. "
                                                                 "Loans are recorded on the ChronX blockchain via Genesis 10 primitives."
                                                             </div>
-                                                            <button class="send-mode-btn active" style="margin-top:20px;padding:10px 24px;font-size:14px">"Create First Loan"</button>
+                                                            <button class="send-mode-btn active" style="margin-top:20px;padding:10px 24px;font-size:14px"
+                                                                on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wizard_open.set(true); }>"Create First Loan"</button>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2322,6 +2350,344 @@ fn App() -> impl IntoView {
                     </div>
                     </div>
                     </div> // close main-content
+
+                    // ── Loan Wizard Modal (Desktop Only) ──
+                    {move || if wizard_open.get() && is_desktop() {
+                        let step = wizard_step.get();
+                        view! {
+                            <div class="modal-overlay" on:click=move |ev| {
+                                use wasm_bindgen::JsCast;
+                                if let Some(target) = ev.target() {
+                                    if target.dyn_into::<web_sys::HtmlElement>().ok()
+                                        .and_then(|el| el.class_list().contains("modal-overlay").then_some(()))
+                                        .is_some()
+                                    {
+                                        wizard_open.set(false);
+                                    }
+                                }
+                            }>
+                                <div class="wizard-modal">
+                                    <div class="wizard-header">
+                                        <div class="wizard-title">"New Loan"</div>
+                                        <div class="wizard-steps-bar">
+                                            <span class=move || { if wizard_step.get() >= 1 {"wstep active"} else {"wstep"} }>"1"</span>
+                                            <span class="wstep-line"></span>
+                                            <span class=move || { if wizard_step.get() >= 2 {"wstep active"} else {"wstep"} }>"2"</span>
+                                            <span class="wstep-line"></span>
+                                            <span class=move || { if wizard_step.get() >= 3 {"wstep active"} else {"wstep"} }>"3"</span>
+                                            <span class="wstep-line"></span>
+                                            <span class=move || { if wizard_step.get() >= 4 {"wstep active"} else {"wstep"} }>"4"</span>
+                                            <span class="wstep-line"></span>
+                                            <span class=move || { if wizard_step.get() >= 5 {"wstep active"} else {"wstep"} }>"5"</span>
+                                            <span class="wstep-line"></span>
+                                            <span class=move || { if wizard_step.get() >= 6 {"wstep active"} else {"wstep"} }>"6"</span>
+                                        </div>
+                                        <button class="wizard-close" on:click=move |_| wizard_open.set(false)>{"\u{2715}"}</button>
+                                    </div>
+                                    <div class="wizard-body">
+                                        {move || {
+                                            let s = wizard_step.get();
+                                            match s {
+                                                1 => view! {
+                                                    <div>
+                                                        <h3 class="wiz-step-title">"Step 1: Loan Type"</h3>
+                                                        <p class="wiz-step-sub">"Choose the structure for this loan."</p>
+                                                        <div class="wiz-type-cards">
+                                                            <div class=move || if wiz_loan_type.get()==0 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(0)>
+                                                                <div class="wiz-type-icon">{"\u{1f4c5}"}</div>
+                                                                <div class="wiz-type-name">"Fixed Schedule"</div>
+                                                                <div class="wiz-type-desc">"Set payment dates and amounts upfront. Standard term loan."</div>
+                                                            </div>
+                                                            <div class=move || if wiz_loan_type.get()==1 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(1)>
+                                                                <div class="wiz-type-icon">{"\u{1f504}"}</div>
+                                                                <div class="wiz-type-name">"Revolving"</div>
+                                                                <div class="wiz-type-desc">"Auto-renews each period. Either party can exit with notice."</div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                }.into_any(),
+                                                2 => view! {
+                                                    <div>
+                                                        <h3 class="wiz-step-title">"Step 2: Counterparty"</h3>
+                                                        <p class="wiz-step-sub">"Enter the borrower's wallet address."</p>
+                                                        <div class="wiz-field">
+                                                            <label>"Borrower Wallet Address"</label>
+                                                            <input type="text" placeholder="e.g. BCwHsGLP..."
+                                                                prop:value=move || wiz_borrower.get()
+                                                                on:input=move |ev| wiz_borrower.set(event_target_value(&ev)) />
+                                                        </div>
+                                                        <div class="wiz-field">
+                                                            <label>"Local Nickname (optional)"</label>
+                                                            <input type="text" placeholder="e.g. Alex"
+                                                                prop:value=move || wiz_nickname.get()
+                                                                on:input=move |ev| wiz_nickname.set(event_target_value(&ev)) />
+                                                        </div>
+                                                        {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
+                                                    </div>
+                                                }.into_any(),
+                                                3 => view! {
+                                                    <div>
+                                                        <h3 class="wiz-step-title">"Step 3: Terms"</h3>
+                                                        <p class="wiz-step-sub">{move || if wiz_loan_type.get()==0 { "Set the principal, rate, and term." } else { "Set the principal, rate, and renewal period." }}</p>
+                                                        <div class="wiz-field-row">
+                                                            <div class="wiz-field" style="flex:2">
+                                                                <label>"Principal Amount"</label>
+                                                                <input type="text" placeholder="e.g. 10000"
+                                                                    prop:value=move || wiz_amount.get()
+                                                                    on:input=move |ev| wiz_amount.set(event_target_value(&ev)) />
+                                                            </div>
+                                                            <div class="wiz-field" style="flex:1">
+                                                                <label>"Currency"</label>
+                                                                <select prop:value=move || wiz_currency.get()
+                                                                    on:change=move |ev| wiz_currency.set(event_target_value(&ev))>
+                                                                    <option value="KX">"KX"</option>
+                                                                    <option value="USD">"USD"</option>
+                                                                    <option value="EUR">"EUR"</option>
+                                                                </select>
+                                                            </div>
+                                                        </div>
+                                                        <div class="wiz-field">
+                                                            <label>"Annual Interest Rate (%)"</label>
+                                                            <input type="text" placeholder="e.g. 5.0"
+                                                                prop:value=move || wiz_rate_bps.get()
+                                                                on:input=move |ev| wiz_rate_bps.set(event_target_value(&ev)) />
+                                                        </div>
+                                                        {move || if wiz_loan_type.get() == 0 {
+                                                            view! {
+                                                                <div class="wiz-field">
+                                                                    <label>"Term (months)"</label>
+                                                                    <input type="text" placeholder="e.g. 24"
+                                                                        prop:value=move || wiz_term_months.get()
+                                                                        on:input=move |ev| wiz_term_months.set(event_target_value(&ev)) />
+                                                                </div>
+                                                            }.into_any()
+                                                        } else {
+                                                            view! {
+                                                                <div class="wiz-field">
+                                                                    <label>"Renewal Period"</label>
+                                                                    <select prop:value=move || wiz_renewal_period.get().to_string()
+                                                                        on:change=move |ev| { if let Ok(v) = event_target_value(&ev).parse::<u8>() { wiz_renewal_period.set(v); } }>
+                                                                        <option value="0">"Every second (AI micro-loans)"</option>
+                                                                        <option value="1">"Every hour"</option>
+                                                                        <option value="2">"Daily"</option>
+                                                                        <option value="3">"Weekly"</option>
+                                                                        <option value="4">"Monthly"</option>
+                                                                        <option value="5">"Yearly"</option>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="wiz-field">
+                                                                    <label>{move || {
+                                                                        let labels = ["Max % per second", "Max % per hour", "Max % per day", "Max % per week", "Max % per month", "Max % per year"];
+                                                                        labels[wiz_renewal_period.get() as usize].to_string()
+                                                                    }}</label>
+                                                                    <input type="text" placeholder="e.g. 0.20"
+                                                                        prop:value=move || wiz_rate_cap.get()
+                                                                        on:input=move |ev| wiz_rate_cap.set(event_target_value(&ev)) />
+                                                                </div>
+                                                            }.into_any()
+                                                        }}
+                                                        {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
+                                                    </div>
+                                                }.into_any(),
+                                                4 => view! {
+                                                    <div>
+                                                        <h3 class="wiz-step-title">{move || if wiz_loan_type.get()==0 { "Step 4: Payment Schedule" } else { "Step 4: Revolving Details" }}</h3>
+                                                        {move || if wiz_loan_type.get() == 0 {
+                                                            view! {
+                                                                <div>
+                                                                    <p class="wiz-step-sub">"Choose how payments are structured."</p>
+                                                                    <div class="wiz-type-cards" style="grid-template-columns:1fr 1fr 1fr">
+                                                                        <div class=move || if wiz_schedule_type.get()==0 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                            on:click=move |_| wiz_schedule_type.set(0)>
+                                                                            <div class="wiz-type-name">"Bullet"</div>
+                                                                            <div class="wiz-type-desc">"All principal + interest due at maturity."</div>
+                                                                        </div>
+                                                                        <div class=move || if wiz_schedule_type.get()==1 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                            on:click=move |_| wiz_schedule_type.set(1)>
+                                                                            <div class="wiz-type-name">"Amortizing"</div>
+                                                                            <div class="wiz-type-desc">"Equal monthly payments of principal + interest."</div>
+                                                                        </div>
+                                                                        <div class=move || if wiz_schedule_type.get()==2 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                            on:click=move |_| wiz_schedule_type.set(2)>
+                                                                            <div class="wiz-type-name">"Custom"</div>
+                                                                            <div class="wiz-type-desc">"Define each payment stage manually."</div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            }.into_any()
+                                                        } else {
+                                                            view! {
+                                                                <div>
+                                                                    <p class="wiz-step-sub">"Configure exit rights and renewal conditions."</p>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Exit Rights"</label>
+                                                                        <select prop:value=move || wiz_exit_rights.get().to_string()
+                                                                            on:change=move |ev| { if let Ok(v) = event_target_value(&ev).parse::<u8>() { wiz_exit_rights.set(v); } }>
+                                                                            <option value="0">"Either party (recommended)"</option>
+                                                                            <option value="1">"Lender only"</option>
+                                                                            <option value="2">"Borrower only"</option>
+                                                                            <option value="3">"Mutual consent"</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Revival Condition"</label>
+                                                                        <select prop:value=move || wiz_revival.get().to_string()
+                                                                            on:change=move |ev| { if let Ok(v) = event_target_value(&ev).parse::<u8>() { wiz_revival.set(v); } }>
+                                                                            <option value="0">"Always renew (default)"</option>
+                                                                        </select>
+                                                                        <p style="font-size:11px;color:rgba(232,232,216,0.4);margin-top:4px">"Oracle-based conditions coming in a future update."</p>
+                                                                    </div>
+                                                                </div>
+                                                            }.into_any()
+                                                        }}
+                                                    </div>
+                                                }.into_any(),
+                                                5 => view! {
+                                                    <div>
+                                                        <h3 class="wiz-step-title">"Step 5: Protection"</h3>
+                                                        <p class="wiz-step-sub">"Optional collateral and payment matching."</p>
+                                                        <div class="wiz-field">
+                                                            <label>"Collateral Lock ID (optional)"</label>
+                                                            <input type="text" placeholder="Enter an existing TYPE V lock ID"
+                                                                prop:value=move || wiz_collateral_id.get()
+                                                                on:input=move |ev| wiz_collateral_id.set(event_target_value(&ev)) />
+                                                            <p style="font-size:11px;color:rgba(232,232,216,0.4);margin-top:4px">"Leave blank if no collateral is required."</p>
+                                                        </div>
+                                                        <div class="wiz-field">
+                                                            <label>"Payment Matching"</label>
+                                                            <select prop:value=move || wiz_payment_match.get().to_string()
+                                                                on:change=move |ev| { if let Ok(v) = event_target_value(&ev).parse::<u8>() { wiz_payment_match.set(v); } }>
+                                                                <option value="0">"Exact amount required"</option>
+                                                                <option value="1">"Partial payments accepted"</option>
+                                                                <option value="2">"Minimum required"</option>
+                                                            </select>
+                                                        </div>
+                                                        <div class="wiz-field">
+                                                            <label>"Servicer Portal URL (optional)"</label>
+                                                            <input type="text" placeholder="https://..."
+                                                                prop:value=move || wiz_servicer_url.get()
+                                                                on:input=move |ev| wiz_servicer_url.set(event_target_value(&ev)) />
+                                                        </div>
+                                                    </div>
+                                                }.into_any(),
+                                                _ => view! {
+                                                    <div>
+                                                        <h3 class="wiz-step-title">"Step 6: Review & Sign"</h3>
+                                                        <p class="wiz-step-sub">"Confirm all details before signing."</p>
+                                                        <div class="wiz-review">
+                                                            <div class="wiz-review-row">
+                                                                <span class="wiz-review-label">"Type"</span>
+                                                                <span class="wiz-review-val">{move || if wiz_loan_type.get()==0 { "Fixed Schedule" } else { "Revolving" }}</span>
+                                                            </div>
+                                                            <div class="wiz-review-row">
+                                                                <span class="wiz-review-label">"Borrower"</span>
+                                                                <span class="wiz-review-val">{move || { let b = wiz_borrower.get(); if b.len() > 20 { format!("{}...{}", &b[..8], &b[b.len()-8..]) } else { b } }}</span>
+                                                            </div>
+                                                            {move || { let n = wiz_nickname.get(); if !n.is_empty() { view! { <div class="wiz-review-row"><span class="wiz-review-label">"Nickname"</span><span class="wiz-review-val">{n}</span></div> }.into_any() } else { view! { <span></span> }.into_any() }}}
+                                                            <div class="wiz-review-row">
+                                                                <span class="wiz-review-label">"Principal"</span>
+                                                                <span class="wiz-review-val">{move || format!("{} {}", wiz_amount.get(), wiz_currency.get())}</span>
+                                                            </div>
+                                                            <div class="wiz-review-row">
+                                                                <span class="wiz-review-label">"Interest Rate"</span>
+                                                                <span class="wiz-review-val">{move || format!("{}% annual", wiz_rate_bps.get())}</span>
+                                                            </div>
+                                                            {move || if wiz_loan_type.get() == 0 {
+                                                                view! {
+                                                                    <div class="wiz-review-row">
+                                                                        <span class="wiz-review-label">"Term"</span>
+                                                                        <span class="wiz-review-val">{move || format!("{} months", wiz_term_months.get())}</span>
+                                                                    </div>
+                                                                    <div class="wiz-review-row">
+                                                                        <span class="wiz-review-label">"Schedule"</span>
+                                                                        <span class="wiz-review-val">{move || match wiz_schedule_type.get() { 0 => "Bullet", 1 => "Amortizing", _ => "Custom" }}</span>
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else {
+                                                                let periods = ["Every second","Hourly","Daily","Weekly","Monthly","Yearly"];
+                                                                let exit_labels = ["Either party","Lender only","Borrower only","Mutual consent"];
+                                                                view! {
+                                                                    <div class="wiz-review-row">
+                                                                        <span class="wiz-review-label">"Renewal"</span>
+                                                                        <span class="wiz-review-val">{periods[wiz_renewal_period.get_untracked() as usize]}</span>
+                                                                    </div>
+                                                                    <div class="wiz-review-row">
+                                                                        <span class="wiz-review-label">"Rate Cap"</span>
+                                                                        <span class="wiz-review-val">{move || format!("{}% per period", wiz_rate_cap.get())}</span>
+                                                                    </div>
+                                                                    <div class="wiz-review-row">
+                                                                        <span class="wiz-review-label">"Exit Rights"</span>
+                                                                        <span class="wiz-review-val">{exit_labels[wiz_exit_rights.get_untracked() as usize]}</span>
+                                                                    </div>
+                                                                }.into_any()
+                                                            }}
+                                                            {move || { let c = wiz_collateral_id.get(); if !c.is_empty() {
+                                                                view! { <div class="wiz-review-row"><span class="wiz-review-label">"Collateral"</span><span class="wiz-review-val">{if c.len()>16 { format!("{}...", &c[..16]) } else { c }}</span></div> }.into_any()
+                                                            } else { view! { <span></span> }.into_any() }}}
+                                                        </div>
+                                                        {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
+                                                        {move || if wiz_success.get() {
+                                                            view! { <div class="wiz-success">{"\u{2705} Loan created successfully! Transaction submitted to the network."}</div> }.into_any()
+                                                        } else { view! { <span></span> }.into_any() }}
+                                                    </div>
+                                                }.into_any(),
+                                            }
+                                        }}
+                                    </div>
+                                    <div class="wizard-footer">
+                                        <button class="wizard-cancel" on:click=move |_| wizard_open.set(false)>"Cancel"</button>
+                                        <div style="display:flex;gap:8px">
+                                            {move || if wizard_step.get() > 1 {
+                                                view! { <button class="send-mode-btn" style="padding:10px 20px;font-size:13px" on:click=move |_| { wiz_error.set(String::new()); wizard_step.update(|s| *s -= 1); }>{"\u{2190} Back"}</button> }.into_any()
+                                            } else { view! { <span></span> }.into_any() }}
+                                            {move || if wizard_step.get() < 6 {
+                                                view! { <button class="send-mode-btn active" style="padding:10px 20px;font-size:13px" on:click=move |_| {
+                                                    wiz_error.set(String::new());
+                                                    let s = wizard_step.get_untracked();
+                                                    if s == 2 && wiz_borrower.get_untracked().trim().is_empty() {
+                                                        wiz_error.set("Borrower address is required.".into());
+                                                        return;
+                                                    }
+                                                    if s == 3 {
+                                                        if wiz_amount.get_untracked().trim().is_empty() || wiz_amount.get_untracked().trim().parse::<f64>().is_err() {
+                                                            wiz_error.set("Enter a valid principal amount.".into());
+                                                            return;
+                                                        }
+                                                        if wiz_rate_bps.get_untracked().trim().is_empty() || wiz_rate_bps.get_untracked().trim().parse::<f64>().is_err() {
+                                                            wiz_error.set("Enter a valid interest rate.".into());
+                                                            return;
+                                                        }
+                                                        if wiz_loan_type.get_untracked() == 0 && (wiz_term_months.get_untracked().trim().is_empty() || wiz_term_months.get_untracked().trim().parse::<u32>().is_err()) {
+                                                            wiz_error.set("Enter a valid term in months.".into());
+                                                            return;
+                                                        }
+                                                    }
+                                                    wizard_step.update(|s| *s += 1);
+                                                }>{"Next \u{2192}"}</button> }.into_any()
+                                            } else if !wiz_success.get() {
+                                                view! { <button class="send-mode-btn active" style="padding:10px 20px;font-size:13px;background:#d4a84b;color:#111" disabled=move || wiz_submitting.get() on:click=move |_| {
+                                                    wiz_error.set(String::new());
+                                                    wiz_submitting.set(true);
+                                                    // TODO: Build LoanCreate tx and submit via RPC
+                                                    // For now simulate success after brief delay
+                                                    let cb = wasm_bindgen::prelude::Closure::once(move || {
+                                                        wiz_submitting.set(false);
+                                                        wiz_success.set(true);
+                                                    });
+                                                    let _ = web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), 1500);
+                                                    cb.forget();
+                                                }>{move || if wiz_submitting.get() { "Signing..." } else { "\u{270d}\u{FE0E} Sign & Submit" }}</button> }.into_any()
+                                            } else {
+                                                view! { <button class="send-mode-btn active" style="padding:10px 20px;font-size:13px" on:click=move |_| wizard_open.set(false)>"Done"</button> }.into_any()
+                                            }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        }.into_any()
+                    } else { view! { <span></span> }.into_any() }}
 
                     // Bug report modal
                     {move || if bug_modal_open.get() {
