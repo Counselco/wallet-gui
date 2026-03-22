@@ -134,6 +134,31 @@ fn is_ios() -> bool {
     }
 }
 
+/// Evaluate a loan offer for predatory lending flags.
+/// Returns (is_blocked, is_warned, messages).
+fn check_loan_flags(rate: f64, principal_kx: f64) -> (bool, bool, Vec<String>) {
+    let ico_price = 0.00319;
+    let principal_usd = principal_kx * ico_price;
+    let mut blocked = false;
+    let mut warned = false;
+    let mut msgs = Vec::new();
+    if rate > 15.0 {
+        blocked = true;
+        msgs.push("Annual rate exceeds 15% protocol limit".to_string());
+    } else if rate > 10.0 {
+        warned = true;
+        msgs.push("Annual rate above 10%".to_string());
+    }
+    if principal_usd > 250.0 {
+        blocked = true;
+        msgs.push("Principal exceeds $250 USD protocol limit".to_string());
+    } else if principal_usd > 100.0 {
+        warned = true;
+        msgs.push("Principal above $100 USD equivalent".to_string());
+    }
+    (blocked, warned, msgs)
+}
+
 // ── Trusted contact type (frontend) ──────────────────────────────────────────
 
 #[derive(Clone, Deserialize, Default)]
@@ -1196,6 +1221,22 @@ fn App() -> impl IntoView {
     let mobile_loan_show_terms = RwSignal::new(false);
     // Autopay preferences (keyed by loan_id_hex)
     let autopay_prefs: RwSignal<HashMap<String, bool>> = RwSignal::new(HashMap::new());
+    // A1: Pending loan offer count for Receive tab
+    let pending_loan_offers_count = RwSignal::new(0u32);
+    // A4: Cooling-off state after accepting a loan offer
+    let cooloff_loan_id = RwSignal::new(Option::<String>::None);
+    let cooloff_remaining = RwSignal::new(0i64);
+    // A6: Loan reference number in wizard
+    let wiz_loan_ref = RwSignal::new(String::new());
+    // A8: Wizard success TX hash
+    let wiz_success_tx = RwSignal::new(Option::<String>::None);
+    // A9: Track whether loans data has been loaded at least once
+    let loans_loaded = RwSignal::new(false);
+    // A5: Wizard email-first flow
+    let wiz_borrower_email = RwSignal::new(String::new());
+    let wiz_email_resolved = RwSignal::new(Option::<String>::None);
+    let wiz_email_display = RwSignal::new(String::new());
+    let wiz_offer_expiry = RwSignal::new(0u64);
 
     // Pay deep link pre-fill signals
     let pay_link_to = RwSignal::new(String::new());
@@ -1446,6 +1487,12 @@ fn App() -> impl IntoView {
                 if let Ok(a) = call::<AccountInfo>("get_account_info", no_args()).await {
                     info.set(Some(a));
                 }
+                // Refresh pending loan offer count (A1)
+                if let Ok(offers) = call::<serde_json::Value>("get_loan_offers", no_args()).await {
+                    if let Some(arr) = offers.as_array() {
+                        pending_loan_offers_count.set(arr.len() as u32);
+                    }
+                }
                 // Refresh pending poke count (filter out blocked senders)
                 {
                     let blocked = call::<Vec<String>>("get_blocked_senders", no_args()).await.unwrap_or_default();
@@ -1471,6 +1518,22 @@ fn App() -> impl IntoView {
             cb.as_ref().unchecked_ref(), 10_000
         );
         cb.forget(); // leak closure — lives for app lifetime
+    }
+
+    // ── A4: Cooloff countdown timer — decrements cooloff_remaining every second ──
+    {
+        let cooloff_cb = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+            let r = cooloff_remaining.get_untracked();
+            if r > 0 {
+                cooloff_remaining.set(r - 1);
+            } else if cooloff_loan_id.get_untracked().is_some() {
+                cooloff_loan_id.set(None);
+            }
+        });
+        let _ = web_sys::window().unwrap().set_interval_with_callback_and_timeout_and_arguments_0(
+            cooloff_cb.as_ref().unchecked_ref(), 1_000
+        );
+        cooloff_cb.forget();
     }
 
     // ── Deep-link-poke listener (for warm-start — app already running) ─────
@@ -2000,7 +2063,7 @@ fn App() -> impl IntoView {
                             match tab {
                                 // Tab 0: Receive
                                 0 => view! {
-                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal />
+                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal pending_loan_offers_count=pending_loan_offers_count />
                                 }.into_any(),
                                 // Tab 1: Send / Request KX
                                 1 => view! {
@@ -2149,38 +2212,77 @@ fn App() -> impl IntoView {
                                             <PromisesPanel info=info lang=lang />
                                         }.into_any(),
                                         _ => view! {
-                                            // Incoming loan offers (mobile + desktop)
+                                            // Incoming loan offers (mobile + desktop) — A2: identity, A3: predatory flags, A4: cooloff
                                             {move || {
                                                 let data = loan_offers.get();
+                                                let labels = wallet_labels.get();
                                                 let offers = data.as_array();
                                                 if let Some(arr) = offers {
                                                     if !arr.is_empty() {
                                                         let cards: Vec<_> = arr.iter().map(|offer| {
                                                             let lender = offer.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("\u{2014}").to_string();
                                                             let lender_short = if lender.len() > 16 { format!("{}...{}", &lender[..6], &lender[lender.len()-4..]) } else { lender.clone() };
+                                                            // A2: Identity resolution — wallet_labels first, then truncated address
+                                                            let lender_display = labels.get(&lender).cloned()
+                                                                .map(|label| format!("{} ({})", label, lender_short))
+                                                                .unwrap_or_else(|| lender_short.clone());
                                                             let principal = offer.get("principal_kx").and_then(|v| v.as_u64()).unwrap_or(0);
                                                             let rate = offer.get("interest_rate").and_then(|v| v.get("Fixed")).and_then(|v| v.as_u64()).unwrap_or(0);
                                                             let rate_pct = rate as f64 / 100.0;
                                                             let loan_id = offer.get("loan_id_hex").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                             let lid = loan_id.clone();
                                                             let lid2 = loan_id.clone();
+                                                            // A3: Predatory loan flags
+                                                            let rate_annual = offer.get("interest_rate_annual_pct").and_then(|v| v.as_f64()).unwrap_or(rate_pct);
+                                                            let principal_f = principal as f64;
+                                                            let (is_blocked, is_warned, _flag_msgs) = check_loan_flags(rate_annual, principal_f);
+                                                            // A2: Terms viewed gate
+                                                            let terms_viewed = RwSignal::new(false);
+                                                            let accept_disabled = is_blocked;
                                                             view! {
                                                                 <div class="offer-card">
                                                                     <div class="offer-card-left">
                                                                         <div style="font-size:14px;font-weight:600;color:#e5e7eb">{"\u{1f4cb} Loan Offer"}</div>
-                                                                        <div style="font-size:12px;color:rgba(232,232,216,0.5);margin-top:2px">{format!("From: {}", lender_short)}</div>
+                                                                        <div style="font-size:12px;color:rgba(232,232,216,0.5);margin-top:2px">{format!("From: {}", lender_display)}</div>
                                                                         <div style="font-size:13px;color:#d4a84b;margin-top:4px;font-weight:600">
                                                                             {format!("{} KX \u{00b7} {}% \u{00b7} Daily", principal, rate_pct)}
                                                                         </div>
                                                                     </div>
+                                                                    // A3: Predatory loan flag banners
+                                                                    {if is_blocked {
+                                                                        view! { <div style="background:rgba(231,76,60,0.15);border:1px solid #e74c3c;border-radius:8px;padding:10px;margin:8px 0;font-size:12px;color:#e74c3c;">
+                                                                            "This offer cannot be accepted \u{2014} it exceeds safe lending limits set by the ChronX Protocol Foundation."
+                                                                        </div> }.into_any()
+                                                                    } else if is_warned {
+                                                                        view! { <div style="background:rgba(241,196,15,0.15);border:1px solid #f1c40f;border-radius:8px;padding:10px;margin:8px 0;font-size:12px;color:#f1c40f;">
+                                                                            "This offer has elevated risk characteristics. Review terms carefully before accepting."
+                                                                        </div> }.into_any()
+                                                                    } else {
+                                                                        view! { <span></span> }.into_any()
+                                                                    }}
                                                                     <div class="offer-card-actions">
+                                                                        // A2: View Terms button
+                                                                        <button style="background:transparent;border:1px solid #d4a84b;color:#d4a84b;padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px;" on:click=move |_| {
+                                                                            terms_viewed.set(true);
+                                                                        }>
+                                                                            "View Terms"
+                                                                        </button>
+                                                                        // A2: Accept button — disabled until terms viewed; A3: permanently disabled if blocked
                                                                         <button class="offer-accept-btn"
+                                                                            disabled=move || accept_disabled || !terms_viewed.get()
+                                                                            style=move || if accept_disabled || !terms_viewed.get() { "opacity:0.4;cursor:not-allowed;" } else { "" }
                                                                             on:click=move |_| {
+                                                                                if accept_disabled || !terms_viewed.get() { return; }
                                                                                 let id = lid.clone();
+                                                                                // A4: Start cooloff after accept
+                                                                                let cid = cooloff_loan_id;
+                                                                                let crem = cooloff_remaining;
                                                                                 spawn_local(async move {
                                                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
                                                                                     match call::<String>("accept_loan_offer", args).await {
                                                                                         Ok(_) => {
+                                                                                            cid.set(Some(id));
+                                                                                            crem.set(600);
                                                                                             if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); }
                                                                                             if let Ok(v) = call::<serde_json::Value>("get_wallet_loans", no_args()).await { loans_data.set(v); }
                                                                                         }
@@ -2612,6 +2714,7 @@ fn App() -> impl IntoView {
                                                 wallet_labels.set(labels);
                                             }
                                             loans_data.set(loans_val);
+                                            loans_loaded.set(true); // A9: mark loaded
                                         }
                                         if let Ok(offers_val) = call::<serde_json::Value>("get_loan_offers", no_args()).await {
                                             loan_offers.set(offers_val);
@@ -2649,7 +2752,7 @@ fn App() -> impl IntoView {
                                                 <div>
                                                     <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
                                                         <button class="send-mode-btn active" style="font-size:13px;padding:8px 16px"
-                                                            on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wizard_open.set(true); }>"+ New Loan"</button>
+                                                            on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wiz_success_tx.set(None); wiz_loan_ref.set(String::new()); wiz_borrower_email.set(String::new()); wiz_email_resolved.set(None); wiz_email_display.set(String::new()); wiz_offer_expiry.set(0); wizard_open.set(true); }>"+ New Loan"</button>
                                                     </div>
                                                     <div class="loans-summary">
                                                         {move || {
@@ -2682,6 +2785,8 @@ fn App() -> impl IntoView {
                                                             } else {
                                                                 (0, 0, None, 0)
                                                             };
+                                                            // A9: Show "0" when loaded but empty, em-dash only while loading
+                                                            let loaded = loans_loaded.get();
                                                             let total_str = if total_lent > 0 {
                                                                 let s = total_lent.to_string();
                                                                 let mut r = String::new();
@@ -2690,7 +2795,7 @@ fn App() -> impl IntoView {
                                                                     r.push(c);
                                                                 }
                                                                 format!("{} KX", r.chars().rev().collect::<String>())
-                                                            } else { "\u{2014}".to_string() };
+                                                            } else if loaded { "0 KX".to_string() } else { "\u{2014}".to_string() };
                                                             let due_str = if let Some(ts) = next_due {
                                                                 let now_ms = js_sys::Date::now();
                                                                 let now_s = (now_ms / 1000.0) as u64;
@@ -2705,10 +2810,11 @@ fn App() -> impl IntoView {
                                                                     let day = d.get_date();
                                                                     format!("{} {}", months.get(m).unwrap_or(&"???"), day)
                                                                 }
-                                                            } else { "\u{2014}".to_string() };
+                                                            } else if loaded { "None".to_string() } else { "\u{2014}".to_string() };
+                                                            let active_str = if active_count > 0 { active_count.to_string() } else if loaded { "0".to_string() } else { "\u{2014}".to_string() };
                                                             view! {
                                                                 <div class="loan-stat-card">
-                                                                    <span class="loan-stat-val">{if active_count > 0 { active_count.to_string() } else { "\u{2014}".to_string() }}</span>
+                                                                    <span class="loan-stat-val">{active_str}</span>
                                                                     <span class="loan-stat-label">"Active Loans"</span>
                                                                 </div>
                                                                 <div class="loan-stat-card">
@@ -2926,7 +3032,7 @@ fn App() -> impl IntoView {
                                                                         "Loans are recorded on the ChronX blockchain via Genesis 10 primitives."
                                                                     </div>
                                                                     <button class="send-mode-btn active" style="margin-top:20px;padding:10px 24px;font-size:14px"
-                                                                        on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wizard_open.set(true); }>"Create First Loan"</button>
+                                                                        on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wiz_success_tx.set(None); wiz_loan_ref.set(String::new()); wiz_borrower_email.set(String::new()); wiz_email_resolved.set(None); wiz_email_display.set(String::new()); wiz_offer_expiry.set(0); wizard_open.set(true); }>"Create First Loan"</button>
                                                                 </div>
                                                             }.into_any()
                                                         }}
@@ -3045,18 +3151,18 @@ fn App() -> impl IntoView {
                                                         </div>
                                                     </div>
 
-                                                    // ── Loans Owed Summary ──
+                                                    // ── Loans Owed Summary (A9: show 0 when loaded) ──
                                                     <div class="loans-summary" style="margin-top:20px">
                                                         <div class="loan-stat-card">
-                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-val">{move || if loans_loaded.get() { "0".to_string() } else { "\u{2014}".to_string() }}</span>
                                                             <span class="loan-stat-label">"Loans Owed"</span>
                                                         </div>
                                                         <div class="loan-stat-card">
-                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-val">{move || if loans_loaded.get() { "0 KX".to_string() } else { "\u{2014}".to_string() }}</span>
                                                             <span class="loan-stat-label">"Total Owed"</span>
                                                         </div>
                                                         <div class="loan-stat-card">
-                                                            <span class="loan-stat-val">"\u{2014}"</span>
+                                                            <span class="loan-stat-val">{move || if loans_loaded.get() { "None".to_string() } else { "\u{2014}".to_string() }}</span>
                                                             <span class="loan-stat-label">"Next Due"</span>
                                                         </div>
                                                         <div class="loan-stat-card">
@@ -3162,6 +3268,48 @@ fn App() -> impl IntoView {
                     </div>
                     </div> // close main-content
 
+                    // ── A4: Cooloff Modal — 10min cancel window after accepting a loan ──
+                    {move || {
+                        if let Some(ref loan_id) = cooloff_loan_id.get() {
+                            let secs = cooloff_remaining.get();
+                            let mins = secs / 60;
+                            let s = secs % 60;
+                            let lid_cancel = loan_id.clone();
+                            view! {
+                                <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;">
+                                    <div style="background:var(--bg2,#0f1422);border:1px solid #d4a84b;border-radius:12px;padding:32px;max-width:400px;text-align:center;">
+                                        <h3 style="color:#d4a84b;margin-bottom:16px;">"Loan Accepted"</h3>
+                                        <p style="color:#e5e7eb;font-size:14px;margin-bottom:16px;">
+                                            {format!("{:02}:{:02} remaining to cancel", mins, s)}
+                                        </p>
+                                        <p style="color:rgba(232,232,216,0.5);font-size:12px;margin-bottom:20px;">
+                                            "You may cancel within 10 minutes by submitting a cancellation transaction."
+                                        </p>
+                                        <div style="display:flex;gap:12px;justify-content:center;">
+                                            <button style="background:#e74c3c;color:#fff;border:none;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;" on:click=move |_| {
+                                                let lid = lid_cancel.clone();
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": lid})).unwrap_or(no_args());
+                                                    let _ = call::<String>("decline_loan_offer", args).await;
+                                                });
+                                                cooloff_loan_id.set(None);
+                                            }>
+                                                "Cancel Loan"
+                                            </button>
+                                            <button style="background:transparent;border:1px solid #374151;color:#9ca3af;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;" on:click=move |_| {
+                                                cooloff_loan_id.set(None);
+                                            }>
+                                                "Dismiss"
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }
+                    }}
+
                     // ── Loan Wizard Modal (Desktop Only) ──
                     {move || if wizard_open.get() && is_desktop() {
                         let step = wizard_step.get();
@@ -3217,12 +3365,73 @@ fn App() -> impl IntoView {
                                                                 <div class="wiz-type-desc">"Auto-renews each period. Either party can exit with notice."</div>
                                                             </div>
                                                         </div>
+                                                        // A6: Loan Reference Number
+                                                        <div style="margin-top:16px;">
+                                                            <label style="color:rgba(232,232,216,0.5);font-size:12px;">"Loan Reference / Servicer Number (optional)"</label>
+                                                            <input type="text" maxlength="64" placeholder="Your internal reference number or servicer tracking ID"
+                                                                style="width:100%;padding:8px;background:var(--bg,#0c0e1a);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#e5e7eb;font-size:13px;margin-top:4px;"
+                                                                prop:value=move || wiz_loan_ref.get()
+                                                                on:input=move |e| wiz_loan_ref.set(event_target_value(&e))
+                                                            />
+                                                            <span style="font-size:11px;color:rgba(232,232,216,0.4);">"Stored on-chain in the loan memo field."</span>
+                                                        </div>
                                                     </div>
                                                 }.into_any(),
                                                 2 => view! {
                                                     <div>
                                                         <h3 class="wiz-step-title">"Step 2: Counterparty"</h3>
-                                                        <p class="wiz-step-sub">"Enter the borrower's wallet address."</p>
+                                                        <p class="wiz-step-sub">"Enter the borrower's email or wallet address."</p>
+                                                        // A5: Email-first lookup
+                                                        <div class="wiz-field">
+                                                            <label>"Borrower Email Address"</label>
+                                                            <input type="email" placeholder="borrower@example.com"
+                                                                prop:value=move || wiz_borrower_email.get()
+                                                                on:input=move |ev| {
+                                                                    let val = event_target_value(&ev);
+                                                                    wiz_borrower_email.set(val.clone());
+                                                                    // Reset resolved state on change
+                                                                    wiz_email_resolved.set(None);
+                                                                    wiz_email_display.set(String::new());
+                                                                }
+                                                                on:blur=move |_| {
+                                                                    let email = wiz_borrower_email.get_untracked();
+                                                                    if !email.is_empty() && email.contains('@') {
+                                                                        spawn_local(async move {
+                                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({"email": email})).unwrap_or(no_args());
+                                                                            if let Ok(result) = call::<serde_json::Value>("lookup_wallet_by_email", args).await {
+                                                                                if let Some(wallet) = result.get("wallet_address").and_then(|v| v.as_str()) {
+                                                                                    let display = result.get("display_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                                    wiz_email_resolved.set(Some(wallet.to_string()));
+                                                                                    wiz_email_display.set(display);
+                                                                                    wiz_borrower.set(wallet.to_string());
+                                                                                }
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                }
+                                                            />
+                                                        </div>
+                                                        // A5: Resolved state display
+                                                        {move || {
+                                                            if let Some(ref wallet) = wiz_email_resolved.get() {
+                                                                let display = wiz_email_display.get();
+                                                                let short = if wallet.len() > 14 { format!("{}...{}", &wallet[..6], &wallet[wallet.len()-4..]) } else { wallet.clone() };
+                                                                let label = if display.is_empty() { short.clone() } else { format!("{} ({})", display, short) };
+                                                                view! {
+                                                                    <div style="padding:8px 12px;background:rgba(46,204,113,0.1);border:1px solid rgba(46,204,113,0.3);border-radius:6px;margin-bottom:8px;font-size:12px;color:#2ecc71;">
+                                                                        {format!("\u{2713} Registered ChronX user \u{2014} {}", label)}
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else if !wiz_borrower_email.get().is_empty() && wiz_borrower_email.get().contains('@') {
+                                                                view! {
+                                                                    <div style="padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;margin-bottom:8px;font-size:12px;color:rgba(232,232,216,0.5);">
+                                                                        "Email not found in registry. Enter wallet address manually below."
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else {
+                                                                view! { <span></span> }.into_any()
+                                                            }
+                                                        }}
                                                         <div class="wiz-field">
                                                             <label>"Borrower Wallet Address"</label>
                                                             <input type="text" placeholder="e.g. BCwHsGLP..."
@@ -3234,6 +3443,17 @@ fn App() -> impl IntoView {
                                                             <input type="text" placeholder="e.g. Alex"
                                                                 prop:value=move || wiz_nickname.get()
                                                                 on:input=move |ev| wiz_nickname.set(event_target_value(&ev)) />
+                                                        </div>
+                                                        // A5: Offer Expires dropdown
+                                                        <div class="wiz-field">
+                                                            <label>"Offer Expires In"</label>
+                                                            <select prop:value=move || wiz_offer_expiry.get().to_string()
+                                                                on:change=move |ev| { if let Ok(v) = event_target_value(&ev).parse::<u64>() { wiz_offer_expiry.set(v); } }>
+                                                                <option value="0">"Never"</option>
+                                                                <option value="86400">"24 hours"</option>
+                                                                <option value="172800">"48 hours"</option>
+                                                                <option value="604800">"7 days"</option>
+                                                            </select>
                                                         </div>
                                                         {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
                                                     </div>
@@ -3265,6 +3485,29 @@ fn App() -> impl IntoView {
                                                                 prop:value=move || wiz_rate_bps.get()
                                                                 on:input=move |ev| wiz_rate_bps.set(event_target_value(&ev)) />
                                                         </div>
+                                                        // A7: Live payment preview
+                                                        {move || {
+                                                            let amount: f64 = wiz_amount.get().parse().unwrap_or(0.0);
+                                                            let rate: f64 = wiz_rate_bps.get().parse().unwrap_or(0.0);
+                                                            let renewal = wiz_renewal_period.get();
+                                                            if amount > 0.0 && rate > 0.0 {
+                                                                let (per_period, label) = match renewal {
+                                                                    0 => ((amount * rate / 100.0) / 31_536_000.0, "per second"),
+                                                                    1 => ((amount * rate / 100.0) / 8_760.0, "per hour"),
+                                                                    2 => ((amount * rate / 100.0) / 365.0, "per day"),
+                                                                    3 => ((amount * rate / 100.0) / 52.0, "per week"),
+                                                                    4 => ((amount * rate / 100.0) / 12.0, "per month"),
+                                                                    _ => ((amount * rate / 100.0), "per year"),
+                                                                };
+                                                                view! {
+                                                                    <p style="color:#d4a84b;font-size:13px;font-style:italic;margin-top:8px;">
+                                                                        {format!("\u{2248} {:.4} KX {}", per_period, label)}
+                                                                    </p>
+                                                                }.into_any()
+                                                            } else {
+                                                                view! { <span></span> }.into_any()
+                                                            }
+                                                        }}
                                                         {move || if wiz_loan_type.get() == 0 {
                                                             view! {
                                                                 <div class="wiz-field">
@@ -3463,15 +3706,85 @@ fn App() -> impl IntoView {
                                                                 view! { <div class="wiz-review-row"><span class="wiz-review-label">"Collateral"</span><span class="wiz-review-val">{if c.len()>16 { format!("{}...", &c[..16]) } else { c }}</span></div> }.into_any()
                                                             } else { view! { <span></span> }.into_any() }}}
                                                         </div>
+                                                        // A8 Fix 3: Plain-English summary line
+                                                        {move || {
+                                                            let loan_type = if wiz_loan_type.get() == 0 { "Fixed" } else { "Revolving" };
+                                                            let currency = wiz_currency.get();
+                                                            let amount = wiz_amount.get();
+                                                            let rate = wiz_rate_bps.get();
+                                                            let renewal = match wiz_renewal_period.get() {
+                                                                0 => "per-second", 1 => "hourly", 2 => "daily", 3 => "weekly", 4 => "monthly", _ => "yearly"
+                                                            };
+                                                            let exit = match wiz_exit_rights.get() {
+                                                                0 => "either party may exit", 1 => "lender may exit", 2 => "borrower may exit", _ => "mutual consent required"
+                                                            };
+                                                            let collateral = if wiz_collateral_id.get().is_empty() { "no collateral posted" } else { "collateral posted" };
+                                                            view! {
+                                                                <p style="color:rgba(232,232,216,0.5);font-size:12px;font-style:italic;margin:12px 0;line-height:1.5;">
+                                                                    {format!("Summary: {} {} loan of {} KX at {}% annual, {} payments, {}, {}.",
+                                                                        loan_type, currency, amount, rate, renewal, exit, collateral)}
+                                                                </p>
+                                                            }
+                                                        }}
+                                                        // A8 Fix 2: Validation banners
+                                                        {move || {
+                                                            let borrower = wiz_borrower.get();
+                                                            let rate: f64 = wiz_rate_bps.get().parse().unwrap_or(0.0);
+                                                            let amount: f64 = wiz_amount.get().parse().unwrap_or(0.0);
+                                                            let has_collateral = !wiz_collateral_id.get().is_empty();
+                                                            let mut banners = Vec::new();
+                                                            if !borrower.is_empty() {
+                                                                banners.push(view! { <div style="background:rgba(46,204,113,0.15);border-left:3px solid #2ecc71;padding:6px 12px;margin:6px 0;font-size:12px;color:#2ecc71;">
+                                                                    {"\u{2713} Borrower wallet verified"}
+                                                                </div> }.into_any());
+                                                            }
+                                                            if !has_collateral {
+                                                                banners.push(view! { <div style="background:rgba(241,196,15,0.15);border-left:3px solid #f1c40f;padding:6px 12px;margin:6px 0;font-size:12px;color:#f1c40f;">
+                                                                    {"\u{26a0} Unsecured loan \u{2014} no collateral"}
+                                                                </div> }.into_any());
+                                                            }
+                                                            if rate > 10.0 {
+                                                                banners.push(view! { <div style="background:rgba(241,196,15,0.15);border-left:3px solid #f1c40f;padding:6px 12px;margin:6px 0;font-size:12px;color:#f1c40f;">
+                                                                    {"\u{26a0} Rate above 10% annual"}
+                                                                </div> }.into_any());
+                                                            }
+                                                            if amount * 0.00319 > 100.0 {
+                                                                banners.push(view! { <div style="background:rgba(241,196,15,0.15);border-left:3px solid #f1c40f;padding:6px 12px;margin:6px 0;font-size:12px;color:#f1c40f;">
+                                                                    {"\u{26a0} Principal above $100 USD"}
+                                                                </div> }.into_any());
+                                                            }
+                                                            view! { <div>{banners}</div> }
+                                                        }}
                                                         {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
                                                         {move || { let c = wiz_collateral_id.get(); if c.trim().is_empty() && !wiz_success.get() {
-                                                            view! { <div style="margin-top:8px;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b">{"\u{26a0} No collateral locked \u{2014} borrower accepts on trust"}</div> }.into_any()
+                                                            view! { <div style="margin-top:8px;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b">{"\u{26a0} No collateral locked \u{2014} lender extends this loan on trust"}</div> }.into_any()
                                                         } else { view! { <span></span> }.into_any() }}}
+                                                        // A8: Success state with TX hash + track text
                                                         {move || if wiz_success.get() {
                                                             view! {
                                                                 <div class="wiz-success">
                                                                     <div style="font-size:15px;margin-bottom:8px">{"\u{2705} Offer sent \u{2014} waiting for borrower acceptance."}</div>
-                                                                    <div style="font-size:11px;color:rgba(232,232,216,0.5);margin-top:4px">"Save these \u{2014} your on-chain proof."</div>
+                                                                    <div style="font-size:12px;color:rgba(232,232,216,0.5);margin-top:4px">"Track this offer in your Activity tab."</div>
+                                                                    // A8 Fix 5: Show TX hash
+                                                                    {move || {
+                                                                        if let Some(ref tx_id) = wiz_success_tx.get() {
+                                                                            let tx_copy = tx_id.clone();
+                                                                            view! {
+                                                                                <div style="margin-top:8px;font-size:12px;">
+                                                                                    <span style="color:rgba(232,232,216,0.5);">"TX: "</span>
+                                                                                    <code style="color:#d4a84b;font-size:11px;">{tx_id.clone()}</code>
+                                                                                    <button style="margin-left:8px;background:transparent;border:1px solid rgba(255,255,255,0.1);color:#d4a84b;padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;" on:click=move |_| {
+                                                                                        if let Some(win) = web_sys::window() {
+                                                                                            let clip = win.navigator().clipboard();
+                                                                                            let _ = clip.write_text(&tx_copy);
+                                                                                        }
+                                                                                    }>"Copy"</button>
+                                                                                </div>
+                                                                            }.into_any()
+                                                                        } else {
+                                                                            view! { <span></span> }.into_any()
+                                                                        }
+                                                                    }}
                                                                 </div>
                                                             }.into_any()
                                                         } else { view! { <span></span> }.into_any() }}
@@ -3481,7 +3794,12 @@ fn App() -> impl IntoView {
                                         }}
                                     </div>
                                     <div class="wizard-footer">
-                                        <button class="wizard-cancel" on:click=move |_| wizard_open.set(false)>"Cancel"</button>
+                                        // A8 Fix 4: Hide Cancel button on success
+                                        {move || if !wiz_success.get() {
+                                            view! { <button class="wizard-cancel" on:click=move |_| wizard_open.set(false)>"Cancel"</button> }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
                                         <div style="display:flex;gap:8px">
                                             {move || if wizard_step.get() > 1 {
                                                 view! { <button class="send-mode-btn" style="padding:10px 20px;font-size:13px" on:click=move |_| { wiz_error.set(String::new()); wizard_step.update(|s| *s -= 1); }>{"\u{2190} Back"}</button> }.into_any()
@@ -3522,7 +3840,16 @@ fn App() -> impl IntoView {
                                                     let coll_hex = { let c = wiz_collateral_id.get_untracked(); if c.trim().is_empty() { None::<String> } else { Some(c) } };
                                                     let svc_url = { let s = wiz_servicer_url.get_untracked(); if s.trim().is_empty() { None::<String> } else { Some(s) } };
                                                     let nick = wiz_nickname.get_untracked();
-                                                    let memo_str = if nick.is_empty() { None::<String> } else { Some(format!("Borrower: {}", nick)) };
+                                                    // A6: Include loan reference in memo
+                                                    let loan_ref = wiz_loan_ref.get_untracked();
+                                                    let memo_str = {
+                                                        let mut parts = Vec::new();
+                                                        if !nick.is_empty() { parts.push(format!("Borrower: {}", nick)); }
+                                                        if !loan_ref.is_empty() { parts.push(format!("Ref: {}", loan_ref)); }
+                                                        if parts.is_empty() { None::<String> } else { Some(parts.join(" | ")) }
+                                                    };
+                                                    // A5: Wire offer expiry
+                                                    let expiry_secs = { let v = wiz_offer_expiry.get_untracked(); if v == 0 { None::<u64> } else { Some(v) } };
                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                                                         "borrowerAddress": wiz_borrower.get_untracked(),
                                                         "principalKx": wiz_amount.get_untracked().trim().parse::<f64>().unwrap_or(0.0),
@@ -3537,7 +3864,7 @@ fn App() -> impl IntoView {
                                                         "collateralLockHex": coll_hex,
                                                         "paymentMatchIdx": wiz_payment_match.get_untracked(),
                                                         "servicerUrl": svc_url,
-                                                        "offerExpirySeconds": Option::<u64>::None,
+                                                        "offerExpirySeconds": expiry_secs,
                                                         "memo": memo_str,
                                                     })).unwrap_or(no_args());
                                                     spawn_local(async move {
@@ -3545,6 +3872,7 @@ fn App() -> impl IntoView {
                                                             Ok(txid) => {
                                                                 wiz_submitting.set(false);
                                                                 wiz_success.set(true);
+                                                                wiz_success_tx.set(Some(txid));
                                                                 // Refresh loans list
                                                                 if let Ok(loans_val) = call::<serde_json::Value>("get_wallet_loans", no_args()).await {
                                                                     loans_data.set(loans_val);
@@ -4330,6 +4658,7 @@ fn AccountPanel(
     avatar_uploading: RwSignal<bool>,
     show_profile_modal: RwSignal<bool>,
     badge: RwSignal<String>,
+    pending_loan_offers_count: RwSignal<u32>,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
@@ -5283,6 +5612,25 @@ fn AccountPanel(
                                     active_tab.set(2); activity_sub.set(1); // navigate to Promises
                                 }>{t(&lang.get(), "view_promises")}</a>
                             </p>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }
+                }}
+                // ── Incoming loan offer count link (A1) ──────────────────────
+                {move || {
+                    let count = pending_loan_offers_count.get();
+                    if count > 0 {
+                        view! {
+                            <div style="margin-top:6px;text-align:center">
+                                <a href="#" style="color:#d4a84b;font-size:13px;text-decoration:none" on:click=move |e| {
+                                    e.prevent_default();
+                                    active_tab.set(2);
+                                    activity_sub.set(2);
+                                }>
+                                    {format!("You have {} new offer(s)", count)}
+                                </a>
+                            </div>
                         }.into_any()
                     } else {
                         view! { <span></span> }.into_any()

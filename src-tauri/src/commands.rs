@@ -88,6 +88,29 @@ fn config_path(app: &AppHandle) -> PathBuf {
 
 // ── Config file ───────────────────────────────────────────────────────────────
 
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub enum PrivacyLevel {
+    #[default]
+    Standard,
+    Low,
+    High,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JurisdictionTag {
+    pub country_code: String,
+    pub region_code: Option<String>,
+    pub set_at: u64,
+    pub self_declared: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum JurisdictionCheckResult {
+    Allow,
+    Warn(String),
+    Block(String),
+}
+
 #[derive(Serialize, Deserialize)]
 struct WalletConfig {
     node_url: String,
@@ -155,6 +178,12 @@ struct WalletConfig {
     /// User autopay preferences, keyed by loan_id_hex. true = opt-in.
     #[serde(default)]
     autopay_prefs: Option<HashMap<String, bool>>,
+    /// Privacy level: Standard (default), Low, or High.
+    #[serde(default)]
+    pub privacy_level: PrivacyLevel,
+    /// Self-declared jurisdiction tag for regulatory compliance stubs.
+    #[serde(default)]
+    pub jurisdiction: Option<JurisdictionTag>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -199,6 +228,8 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             loan_contacts: None,
             loan_summaries: None,
             autopay_prefs: None,
+            privacy_level: PrivacyLevel::default(),
+            jurisdiction: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -4575,4 +4606,50 @@ pub async fn get_loan_payment_history(app: AppHandle, loan_id: String) -> Result
     }
 
     Ok(serde_json::Value::Array(entries))
+}
+
+// ── Privacy Level & Jurisdiction stubs ──────────────────────────────────────
+
+#[tauri::command]
+pub async fn set_privacy_level(_level: String) -> Result<String, String> {
+    Err("Privacy levels are not yet enabled. This feature requires a Foundation governance vote.".to_string())
+}
+
+#[tauri::command]
+pub async fn get_privacy_level(app: AppHandle) -> Result<String, String> {
+    let config = read_config(&app);
+    Ok(format!("{:?}", config.privacy_level))
+}
+
+#[tauri::command]
+pub async fn get_jurisdiction(app: AppHandle) -> Result<Option<JurisdictionTag>, String> {
+    let config = read_config(&app);
+    Ok(config.jurisdiction)
+}
+
+#[tauri::command]
+pub async fn set_jurisdiction(app: AppHandle, country: String, region: Option<String>) -> Result<(), String> {
+    let mut config = read_config(&app);
+    config.jurisdiction = Some(JurisdictionTag {
+        country_code: country,
+        region_code: region,
+        set_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        self_declared: true,
+    });
+    write_config(&app, &config)
+}
+
+#[tauri::command]
+pub async fn clear_jurisdiction(app: AppHandle) -> Result<(), String> {
+    let mut config = read_config(&app);
+    config.jurisdiction = None;
+    write_config(&app, &config)
+}
+
+#[tauri::command]
+pub async fn check_jurisdiction_rules(_action_type: String) -> Result<String, String> {
+    Ok("Allow".to_string())
 }

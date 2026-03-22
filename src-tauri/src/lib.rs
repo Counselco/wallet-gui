@@ -199,6 +199,13 @@ pub fn run() {
             commands::set_show_badges,
             commands::get_show_identity,
             commands::set_show_identity,
+            // Privacy & Jurisdiction stubs
+            commands::set_privacy_level,
+            commands::get_privacy_level,
+            commands::get_jurisdiction,
+            commands::set_jurisdiction,
+            commands::clear_jurisdiction,
+            commands::check_jurisdiction_rules,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
