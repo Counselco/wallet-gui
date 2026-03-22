@@ -152,6 +152,9 @@ struct WalletConfig {
     /// Cached AI-generated loan summaries, keyed by loan_id_hex.
     #[serde(default)]
     loan_summaries: Option<HashMap<String, String>>,
+    /// User autopay preferences, keyed by loan_id_hex. true = opt-in.
+    #[serde(default)]
+    autopay_prefs: Option<HashMap<String, bool>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -195,6 +198,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             loan_nicknames: None,
             loan_contacts: None,
             loan_summaries: None,
+            autopay_prefs: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -4476,4 +4480,72 @@ fn format_kx_with_commas(kx: u64) -> String {
         result.push(c);
     }
     result.chars().rev().collect()
+}
+
+// ── Autopay preferences (mobile) ────────────────────────────────────────────
+
+/// Get autopay prefs for all loans.
+#[tauri::command]
+pub async fn get_autopay_prefs(app: AppHandle) -> Result<HashMap<String, bool>, String> {
+    let cfg = read_config(&app);
+    Ok(cfg.autopay_prefs.unwrap_or_default())
+}
+
+/// Toggle autopay pref for a loan.
+#[tauri::command]
+pub async fn set_autopay_pref(app: AppHandle, loan_id: String, enabled: bool) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut prefs = cfg.autopay_prefs.take().unwrap_or_default();
+    prefs.insert(loan_id, enabled);
+    cfg.autopay_prefs = Some(prefs);
+    write_config(&app, &cfg)
+}
+
+// ── Loan payment history (mobile detail view) ───────────────────────────────
+
+/// Get payment history for a specific loan.
+/// Returns an array of { amount_kx: f64, label: String, date: String, is_credit: bool }.
+/// The first entry is always the loan disbursal (green).
+/// Subsequent entries are payments from transaction history matching this loan_id.
+#[tauri::command]
+pub async fn get_loan_payment_history(app: AppHandle, loan_id: String) -> Result<serde_json::Value, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let wallet = kp.account_id.to_b58();
+
+    // Fetch the loan to get principal and created_at
+    let loans_result = rpc_call(&url, "chronx_getLoansByWallet", serde_json::json!([wallet]))
+        .await
+        .map_err(|e| format!("Failed to fetch loans: {e}"))?;
+
+    let mut entries = Vec::new();
+
+    if let Some(arr) = loans_result.as_array() {
+        if let Some(loan) = arr.iter().find(|l| l.get("loan_id_hex").and_then(|v| v.as_str()).unwrap_or("") == loan_id) {
+            let principal_chronos = loan.get("principal_chronos").and_then(|v| v.as_u64()).unwrap_or(0);
+            let principal_kx = loan.get("principal_kx").and_then(|v| v.as_u64())
+                .unwrap_or(if principal_chronos > 0 { principal_chronos / 1_000_000 } else { 0 });
+            let created_at = loan.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            // First entry: loan disbursal
+            let date_str = if created_at > 0 {
+                chrono::DateTime::from_timestamp(created_at as i64, 0)
+                    .map(|d| d.format("%b %d, %Y").to_string())
+                    .unwrap_or_else(|| "Unknown".to_string())
+            } else { "Unknown".to_string() };
+
+            entries.push(serde_json::json!({
+                "amount_kx": principal_kx as f64,
+                "label": "Loan Disbursed",
+                "date": date_str,
+                "is_credit": true
+            }));
+
+            // TODO: fetch actual payment transactions for this loan_id
+            // from getIncomingTransfers / getTransactionHistory that reference the loan
+            // For now, no payment transactions exist (sweep not yet implemented)
+        }
+    }
+
+    Ok(serde_json::Value::Array(entries))
 }
