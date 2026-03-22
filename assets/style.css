@@ -3068,3 +3068,79 @@ select option:hover {
     transition: background .15s;
 }
 .terms-modal-close:hover { background: rgba(255,255,255,0.1); }
+
+/* ── FIX 1: Borrower display name in loan table ──────────────────────────── */
+.loan-borrower-cell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.loan-borrower-name { font-size: 13px; color: #e5e7eb; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loan-borrower-addr { font-size: 10px; color: rgba(232,232,216,0.35); font-family: monospace; }
+.loan-edit-pencil {
+    background: none; border: none; cursor: pointer; font-size: 11px; padding: 0 2px;
+    color: rgba(232,232,216,0.3); transition: color .15s; display: inline; margin-left: 4px;
+}
+.loan-edit-pencil:hover { color: #d4a84b; }
+.loan-contact-input {
+    background: rgba(255,255,255,0.06); border: 1px solid #d4a84b; border-radius: 4px;
+    color: #e5e7eb; font-size: 12px; padding: 3px 6px; width: 100%; outline: none;
+}
+
+/* ── FIX 3: Interval payment column ──────────────────────────────────────── */
+.interval-payment-cell { display: flex; flex-direction: column; gap: 0; }
+.interval-amount { font-size: 13px; color: #e5e7eb; font-weight: 500; }
+.interval-label { font-size: 10px; color: rgba(232,232,216,0.4); }
+
+/* ── FIX 4: Gold-themed terms modal ──────────────────────────────────────── */
+.terms-modal-gold {
+    border-color: rgba(212,168,75,0.3) !important;
+    max-width: 520px;
+}
+.terms-gold-header {
+    font-size: 18px; font-weight: 700; color: #d4a84b;
+    margin: 0 0 16px; padding-bottom: 10px;
+    border-bottom: 1px solid rgba(212,168,75,0.2);
+}
+.terms-summary-section { margin-bottom: 16px; }
+.terms-spinner { display: flex; align-items: center; padding: 16px 0; }
+.terms-spinner .spinner {
+    width: 20px; height: 20px; border: 2px solid rgba(212,168,75,0.2);
+    border-top-color: #d4a84b; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.terms-bullet-list {
+    list-style: none; padding: 0; margin: 0;
+    background: rgba(212,168,75,0.04);
+    border: 1px solid rgba(212,168,75,0.12);
+    border-radius: 8px; padding: 14px 16px;
+}
+.terms-bullet-list li {
+    font-size: 13px; color: #c8c8c0; line-height: 1.7; padding-left: 16px;
+    position: relative;
+}
+.terms-bullet-list li::before {
+    content: "\2022"; color: #d4a84b; position: absolute; left: 0; font-weight: bold;
+}
+.terms-raw-toggle {
+    font-size: 12px; color: rgba(232,232,216,0.5); cursor: pointer;
+    padding: 8px 0; margin-bottom: 8px; user-select: none;
+}
+.terms-raw-toggle:hover { color: #d4a84b; }
+.terms-raw-table {
+    width: 100%; border-collapse: collapse; margin-bottom: 14px;
+    font-size: 11px;
+}
+.terms-raw-table tr { border-bottom: 1px solid rgba(255,255,255,0.04); }
+.terms-raw-key {
+    color: rgba(232,232,216,0.45); padding: 5px 8px 5px 0;
+    white-space: nowrap; vertical-align: top; font-weight: 600;
+}
+.terms-raw-val {
+    color: #c8c8c0; padding: 5px 0; word-break: break-all;
+}
+
+/* ── Terms button in loan table row ──────────────────────────────────────── */
+.loan-terms-btn {
+    background: rgba(212,168,75,0.1); border: 1px solid rgba(212,168,75,0.25);
+    border-radius: 6px; color: #d4a84b; font-size: 11px; font-weight: 600;
+    padding: 4px 10px; cursor: pointer; transition: all .15s;
+}
+.loan-terms-btn:hover { background: rgba(212,168,75,0.2); border-color: rgba(212,168,75,0.5); }

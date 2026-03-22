@@ -146,6 +146,12 @@ struct WalletConfig {
     /// Local nicknames for loans, keyed by loan_id_hex.
     #[serde(default)]
     loan_nicknames: Option<HashMap<String, String>>,
+    /// Lender-assigned nicknames for borrower wallets, keyed by wallet address.
+    #[serde(default)]
+    loan_contacts: Option<HashMap<String, String>>,
+    /// Cached AI-generated loan summaries, keyed by loan_id_hex.
+    #[serde(default)]
+    loan_summaries: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -187,6 +193,8 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             show_badges: None,
             show_identity: None,
             loan_nicknames: None,
+            loan_contacts: None,
+            loan_summaries: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -4325,4 +4333,147 @@ pub async fn set_loan_nickname(app: AppHandle, loan_id: String, nickname: String
     }
     cfg.loan_nicknames = Some(nicks);
     write_config(&app, &cfg)
+}
+
+// ── Loan contacts (nicknames by wallet address) ─────────────────────────────
+
+/// Get all loan contacts (wallet_address → nickname).
+#[tauri::command]
+pub async fn get_loan_contacts(app: AppHandle) -> Result<HashMap<String, String>, String> {
+    let cfg = read_config(&app);
+    Ok(cfg.loan_contacts.unwrap_or_default())
+}
+
+/// Set a nickname for a borrower wallet (or remove it if empty).
+#[tauri::command]
+pub async fn set_loan_contact(app: AppHandle, wallet_address: String, nickname: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut contacts = cfg.loan_contacts.take().unwrap_or_default();
+    if nickname.is_empty() {
+        contacts.remove(&wallet_address);
+    } else {
+        contacts.insert(wallet_address, nickname);
+    }
+    cfg.loan_contacts = Some(contacts);
+    write_config(&app, &cfg)
+}
+
+/// Fetch a wallet's registered label (email) from the notify API.
+#[tauri::command]
+pub async fn get_wallet_label(wallet_address: String) -> Result<String, String> {
+    let url = format!("https://api.chronx.io/wallet/label/{}", wallet_address);
+    let resp = reqwest::get(&url).await.map_err(|e| format!("{e}"))?;
+    if resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.map_err(|e| format!("{e}"))?;
+        if let Some(label) = body.get("label").and_then(|v| v.as_str()) {
+            if !label.is_empty() {
+                return Ok(label.to_string());
+            }
+        }
+    }
+    Err("No label found".to_string())
+}
+
+// ── Loan summary (cached, generated locally from loan fields) ───────────────
+
+/// Generate or retrieve a cached AI-style summary for a loan.
+#[tauri::command]
+pub async fn get_loan_summary(app: AppHandle, loan_id: String, loan_json: String) -> Result<String, String> {
+    // Check cache first
+    let cfg = read_config(&app);
+    if let Some(ref summaries) = cfg.loan_summaries {
+        if let Some(cached) = summaries.get(&loan_id) {
+            return Ok(cached.clone());
+        }
+    }
+
+    // Parse loan fields and generate summary
+    let loan: serde_json::Value = serde_json::from_str(&loan_json)
+        .map_err(|e| format!("Invalid loan JSON: {e}"))?;
+
+    let principal_chronos = loan.get("principal_chronos").and_then(|v| v.as_u64()).unwrap_or(0);
+    let principal_kx = loan.get("principal_kx").and_then(|v| v.as_u64())
+        .unwrap_or(if principal_chronos > 0 { principal_chronos / 1_000_000 } else { 0 });
+    let rate_bps = loan.get("interest_rate")
+        .and_then(|v| v.get("Fixed"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rate_pct = rate_bps as f64 / 100.0;
+    let lt = loan.get("loan_type").cloned().unwrap_or(serde_json::Value::Null);
+    let is_revolving = lt.to_string().contains("Revolving");
+
+    let exit_str = loan.get("exit_rights").and_then(|v| v.as_str()).unwrap_or("EitherParty");
+    let exit_label = match exit_str {
+        "LenderOnly" => "The lender only",
+        "BorrowerOnly" => "The borrower only",
+        "MutualConsent" => "Both parties by mutual agreement",
+        _ => "Either party",
+    };
+
+    let collateral = loan.get("collateral_lock_id").and_then(|v| v.as_str()).unwrap_or("");
+    let collateral_text = if collateral.is_empty() { "None" } else { "Held on-chain" };
+
+    let portal = loan.get("servicer_portal_url").and_then(|v| v.as_str()).unwrap_or("");
+
+    let summary = if is_revolving {
+        let period = lt.get("Revolving")
+            .and_then(|v| v.get("renewal_period_seconds"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(86400);
+        let (period_name, periods_per_year) = match period {
+            1 => ("per second", 31_536_000.0),
+            3600 => ("hourly", 8_760.0),
+            86400 => ("daily", 365.0),
+            604800 => ("weekly", 52.0),
+            2592000 => ("monthly", 12.0),
+            31536000 => ("yearly", 1.0),
+            _ => ("daily", 365.0),
+        };
+        let interval_payment = (principal_kx as f64) * (rate_pct / 100.0) / periods_per_year;
+
+        let principal_str = format_kx_with_commas(principal_kx);
+        let period_short = period_name.trim_start_matches("per ");
+        format!(
+            "\u{2022} Principal: {} KX\n\u{2022} Interest: {:.1}% annual, paid {} (~{:.2} KX/{})\n\u{2022} Type: Revolving \u{2014} renews {} automatically\n\u{2022} Duration: No fixed end date\n\u{2022} Cancellation: {} may exit at any time\n\u{2022} Collateral posted: {}\n{}",
+            principal_str, rate_pct, period_name, interval_payment,
+            period_short, period_short,
+            exit_label, collateral_text,
+            if !portal.is_empty() { format!("\u{2022} Servicer portal: {}", portal) } else { String::new() }
+        )
+    } else {
+        let due_ts = loan.get("maturity_at").and_then(|v| v.as_u64());
+        let due_label = if let Some(ts) = due_ts {
+            let dt = chrono::DateTime::from_timestamp(ts as i64, 0)
+                .map(|d| d.format("%b %d, %Y").to_string())
+                .unwrap_or_else(|| "TBD".to_string());
+            dt
+        } else { "TBD".to_string() };
+        let sched = loan.get("payment_schedule").and_then(|v| v.as_str()).unwrap_or("Bullet");
+
+        format!(
+            "\u{2022} Principal: {} KX\n\u{2022} Interest: {:.1}% annual\n\u{2022} Type: Fixed Schedule \u{2014} {}\n\u{2022} Maturity: {}\n\u{2022} Cancellation: {} may exit\n\u{2022} Collateral posted: {}\n{}",
+            format_kx_with_commas(principal_kx), rate_pct, sched, due_label,
+            exit_label, collateral_text,
+            if !portal.is_empty() { format!("\u{2022} Servicer portal: {}", portal) } else { String::new() }
+        )
+    };
+
+    // Cache it
+    let mut cfg = read_config(&app);
+    let mut summaries = cfg.loan_summaries.take().unwrap_or_default();
+    summaries.insert(loan_id, summary.clone());
+    cfg.loan_summaries = Some(summaries);
+    write_config(&app, &cfg)?;
+
+    Ok(summary)
+}
+
+fn format_kx_with_commas(kx: u64) -> String {
+    let s = kx.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 { result.push(','); }
+        result.push(c);
+    }
+    result.chars().rev().collect()
 }

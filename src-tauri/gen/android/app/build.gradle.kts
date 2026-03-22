@@ -21,8 +21,8 @@ android {
         applicationId = "com.chronx.wallet"
         minSdk = 24
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        versionCode = 3005022
+        versionName = "2.5.22"
         // 16 KB memory page size support for Android 15+
         externalNativeBuild {
             cmake {
