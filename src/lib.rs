@@ -159,6 +159,20 @@ fn check_loan_flags(rate: f64, principal_kx: f64) -> (bool, bool, Vec<String>) {
     (blocked, warned, msgs)
 }
 
+fn flag_badge_style(flag: &str) -> (&'static str, &'static str) {
+    match flag {
+        "Active" => ("#2ecc71", "rgba(46,204,113,0.15)"),
+        "Late" | "Delinquent" => ("#f1c40f", "rgba(241,196,15,0.15)"),
+        "Default" | "Accelerated" => ("#e74c3c", "rgba(231,76,60,0.15)"),
+        "Disputed" => ("#e67e22", "rgba(230,126,34,0.15)"),
+        "PaidOff" | "EarlyExit" => ("#8899aa", "rgba(136,153,170,0.15)"),
+        "Amended" | "Reinstated" => ("#3498db", "rgba(52,152,219,0.15)"),
+        "Frozen" | "LitigationPending" => ("#e74c3c", "rgba(231,76,60,0.08)"),
+        "Bankruptcy" => ("#8b0000", "rgba(139,0,0,0.15)"),
+        _ => ("#8899aa", "rgba(136,153,170,0.1)"),
+    }
+}
+
 // ── Trusted contact type (frontend) ──────────────────────────────────────────
 
 #[derive(Clone, Deserialize, Default)]
@@ -1195,6 +1209,10 @@ fn App() -> impl IntoView {
     let wiz_collateral_id = RwSignal::new(String::new());
     let wiz_servicer_url = RwSignal::new(String::new());
     let wiz_payment_match = RwSignal::new(0u8); // 0=Exact,1=Partial,2=Minimum
+    // Prepayment penalty fields
+    let wiz_penalty_enabled = RwSignal::new(false);
+    let wiz_penalty_type = RwSignal::new(String::from("Flat"));
+    let wiz_penalty_amount = RwSignal::new(String::new());
     // Submission state
     let wiz_submitting = RwSignal::new(false);
     let wiz_error = RwSignal::new(String::new());
@@ -2685,7 +2703,95 @@ fn App() -> impl IntoView {
                                                             <div class="terms-modal-counterparty">
                                                                 {format!("{}: {}", role_label, counter_short)}
                                                             </div>
-                                                            // Section 4: Legal Disclaimer
+                                                            // Section 4: Payment History (D4)
+                                                            {
+                                                                let payments = loan.get("payment_history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                                                                view! {
+                                                                    <div style="margin-top:16px;">
+                                                                        <h4 style="color:var(--text,#e5e7eb);font-size:14px;margin-bottom:8px;">"Payment History"</h4>
+                                                                        {if payments.is_empty() {
+                                                                            view! { <p style="color:var(--muted,rgba(232,232,216,0.5));font-size:12px;font-style:italic;">"No payments recorded yet"</p> }.into_any()
+                                                                        } else {
+                                                                            let rows: Vec<_> = payments.iter().map(|p| {
+                                                                                let p_status = p.get("status").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
+                                                                                let period = p.get("period_number").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                                                let paid = p.get("amount_paid_chronos").and_then(|v| v.as_u64()).unwrap_or(0) / 1_000_000;
+                                                                                let required = p.get("amount_required_chronos").and_then(|v| v.as_u64()).unwrap_or(0) / 1_000_000;
+                                                                                let p_color = match p_status.as_str() {
+                                                                                    "OnTime" | "AutoPaid" => "#2ecc71",
+                                                                                    "Late" => "#f1c40f",
+                                                                                    "Missed" | "AutoPayFailed" => "#e74c3c",
+                                                                                    "Partial" => "#e67e22",
+                                                                                    "Prepaid" => "#3498db",
+                                                                                    _ => "#8899aa",
+                                                                                };
+                                                                                view! {
+                                                                                    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;">
+                                                                                        <span style="color:var(--muted,rgba(232,232,216,0.5));">{format!("Period {}", period)}</span>
+                                                                                        <span style=format!("color:{};font-weight:600;", p_color)>{p_status}</span>
+                                                                                        <span style="color:var(--text,#e5e7eb);">{format!("{}/{} KX", paid, required)}</span>
+                                                                                    </div>
+                                                                                }
+                                                                            }).collect();
+                                                                            view! {
+                                                                                <div style="max-height:200px;overflow-y:auto;">
+                                                                                    {rows}
+                                                                                </div>
+                                                                            }.into_any()
+                                                                        }}
+                                                                        <p style="color:var(--muted,rgba(232,232,216,0.5));font-size:10px;margin-top:6px;font-style:italic;">"Payment history is private by default."</p>
+                                                                    </div>
+                                                                }
+                                                            }
+                                                            // Section 5: Post Status Update (D2) — lender only, desktop only
+                                                            {
+                                                                if is_lender && is_desktop() {
+                                                                    let flag_posting = RwSignal::new(false);
+                                                                    let flag_selected = RwSignal::new(String::new());
+                                                                    let flag_memo = RwSignal::new(String::new());
+                                                                    let flag_result = RwSignal::new(Option::<String>::None);
+                                                                    view! {
+                                                                        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border,#1e2a42);">
+                                                                            <h4 style="color:var(--gold,#d4a84b);font-size:13px;margin-bottom:8px;">"Post Status Update"</h4>
+                                                                            <p style="color:var(--muted,rgba(232,232,216,0.5));font-size:11px;margin-bottom:8px;">
+                                                                                "This flag will be recorded on-chain permanently and may be superseded but never deleted."
+                                                                            </p>
+                                                                            <select style="width:100%;padding:6px;background:var(--bg,#0e1525);border:1px solid var(--border,#1e2a42);border-radius:6px;color:var(--text,#e5e7eb);font-size:12px;margin-bottom:8px;"
+                                                                                on:change=move |e| flag_selected.set(event_target_value(&e))>
+                                                                                <option value="">"Select flag..."</option>
+                                                                                <option value="Late">"Late"</option>
+                                                                                <option value="Delinquent">"Delinquent"</option>
+                                                                                <option value="Default">"Default"</option>
+                                                                                <option value="Accelerated">"Accelerated"</option>
+                                                                                <option value="WrittenOff">"Written Off"</option>
+                                                                                <option value="Reinstated">"Reinstated"</option>
+                                                                                <option value="Settled">"Settled"</option>
+                                                                                <option value="Forgiven">"Forgiven"</option>
+                                                                                <option value="Transferred">"Transferred"</option>
+                                                                                <option value="Refinanced">"Refinanced"</option>
+                                                                            </select>
+                                                                            <input type="text" maxlength="256" placeholder="Optional memo..."
+                                                                                style="width:100%;padding:6px;background:var(--bg,#0e1525);border:1px solid var(--border,#1e2a42);border-radius:6px;color:var(--text,#e5e7eb);font-size:12px;margin-bottom:8px;"
+                                                                                prop:value=move || flag_memo.get()
+                                                                                on:input=move |e| flag_memo.set(event_target_value(&e))
+                                                                            />
+                                                                            <button style="background:var(--gold,#d4a84b);color:#000;border:none;padding:6px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;"
+                                                                                disabled=move || flag_selected.get().is_empty() || flag_posting.get()
+                                                                                on:click=move |_| {
+                                                                                    flag_result.set(Some("Flag posting will be available in the next protocol version.".to_string()));
+                                                                                }>
+                                                                                "Post Flag"
+                                                                            </button>
+                                                                            {move || flag_result.get().map(|msg| view! {
+                                                                                <p style="color:var(--muted,rgba(232,232,216,0.5));font-size:11px;margin-top:6px;">{msg}</p>
+                                                                            })}
+                                                                        </div>
+                                                                    }.into_any()
+                                                                } else {
+                                                                    view! { <span></span> }.into_any()
+                                                                }
+                                                            }
+                                                            // Legal Disclaimer
                                                             <div class="terms-modal-disclaimer">
                                                                 "This summary is generated from on-chain data. ChronX Protocol is not a party to this loan and makes no representations regarding its legality in any jurisdiction."
                                                             </div>
@@ -2816,7 +2922,7 @@ fn App() -> impl IntoView {
                                                 <div>
                                                     <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
                                                         <button class="send-mode-btn active" style="font-size:13px;padding:8px 16px"
-                                                            on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wiz_success_tx.set(None); wiz_loan_ref.set(String::new()); wiz_borrower_email.set(String::new()); wiz_email_resolved.set(None); wiz_email_display.set(String::new()); wiz_offer_expiry.set(0); wizard_open.set(true); }>"+ New Loan"</button>
+                                                            on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wiz_success_tx.set(None); wiz_loan_ref.set(String::new()); wiz_borrower_email.set(String::new()); wiz_email_resolved.set(None); wiz_email_display.set(String::new()); wiz_offer_expiry.set(0); wiz_penalty_enabled.set(false); wiz_penalty_type.set(String::from("Flat")); wiz_penalty_amount.set(String::new()); wizard_open.set(true); }>"+ New Loan"</button>
                                                     </div>
                                                     <div class="loans-summary">
                                                         {move || {
@@ -2897,7 +3003,7 @@ fn App() -> impl IntoView {
                                                         }}
                                                     </div>
                                                     <div class="loans-table">
-                                                        <div class="loans-table-header" style="grid-template-columns:2fr 1fr 0.8fr 1.2fr 0.8fr 1.2fr 1fr 0.6fr">
+                                                        <div class="loans-table-header" style="grid-template-columns:2fr 1fr 0.8fr 1.2fr 0.8fr 1.2fr 1fr 0.8fr 0.6fr">
                                                             <span>"Borrower"</span>
                                                             <span>"Principal"</span>
                                                             <span>"Currency"</span>
@@ -2905,6 +3011,7 @@ fn App() -> impl IntoView {
                                                             <span>"Type"</span>
                                                             <span>"Next Payment"</span>
                                                             <span>"Status"</span>
+                                                            <span>"Flag"</span>
                                                             <span></span>
                                                         </div>
                                                         {move || {
@@ -2991,7 +3098,7 @@ fn App() -> impl IntoView {
                                                                         let bw_addr = RwSignal::new(bw_for_edit.clone());
                                                                         let has_nick = has_nickname;
                                                                         view! {
-                                                                            <div class="loans-table-row" style="grid-template-columns:2fr 1fr 0.8fr 1.2fr 0.8fr 1.2fr 1fr 0.6fr">
+                                                                            <div class="loans-table-row" style="grid-template-columns:2fr 1fr 0.8fr 1.2fr 0.8fr 1.2fr 1fr 0.8fr 0.6fr">
                                                                                 <span class="loan-borrower-cell">
                                                                                     {move || if editing_contact.get() {
                                                                                         view! {
@@ -3057,6 +3164,19 @@ fn App() -> impl IntoView {
                                                                                 <span>{loan_type_str}</span>
                                                                                 <span>{next_due_str}</span>
                                                                                 <span class=status_class>{status.to_uppercase()}</span>
+                                                                                <span>{
+                                                                                    let flag = loan.get("current_flag").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                                    if !flag.is_empty() {
+                                                                                        let (color, bg) = flag_badge_style(&flag);
+                                                                                        view! {
+                                                                                            <span style=format!("background:{};color:{};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;", bg, color)>
+                                                                                                {flag}
+                                                                                            </span>
+                                                                                        }.into_any()
+                                                                                    } else {
+                                                                                        view! { <span></span> }.into_any()
+                                                                                    }
+                                                                                }</span>
                                                                                 <span>
                                                                                     <button class="loan-terms-btn" on:click={
                                                                                         let lc = loan_clone.clone();
@@ -3125,7 +3245,7 @@ fn App() -> impl IntoView {
                                                                         "Loans are recorded on the ChronX blockchain via Genesis 10 primitives."
                                                                     </div>
                                                                     <button class="send-mode-btn active" style="margin-top:20px;padding:10px 24px;font-size:14px"
-                                                                        on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wiz_success_tx.set(None); wiz_loan_ref.set(String::new()); wiz_borrower_email.set(String::new()); wiz_email_resolved.set(None); wiz_email_display.set(String::new()); wiz_offer_expiry.set(0); wizard_open.set(true); }>"Create First Loan"</button>
+                                                                        on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wiz_success_tx.set(None); wiz_loan_ref.set(String::new()); wiz_borrower_email.set(String::new()); wiz_email_resolved.set(None); wiz_email_display.set(String::new()); wiz_offer_expiry.set(0); wiz_penalty_enabled.set(false); wiz_penalty_type.set(String::from("Flat")); wiz_penalty_amount.set(String::new()); wizard_open.set(true); }>"Create First Loan"</button>
                                                                 </div>
                                                             }.into_any()
                                                         }}
@@ -3742,6 +3862,39 @@ fn App() -> impl IntoView {
                                                                 prop:value=move || wiz_servicer_url.get()
                                                                 on:input=move |ev| wiz_servicer_url.set(event_target_value(&ev)) />
                                                         </div>
+                                                        // Prepayment Penalty (D3)
+                                                        <div style="margin-top:16px;">
+                                                            <button style="background:transparent;border:none;color:var(--gold,#d4a84b);font-size:13px;cursor:pointer;padding:0;"
+                                                                on:click=move |_| wiz_penalty_enabled.update(|v| *v = !*v)>
+                                                                {move || if wiz_penalty_enabled.get() { "\u{25bc} Prepayment penalty" } else { "\u{25b6} Add prepayment penalty (optional)" }}
+                                                            </button>
+                                                            {move || if wiz_penalty_enabled.get() {
+                                                                view! {
+                                                                    <div style="margin-top:8px;padding:12px;background:var(--bg,#0e1525);border:1px solid var(--border,#1e2a42);border-radius:8px;">
+                                                                        <div style="margin-bottom:8px;">
+                                                                            <label style="color:var(--muted,rgba(232,232,216,0.5));font-size:12px;">"Penalty Type"</label>
+                                                                            <select style="width:100%;padding:6px;background:var(--bg3,#1a2538);border:1px solid var(--border,#1e2a42);border-radius:6px;color:var(--text,#e5e7eb);font-size:12px;"
+                                                                                on:change=move |e| wiz_penalty_type.set(event_target_value(&e))>
+                                                                                <option value="Flat">"Flat Amount"</option>
+                                                                                <option value="Percentage">"% of Remaining Principal"</option>
+                                                                                <option value="MonthsInterest">"Months of Interest"</option>
+                                                                            </select>
+                                                                        </div>
+                                                                        <div style="margin-bottom:8px;">
+                                                                            <label style="color:var(--muted,rgba(232,232,216,0.5));font-size:12px;">"Amount"</label>
+                                                                            <input type="number" step="0.01" placeholder="0.00"
+                                                                                style="width:100%;padding:6px;background:var(--bg3,#1a2538);border:1px solid var(--border,#1e2a42);border-radius:6px;color:var(--text,#e5e7eb);font-size:12px;"
+                                                                                prop:value=move || wiz_penalty_amount.get()
+                                                                                on:input=move |e| wiz_penalty_amount.set(event_target_value(&e))
+                                                                            />
+                                                                        </div>
+                                                                        <p style="color:var(--muted,rgba(232,232,216,0.5));font-size:11px;">"Borrower will see this penalty before accepting."</p>
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else {
+                                                                view! { <span></span> }.into_any()
+                                                            }}
+                                                        </div>
                                                     </div>
                                                 }.into_any(),
                                                 _ => view! {
@@ -3798,6 +3951,18 @@ fn App() -> impl IntoView {
                                                             {move || { let c = wiz_collateral_id.get(); if !c.is_empty() {
                                                                 view! { <div class="wiz-review-row"><span class="wiz-review-label">"Collateral"</span><span class="wiz-review-val">{if c.len()>16 { format!("{}...", &c[..16]) } else { c }}</span></div> }.into_any()
                                                             } else { view! { <span></span> }.into_any() }}}
+                                                            {move || if wiz_penalty_enabled.get() && !wiz_penalty_amount.get().is_empty() {
+                                                                view! {
+                                                                    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                                                                        <span style="color:var(--muted,rgba(232,232,216,0.5));font-size:13px;">"Prepayment Penalty"</span>
+                                                                        <span style="color:var(--text,#e5e7eb);font-size:13px;">
+                                                                            {format!("{} KX ({})", wiz_penalty_amount.get(), wiz_penalty_type.get())}
+                                                                        </span>
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else {
+                                                                view! { <span></span> }.into_any()
+                                                            }}
                                                         </div>
                                                         // A8 Fix 3: Plain-English summary line
                                                         {move || {
