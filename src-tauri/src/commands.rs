@@ -4179,6 +4179,7 @@ pub async fn create_loan_offer(
         authorized_payers: vec![],
         payment_source_policy: PaymentSourcePolicy::default(),
         offer_expiry_seconds,
+        requires_autopay: false,
         memo,
         lender_signature: lender_sig,
     };
