@@ -585,7 +585,14 @@ pub async fn send_transfer(app: AppHandle, to: String, amount_kx: f64) -> Result
     }
     let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u128;
 
-    let actions = vec![Action::Transfer { to: to_id, amount: chronos }];
+    let actions = vec![Action::Transfer {
+        to: to_id,
+        amount: chronos,
+        memo: None,
+        memo_encrypted: true,
+        memo_public: false,
+        pay_as_amount: None,
+    }];
     let txid = build_sign_mine_submit(&kp, actions, &url).await?;
     let now = chrono::Utc::now().timestamp();
     append_transfer_history(&app, &TxHistoryEntry {
@@ -677,7 +684,7 @@ pub async fn create_timelock(
     }
     let tags_opt = if lock_tags.is_empty() { None } else { Some(lock_tags) };
 
-    // grantor_intent → extension_data as JSON (max 1024 bytes)
+    // grantor_intent → lock_marker as JSON (max 1024 bytes)
     let ext_data: Option<Vec<u8>> = grantor_intent
         .as_deref()
         .filter(|s| !s.is_empty())
@@ -713,12 +720,12 @@ pub async fn create_timelock(
         split_policy: None,
         claim_attempts_max: None,
         recurring: None,
-        extension_data: None,
+        lock_marker: None,
         oracle_hint: None,
         jurisdiction_hint: None,
         governance_proposal_id: None,
         client_ref: None,
-        recipient_email_hash: None,
+        email_recipient_hash: None,
         claim_window_secs: None,
         unclaimed_action: None,
         lock_type: if is_ai { Some("M".to_string()) } else { None },
@@ -741,6 +748,9 @@ pub async fn create_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
+        memo_encrypted: true,
+        memo_public: false,
+        pay_as_amount: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -749,7 +759,7 @@ pub async fn create_timelock(
 /// Create an email-based timelock with a secure claim secret.
 ///
 /// Generates a random "KX-XXXX-XXXX-XXXX-XXXX" claim code. BLAKE3(claim_code)
-/// is embedded in extension_data (marker 0xC5 + 32 hash bytes) and stored on-chain.
+/// is embedded in lock_marker (marker 0xC5 + 32 hash bytes) and stored on-chain.
 /// The plaintext code is returned to the caller so it can be:
 ///   1. Emailed to the recipient via notify_email_recipient
 ///   2. Saved locally in email-history.json for re-sharing if needed
@@ -804,11 +814,11 @@ pub async fn create_email_timelock(
     let claim_secret_hash = blake3::hash(claim_code.as_bytes());
     let hash_bytes = claim_secret_hash.as_bytes();
 
-    // Encode in extension_data: [0xC5 marker] + [32 bytes of hash].
+    // Encode in lock_marker: [0xC5 marker] + [32 bytes of hash].
     // The engine reads this marker and stores the hash in the email_claim_hashes tree.
-    let mut extension_data = Vec::with_capacity(33);
-    extension_data.push(0xC5u8);
-    extension_data.extend_from_slice(hash_bytes);
+    let mut lock_marker = Vec::with_capacity(33);
+    lock_marker.push(0xC5u8);
+    lock_marker.extend_from_slice(hash_bytes);
 
     // BLAKE3 hash of the recipient's email (for on-chain indexing, no PII on-chain)
     let email_hash = chronx_crypto::blake3_hash(email.as_bytes());
@@ -874,12 +884,12 @@ pub async fn create_email_timelock(
         split_policy: None,
         claim_attempts_max: None,
         recurring: None,
-        extension_data: Some(extension_data),
+        lock_marker: Some(lock_marker),
         oracle_hint: None,
         jurisdiction_hint: None,
         governance_proposal_id: None,
         client_ref: None,
-        recipient_email_hash: Some(email_hash),
+        email_recipient_hash: Some(email_hash),
         claim_window_secs: Some(259_200), // 72 hours
         unclaimed_action: Some(UnclaimedAction::RevertToSender),
         lock_type: if is_ai { Some("M".to_string()) } else { None },
@@ -902,6 +912,9 @@ pub async fn create_email_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
+        memo_encrypted: true,
+        memo_public: false,
+        pay_as_amount: None,
     }];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -915,9 +928,9 @@ pub async fn get_timelocks(app: AppHandle) -> Result<Vec<TimeLockInfo>, String> 
     let kp = load_keypair(&app)?;
     let b58 = kp.account_id.to_b58();
 
-    eprintln!("[get_timelocks] → chronx_getTimeLockContracts({}) at {url}", &b58[..8.min(b58.len())]);
+    eprintln!("[get_timelocks] → chronx_getLocks({}) at {url}", &b58[..8.min(b58.len())]);
 
-    let result = rpc_call(&url, "chronx_getTimeLockContracts", serde_json::json!([b58]))
+    let result = rpc_call(&url, "chronx_getLocks", serde_json::json!([b58]))
         .await
         .map_err(|e| {
             eprintln!("[get_timelocks] RPC error: {e}");
@@ -1043,7 +1056,7 @@ pub async fn claim_email_timelock(
     // Pre-validate: fetch lock and check maturity before submitting
     // (sendTransaction is fire-and-forget — it returns TxId before execution,
     //  so we must validate here to avoid false "success" messages)
-    if let Ok(result) = rpc_call(&url, "chronx_getTimeLockById", serde_json::json!([lock_id_hex])).await {
+    if let Ok(result) = rpc_call(&url, "chronx_getLockById", serde_json::json!([lock_id_hex])).await {
         if let Ok(lock) = serde_json::from_value::<serde_json::Value>(result) {
             if !lock.is_null() {
                 let now = chrono::Utc::now().timestamp();
@@ -1829,7 +1842,7 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
     // Use if-let so a transient RPC failure here doesn't abort the function and
     // hide the incoming-transfers section. Worst case: timelocks show empty.
     let locks: Vec<serde_json::Value> = rpc_call(
-        &url, "chronx_getTimeLockContracts", serde_json::json!([b58])
+        &url, "chronx_getLocks", serde_json::json!([b58])
     ).await
         .ok()
         .and_then(|v| serde_json::from_value(v).ok())
@@ -2449,7 +2462,7 @@ pub async fn get_pending_incoming(app: AppHandle) -> Result<Vec<TimeLockInfo>, S
         }
     }
 
-    // 2. Email-based incoming (recipient_email_hash matches our registered emails)
+    // 2. Email-based incoming (email_recipient_hash matches our registered emails)
     let cfg = read_config(&app);
     let emails = cfg.claim_emails.unwrap_or_default();
     for email in &emails {
@@ -2509,10 +2522,10 @@ pub async fn get_all_promises(app: AppHandle) -> Result<Vec<TimeLockInfo>, Strin
     let mut seen = std::collections::HashSet::new();
 
     // 1. Outgoing: locks where sender = my_address, pending only (future unlock date).
-    //    chronx_getTimeLockContracts returns ALL outgoing locks regardless of status;
+    //    chronx_getLocks returns ALL outgoing locks regardless of status;
     //    we filter to Pending so the Promises tab only shows time-locked sends that
     //    have not yet been delivered.
-    if let Ok(result) = rpc_call(&url, "chronx_getTimeLockContracts", serde_json::json!([b58])).await {
+    if let Ok(result) = rpc_call(&url, "chronx_getLocks", serde_json::json!([b58])).await {
         if let Ok(raw) = serde_json::from_value::<Vec<serde_json::Value>>(result) {
             for v in raw {
                 let mut lock = parse_timelock_json(&v);
@@ -2546,7 +2559,7 @@ pub async fn get_all_promises(app: AppHandle) -> Result<Vec<TimeLockInfo>, Strin
     }
 
     // 3. Incoming email locks: locks sent TO our registered email addresses.
-    // Email locks use recipient_email_hash (not recipient_account_id) to identify
+    // Email locks use email_recipient_hash (not recipient_account_id) to identify
     // the recipient, so they won't appear in getPendingIncoming. We query by
     // BLAKE3(lowercase(email)) using getEmailLocks.
     let cfg = read_config(&app);
@@ -2697,15 +2710,15 @@ pub async fn create_email_timelock_series(
     let claim_secret_hash = blake3::hash(claim_code.as_bytes());
     let hash_bytes = claim_secret_hash.as_bytes();
 
-    // Same extension_data for every lock — this is how the wallet groups them as a series.
-    let mut extension_data = Vec::with_capacity(33);
-    extension_data.push(0xC5u8);
-    extension_data.extend_from_slice(hash_bytes);
+    // Same lock_marker for every lock — this is how the wallet groups them as a series.
+    let mut lock_marker = Vec::with_capacity(33);
+    lock_marker.push(0xC5u8);
+    lock_marker.extend_from_slice(hash_bytes);
 
     let email_hash = chronx_crypto::blake3_hash(email.as_bytes());
     let recipient = kp.public_key.clone();
 
-    // Build one TimeLockCreate action per entry, all sharing the same extension_data.
+    // Build one TimeLockCreate action per entry, all sharing the same lock_marker.
     let actions: Vec<Action> = entries
         .iter()
         .map(|e| {
@@ -2728,12 +2741,12 @@ pub async fn create_email_timelock_series(
                 split_policy: None,
                 claim_attempts_max: None,
                 recurring: None,
-                extension_data: Some(extension_data.clone()),
+                lock_marker: Some(lock_marker.clone()),
                 oracle_hint: None,
                 jurisdiction_hint: None,
                 governance_proposal_id: None,
                 client_ref: None,
-                recipient_email_hash: Some(email_hash),
+                email_recipient_hash: Some(email_hash),
                 claim_window_secs: Some(259_200),
                 unclaimed_action: Some(UnclaimedAction::RevertToSender),
                 lock_type: None,
@@ -2756,6 +2769,9 @@ pub async fn create_email_timelock_series(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
+                memo_encrypted: true,
+                memo_public: false,
+                pay_as_amount: None,
             }
         })
         .collect();
@@ -3410,7 +3426,14 @@ pub async fn convert_kx_to_usdc(
         .map_err(|e| format!("Invalid bridge wallet: {e}"))?;
 
     let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u128;
-    let actions = vec![Action::Transfer { to: bridge_id, amount: chronos }];
+    let actions = vec![Action::Transfer {
+        to: bridge_id,
+        amount: chronos,
+        memo: None,
+        memo_encrypted: true,
+        memo_public: false,
+        pay_as_amount: None,
+    }];
     let txid = build_sign_mine_submit(&kp, actions, &url).await?;
 
     // Notify the XChan bridge daemon of the Base destination address
@@ -3599,7 +3622,7 @@ pub async fn create_freeform_timelock(
     }
     let tags = Some(lock_tags);
 
-    // Pack freeform recipient + grantor_intent into extension_data as JSON (max 1024 bytes)
+    // Pack freeform recipient + grantor_intent into lock_marker as JSON (max 1024 bytes)
     let ext_data: Option<Vec<u8>> = {
         let mut parts = vec![format!(r#""freeform_recipient":"{}""#,
             recipient_display.replace('\\', "\\\\").replace('"', "\\\""))];
@@ -3642,12 +3665,12 @@ pub async fn create_freeform_timelock(
         split_policy: None,
         claim_attempts_max: None,
         recurring: None,
-        extension_data: None,
+        lock_marker: None,
         oracle_hint: None,
         jurisdiction_hint: None,
         governance_proposal_id: None,
         client_ref: None,
-        recipient_email_hash: None,
+        email_recipient_hash: None,
         claim_window_secs: None,
         unclaimed_action: None,
         lock_type: if is_ai { Some("M".to_string()) } else { Some("F".to_string()) },
@@ -3670,6 +3693,9 @@ pub async fn create_freeform_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
+        memo_encrypted: true,
+        memo_public: false,
+        pay_as_amount: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -4198,6 +4224,7 @@ pub async fn create_loan_offer(
         offer_expiry_seconds,
         requires_autopay: false,
         memo,
+        channel_id: None,
         lender_signature: lender_sig,
     };
 
