@@ -4653,3 +4653,25 @@ pub async fn clear_jurisdiction(app: AppHandle) -> Result<(), String> {
 pub async fn check_jurisdiction_rules(_action_type: String) -> Result<String, String> {
     Ok("Allow".to_string())
 }
+
+/// Submit a LoanExit transaction on-chain.
+#[tauri::command]
+pub async fn submit_loan_exit(app: AppHandle, loan_id_hex: String) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let bytes = hex::decode(loan_id_hex.trim())
+        .map_err(|e| format!("Invalid loan ID hex: {e}"))?;
+    if bytes.len() != 32 { return Err("Loan ID must be 32 bytes".into()); }
+    let mut loan_id = [0u8; 32];
+    loan_id.copy_from_slice(&bytes);
+
+    let sig = kp.sign(&loan_id);
+
+    let actions = vec![Action::LoanExit {
+        loan_id,
+        exiting_party_signature: sig,
+    }];
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(txid)
+}

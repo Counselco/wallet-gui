@@ -206,6 +206,7 @@ pub fn run() {
             commands::set_jurisdiction,
             commands::clear_jurisdiction,
             commands::check_jurisdiction_rules,
+            commands::submit_loan_exit,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

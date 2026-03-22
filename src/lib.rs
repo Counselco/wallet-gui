@@ -1221,6 +1221,10 @@ fn App() -> impl IntoView {
     let mobile_loan_show_terms = RwSignal::new(false);
     // Autopay preferences (keyed by loan_id_hex)
     let autopay_prefs: RwSignal<HashMap<String, bool>> = RwSignal::new(HashMap::new());
+    // Exit confirmation modal
+    let exit_modal_loan = RwSignal::new(Option::<serde_json::Value>::None);
+    let exit_submitting = RwSignal::new(false);
+    let exit_error = RwSignal::new(String::new());
     // A1: Pending loan offer count for Receive tab
     let pending_loan_offers_count = RwSignal::new(0u32);
     // A4: Cooling-off state after accepting a loan offer
@@ -2587,97 +2591,157 @@ fn App() -> impl IntoView {
                                                 view! { <span></span> }.into_any()
                                             }}
                                             // ── Loan Terms Modal (gold-themed, AI summary + raw terms) ──
+                                            // ── A1: Terms Modal ──
                                             {move || if let Some(loan) = terms_modal_loan.get() {
                                                 let my_wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
                                                 let lender_w = loan.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                 let borrower_w = loan.get("borrower_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                 let is_lender = my_wallet == lender_w;
                                                 let counterparty = if is_lender { borrower_w.clone() } else { lender_w.clone() };
+                                                let counter_short = if counterparty.len() > 14 { format!("{}...{}", &counterparty[..6], &counterparty[counterparty.len()-4..]) } else { counterparty.clone() };
                                                 let role_label = if is_lender { "Borrower" } else { "Lender" };
                                                 let portal_url = loan.get("servicer_portal_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-                                                // Raw terms key-value pairs
                                                 let principal_chronos = loan.get("principal_chronos").and_then(|v| v.as_u64()).unwrap_or(0);
                                                 let principal_kx = loan.get("principal_kx").and_then(|v| v.as_u64())
                                                     .unwrap_or(if principal_chronos > 0 { principal_chronos / 1_000_000 } else { 0 });
                                                 let rate_bps = loan.get("interest_rate").and_then(|v| v.get("Fixed")).and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let rate_pct = rate_bps as f64 / 100.0;
                                                 let lt = loan.get("loan_type").cloned().unwrap_or(serde_json::Value::Null);
                                                 let is_revolving = lt.to_string().contains("Revolving");
                                                 let status = loan.get("status").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
                                                 let exit_str = loan.get("exit_rights").and_then(|v| v.as_str()).unwrap_or("EitherParty").to_string();
+                                                let exit_label = match exit_str.as_str() { "LenderOnly" => "Lender only", "BorrowerOnly" => "Borrower only", "MutualConsent" => "Both parties (mutual)", _ => "Either party" };
                                                 let collateral = loan.get("collateral_lock_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                 let autopay = loan.get("requires_autopay").and_then(|v| v.as_bool()).unwrap_or(false);
                                                 let loan_id_hex = loan.get("loan_id_hex").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let lid_short = if loan_id_hex.len() > 8 { format!("{}...", &loan_id_hex[..8]) } else { loan_id_hex.clone() };
+                                                let created_at = loan.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let accepted_at = loan.get("accepted_at").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let pay_as = loan.get("pay_as").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let currency = if pay_as.is_empty() || pay_as == "null" { "KX".to_string() } else { "USD (PAY_AS)".to_string() };
+                                                // Interval payment
+                                                let (interval_amt, interval_label) = if is_revolving {
+                                                    let period = lt.get("Revolving").and_then(|v| v.get("renewal_period_seconds")).and_then(|v| v.as_u64()).unwrap_or(86400);
+                                                    let (ppy, lbl) = match period { 86400 => (365.0, "day"), 604800 => (52.0, "week"), 2592000 => (12.0, "month"), _ => (365.0, "day") };
+                                                    ((principal_kx as f64) * (rate_pct / 100.0) / ppy, lbl)
+                                                } else { ((principal_kx as f64) * (rate_pct / 100.0) / 365.0, "day") };
+                                                let renewal_label = if is_revolving {
+                                                    let period = lt.get("Revolving").and_then(|v| v.get("renewal_period_seconds")).and_then(|v| v.as_u64()).unwrap_or(86400);
+                                                    match period { 86400 => "Daily", 604800 => "Weekly", 2592000 => "Monthly", 31536000 => "Yearly", _ => "Daily" }
+                                                } else { "N/A (Fixed)" };
+                                                let notice = loan.get("exit_notice_hours").and_then(|v| v.as_u64()).unwrap_or(24);
+                                                let notice_label = if notice == 0 { "Immediate".to_string() } else { format!("{} hours", notice) };
+                                                // Plain English summary
+                                                let summary_text = format!(
+                                                    "This is a {} loan of {} {} at {:.1}% annual interest. Payments are {}. {} may exit with {} notice. {}Interest accrues daily and settles at exit. Auto-pay is {}.",
+                                                    if is_revolving { "revolving" } else { "fixed" },
+                                                    principal_kx, currency, rate_pct, interval_label,
+                                                    exit_label, notice_label,
+                                                    if collateral.is_empty() { "No collateral is held. " } else { "Collateral is held on-chain. " },
+                                                    if autopay { "enabled" } else { "optional" }
+                                                ).replace("{:,}", &{let s = principal_kx.to_string(); let mut r = String::new(); for (i, c) in s.chars().rev().enumerate() { if i > 0 && i % 3 == 0 { r.push(','); } r.push(c); } r.chars().rev().collect::<String>()});
+                                                let fmt_ts = |ts: u64| -> String {
+                                                    if ts == 0 { return "\u{2014}".to_string(); }
+                                                    let d = js_sys::Date::new_0(); d.set_time((ts as f64) * 1000.0);
+                                                    let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                                                    let m = d.get_month() as usize;
+                                                    format!("{} {}, {}", months.get(m).unwrap_or(&"???"), d.get_date(), d.get_full_year())
+                                                };
+                                                let created_str = fmt_ts(created_at);
+                                                let accepted_str = fmt_ts(accepted_at);
 
                                                 view! {
                                                     <div class="terms-modal-overlay" on:click=move |_| terms_modal_loan.set(None)>
                                                         <div class="terms-modal terms-modal-gold" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
-                                                            // Section A — AI Summary
-                                                            <h3 class="terms-gold-header">"Loan Summary"</h3>
+                                                            // Title
+                                                            <h3 class="terms-gold-header">{format!("Loan Terms \u{2014} {}", lid_short)}</h3>
+                                                            // Section 1: Plain English Summary
                                                             <div class="terms-summary-section">
-                                                                {move || if loan_summary_loading.get() {
-                                                                    view! {
-                                                                        <div class="terms-spinner">
-                                                                            <div class="spinner"></div>
-                                                                            <span style="color:rgba(232,232,216,0.5);font-size:13px;margin-left:8px">"Generating summary..."</span>
-                                                                        </div>
-                                                                    }.into_any()
-                                                                } else if let Some(summary) = loan_summary_text.get() {
-                                                                    let lines: Vec<_> = summary.lines().filter(|l| !l.trim().is_empty()).map(|l| l.to_string()).collect();
-                                                                    view! {
-                                                                        <ul class="terms-bullet-list">
-                                                                            {lines.into_iter().map(|line| {
-                                                                                let text = line.trim_start_matches('\u{2022}').trim().to_string();
-                                                                                view! { <li>{text}</li> }
-                                                                            }).collect::<Vec<_>>()}
-                                                                        </ul>
-                                                                    }.into_any()
-                                                                } else {
-                                                                    view! {
-                                                                        <div style="color:rgba(232,232,216,0.5);font-size:13px">"Summary unavailable."</div>
-                                                                    }.into_any()
-                                                                }}
+                                                                <p style="font-size:13px;color:#c8c8c0;line-height:1.7">{summary_text}</p>
                                                             </div>
+                                                            // Section 2: Loan Details Table
+                                                            <table class="terms-raw-table" style="margin-bottom:14px">
+                                                                <tr><td class="terms-raw-key">"Loan ID"</td><td class="terms-raw-val" title=loan_id_hex.clone()>{lid_short.clone()}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Type"</td><td class="terms-raw-val">{if is_revolving { "Revolving" } else { "Fixed" }}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Principal"</td><td class="terms-raw-val">{
+                                                                    let s = principal_kx.to_string();
+                                                                    let mut r = String::new();
+                                                                    for (i, c) in s.chars().rev().enumerate() { if i > 0 && i % 3 == 0 { r.push(','); } r.push(c); }
+                                                                    format!("{} KX", r.chars().rev().collect::<String>())
+                                                                }</td></tr>
+                                                                <tr><td class="terms-raw-key">"Currency"</td><td class="terms-raw-val">{currency.clone()}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Annual Rate"</td><td class="terms-raw-val">{format!("{:.1}%", rate_pct)}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Interval Pay"</td><td class="terms-raw-val">{format!("{:.2} KX per {}", interval_amt, interval_label)}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Renewal"</td><td class="terms-raw-val">{renewal_label}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Exit Rights"</td><td class="terms-raw-val">{exit_label}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Notice Period"</td><td class="terms-raw-val">{notice_label.clone()}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Collateral"</td><td class="terms-raw-val">{if collateral.is_empty() { "None".to_string() } else { collateral.clone() }}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Servicer"</td><td class="terms-raw-val">{if portal_url.is_empty() { "None".to_string() } else { portal_url.clone() }}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Created"</td><td class="terms-raw-val">{created_str}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Accepted"</td><td class="terms-raw-val">{accepted_str}</td></tr>
+                                                                <tr><td class="terms-raw-key">"Status"</td><td class="terms-raw-val" style={if status == "active" { "color:#5ce08a" } else { "" }}>{status.to_uppercase()}</td></tr>
+                                                            </table>
+                                                            // Section 3: Counterparty
                                                             <div class="terms-modal-counterparty">
-                                                                {format!("{}: {}", role_label, counterparty)}
+                                                                {format!("{}: {}", role_label, counter_short)}
                                                             </div>
-                                                            {if !portal_url.is_empty() {
-                                                                let url = portal_url.clone();
-                                                                view! {
-                                                                    <div class="terms-modal-link">
-                                                                        {"\u{1f4ce} Full Terms: "}
-                                                                        <a href=url.clone() target="_blank" rel="noopener">{url.clone()}</a>
-                                                                    </div>
-                                                                }.into_any()
-                                                            } else {
-                                                                view! { <span></span> }.into_any()
-                                                            }}
-                                                            // Section B — Raw Terms (collapsible)
-                                                            <div class="terms-raw-toggle" on:click=move |_| show_raw_terms.set(!show_raw_terms.get())>
-                                                                {move || if show_raw_terms.get() { "\u{25bc} Hide full terms" } else { "\u{25b6} Show full terms" }}
-                                                            </div>
-                                                            {move || if show_raw_terms.get() {
-                                                                view! {
-                                                                    <table class="terms-raw-table">
-                                                                        <tr><td class="terms-raw-key">"Loan ID"</td><td class="terms-raw-val">{loan_id_hex.clone()}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Lender"</td><td class="terms-raw-val">{lender_w.clone()}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Borrower"</td><td class="terms-raw-val">{borrower_w.clone()}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Principal"</td><td class="terms-raw-val">{format!("{} KX ({} Chronos)", principal_kx, principal_chronos)}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Interest Rate"</td><td class="terms-raw-val">{format!("{} bps ({:.2}%)", rate_bps, rate_bps as f64 / 100.0)}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Loan Type"</td><td class="terms-raw-val">{if is_revolving { "Revolving" } else { "Fixed Schedule" }}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Exit Rights"</td><td class="terms-raw-val">{exit_str.clone()}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Collateral"</td><td class="terms-raw-val">{if collateral.is_empty() { "None".to_string() } else { collateral.clone() }}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Auto-pay"</td><td class="terms-raw-val">{if autopay { "Required" } else { "Optional" }}</td></tr>
-                                                                        <tr><td class="terms-raw-key">"Status"</td><td class="terms-raw-val">{status.clone()}</td></tr>
-                                                                    </table>
-                                                                }.into_any()
-                                                            } else {
-                                                                view! { <span></span> }.into_any()
-                                                            }}
+                                                            // Section 4: Legal Disclaimer
                                                             <div class="terms-modal-disclaimer">
-                                                                {"\u{26a0}\u{fe0f} This summary is generated from on-chain data. The lender\u{2019}s published terms prevail in case of discrepancy."}
+                                                                "This summary is generated from on-chain data. ChronX Protocol is not a party to this loan and makes no representations regarding its legality in any jurisdiction."
                                                             </div>
                                                             <button class="terms-modal-close" on:click=move |_| terms_modal_loan.set(None)>"Close"</button>
+                                                        </div>
+                                                    </div>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                            // ── A2: Exit Confirmation Modal ──
+                                            {move || if let Some(loan) = exit_modal_loan.get() {
+                                                let loan_id_hex = loan.get("loan_id_hex").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let notice = loan.get("exit_notice_hours").and_then(|v| v.as_u64()).unwrap_or(24);
+                                                let notice_label = if notice == 0 { "immediately".to_string() } else { format!("in {} hours", notice) };
+                                                let rate_bps = loan.get("interest_rate").and_then(|v| v.get("Fixed")).and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let principal_kx = loan.get("principal_kx").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let accepted_at = loan.get("accepted_at").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let now_s = (js_sys::Date::now() / 1000.0) as u64;
+                                                let elapsed = now_s.saturating_sub(accepted_at);
+                                                let accrued = (principal_kx as f64) * (rate_bps as f64 / 10000.0) * (elapsed as f64 / 31536000.0);
+                                                let lid = loan_id_hex.clone();
+                                                view! {
+                                                    <div class="terms-modal-overlay" on:click=move |_| exit_modal_loan.set(None)>
+                                                        <div class="terms-modal" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                                                            <h3 style="color:#e05c5c;font-size:17px;font-weight:700;margin:0 0 14px">"Exit This Loan?"</h3>
+                                                            <p style="font-size:13px;color:#c8c8c0;line-height:1.7;margin-bottom:12px">
+                                                                {format!("You are requesting to exit this loan. Per the agreed terms, exit takes effect {}. Accrued interest to date: approximately {:.2} KX. Your exit request will be recorded on-chain immediately.", notice_label, accrued)}
+                                                            </p>
+                                                            {move || if !exit_error.get().is_empty() {
+                                                                view! { <div style="color:#ef4444;font-size:12px;margin-bottom:8px">{exit_error.get()}</div> }.into_any()
+                                                            } else { view! { <span></span> }.into_any() }}
+                                                            <div style="display:flex;gap:8px;margin-top:14px">
+                                                                <button style="flex:1;padding:10px;background:#e05c5c;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:600;cursor:pointer"
+                                                                    disabled=move || exit_submitting.get()
+                                                                    on:click=move |_| {
+                                                                        let lid2 = lid.clone();
+                                                                        exit_submitting.set(true);
+                                                                        exit_error.set(String::new());
+                                                                        spawn_local(async move {
+                                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": lid2})).unwrap_or(no_args());
+                                                                            match call::<String>("submit_loan_exit", args).await {
+                                                                                Ok(_) => {
+                                                                                    exit_modal_loan.set(None);
+                                                                                    exit_submitting.set(false);
+                                                                                    // Refresh loans
+                                                                                    if let Ok(v) = call::<serde_json::Value>("get_wallet_loans", no_args()).await { loans_data.set(v); }
+                                                                                }
+                                                                                Err(e) => { exit_error.set(format!("{}", e)); exit_submitting.set(false); }
+                                                                            }
+                                                                        });
+                                                                    }>
+                                                                    {move || if exit_submitting.get() { "Submitting..." } else { "Confirm Exit" }}
+                                                                </button>
+                                                                <button class="terms-modal-close" style="flex:1" on:click=move |_| exit_modal_loan.set(None)>"Cancel"</button>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 }.into_any()
@@ -3015,6 +3079,35 @@ fn App() -> impl IntoView {
                                                                                             });
                                                                                         }
                                                                                     }>"Terms"</button>
+                                                                                    {
+                                                                                        // Exit button — only show when exit_rights permit
+                                                                                        let exit_rights = loan.get("exit_rights").and_then(|v| v.as_str()).unwrap_or("EitherParty");
+                                                                                        let my_w = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+                                                                                        let lw = loan.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("");
+                                                                                        let is_lender_role = my_w == lw;
+                                                                                        let can_exit = match exit_rights {
+                                                                                            "EitherParty" => true,
+                                                                                            "LenderOnly" => is_lender_role,
+                                                                                            "BorrowerOnly" => !is_lender_role,
+                                                                                            "MutualConsent" => true,
+                                                                                            _ => true,
+                                                                                        };
+                                                                                        let loan_status = loan.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                                                                                        let show_exit = can_exit && loan_status == "active";
+                                                                                        if show_exit {
+                                                                                            let lc_exit = loan.clone();
+                                                                                            view! {
+                                                                                                <button class="loan-exit-btn" on:click=move |ev: web_sys::MouseEvent| {
+                                                                                                    ev.stop_propagation();
+                                                                                                    exit_error.set(String::new());
+                                                                                                    exit_submitting.set(false);
+                                                                                                    exit_modal_loan.set(Some(lc_exit.clone()));
+                                                                                                }>"Exit"</button>
+                                                                                            }.into_any()
+                                                                                        } else {
+                                                                                            view! { <span></span> }.into_any()
+                                                                                        }
+                                                                                    }
                                                                                 </span>
                                                                             </div>
                                                                         }.into_any()
