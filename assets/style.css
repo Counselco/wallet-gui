@@ -2894,3 +2894,177 @@ select option:hover {
     border: 1px solid rgba(224,92,92,0.3);
     color: #e05c5c;
 }
+
+/* -- LOAN CARD V2 (Activity/Open — mobile-first, 2-line compact) -- */
+.loan-card-v2 {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 12px 14px 12px 18px;
+    margin-bottom: 8px;
+    border-left: 4px solid transparent;
+    cursor: pointer;
+    transition: background .15s;
+}
+.loan-card-v2:hover { background: rgba(255,255,255,0.05); }
+.loan-card-v2.role-lender   { border-left-color: #5ce08a; }
+.loan-card-v2.role-borrower { border-left-color: #e05c5c; }
+.loan-card-v2.status-delinquent { border-left-color: #d4a84b !important; }
+
+.loan-card-v2-line1 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+}
+.loan-card-v2-name {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 600;
+    color: #e5e7eb;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.loan-card-v2-name input {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(212,168,75,0.5);
+    border-radius: 4px;
+    color: #e5e7eb;
+    font-size: 13px;
+    padding: 2px 6px;
+    width: 100%;
+    outline: none;
+}
+.loan-type-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+    background: rgba(212,168,75,0.12);
+    border: 1px solid rgba(212,168,75,0.3);
+    color: #d4a84b;
+}
+.loan-card-v2-edit {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 4px;
+    flex-shrink: 0;
+    transition: color .15s;
+}
+.loan-card-v2-edit:hover { color: #d4a84b; }
+
+.loan-card-v2-line2 {
+    font-size: 12px;
+    color: rgba(232,232,216,0.55);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.loan-card-v2-line2 .overdue {
+    color: #d4a84b;
+    font-weight: 600;
+}
+
+.loan-card-v2-terms {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #888;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 4px;
+    align-self: flex-start;
+    transition: all .15s;
+}
+.loan-card-v2-terms:hover { border-color: rgba(212,168,75,0.5); color: #d4a84b; }
+
+/* -- LOAN TERMS MODAL -- */
+.terms-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px;
+}
+.terms-modal {
+    background: #161b27;
+    border: 1px solid #1e2845;
+    border-radius: 14px;
+    padding: 24px 20px;
+    max-width: 440px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.terms-modal h3 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #e5e7eb;
+    margin: 0 0 14px;
+}
+.terms-modal-summary {
+    font-size: 13px;
+    color: #c8c8c0;
+    line-height: 1.65;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 14px;
+}
+.terms-modal-counterparty {
+    font-size: 12px;
+    color: rgba(232,232,216,0.5);
+    margin-bottom: 14px;
+    word-break: break-all;
+}
+.terms-modal-disclaimer {
+    font-size: 11px;
+    color: #888;
+    font-style: italic;
+    line-height: 1.5;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 12px;
+    margin-bottom: 14px;
+}
+.terms-modal-link {
+    display: block;
+    margin-bottom: 14px;
+}
+.terms-modal-link a {
+    color: #d4a84b;
+    text-decoration: none;
+    font-size: 13px;
+    word-break: break-all;
+}
+.terms-modal-link a:hover { text-decoration: underline; }
+.terms-modal-close {
+    width: 100%;
+    padding: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    color: #e5e7eb;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+}
+.terms-modal-close:hover { background: rgba(255,255,255,0.1); }

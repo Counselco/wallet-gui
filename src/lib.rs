@@ -1177,6 +1177,10 @@ fn App() -> impl IntoView {
     // Loan list data (fetched from RPC)
     let loans_data = RwSignal::new(serde_json::Value::Null);
     let loan_offers = RwSignal::new(serde_json::Value::Null);
+    // Loan nicknames (local storage, keyed by loan_id_hex)
+    let loan_nicknames: RwSignal<HashMap<String, String>> = RwSignal::new(HashMap::new());
+    // Loan terms modal state
+    let terms_modal_loan = RwSignal::new(Option::<serde_json::Value>::None);
 
     // Pay deep link pre-fill signals
     let pay_link_to = RwSignal::new(String::new());
@@ -2084,13 +2088,16 @@ fn App() -> impl IntoView {
                                 }.into_any(),
                                 // Tab 2: Activity (History/Promises/Open sub-tabs)
                                 2 => {
-                                    // Fetch loan offers + active loans on Activity tab load
+                                    // Fetch loan offers + active loans + nicknames on Activity tab load
                                     spawn_local(async move {
                                         if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await {
                                             loan_offers.set(v);
                                         }
                                         if let Ok(v) = call::<serde_json::Value>("get_wallet_loans", no_args()).await {
                                             loans_data.set(v);
+                                        }
+                                        if let Ok(n) = call::<std::collections::HashMap<String,String>>("get_loan_nicknames", no_args()).await {
+                                            loan_nicknames.set(n);
                                         }
                                     });
                                     view! {
@@ -2180,29 +2187,174 @@ fn App() -> impl IntoView {
                                                 }
                                                 view! { <span></span> }.into_any()
                                             }}
-                                            // Active loans display
+                                            // ── Active Loans v2 (compact 2-line cards) ──
                                             {move || {
                                                 let data = loans_data.get();
+                                                let my_wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+                                                let nicks = loan_nicknames.get();
                                                 if let Some(arr) = data.as_array() {
                                                     let active: Vec<_> = arr.iter().filter(|l| {
-                                                        l.get("status").and_then(|s| s.as_str()) == Some("active")
-                                                    }).collect();
+                                                        let st = l.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                                                        st == "active" || st == "delinquent" || st == "default"
+                                                    }).cloned().collect();
                                                     if !active.is_empty() {
                                                         let cards: Vec<_> = active.iter().map(|loan| {
-                                                            let bw = loan.get("borrower_wallet").and_then(|v| v.as_str()).unwrap_or("\u{2014}").to_string();
-                                                            let bw_short = if bw.len() > 14 { format!("{}...{}", &bw[..6], &bw[bw.len()-4..]) } else { bw };
-                                                            let pk = loan.get("principal_kx").and_then(|v| v.as_u64())
-                                                                .or_else(|| loan.get("principal_chronos").and_then(|v| v.as_u64()).map(|c| c / 1_000_000))
-                                                                .unwrap_or(0);
-                                                            let is_rev = loan.get("loan_type").map(|v| v.to_string().contains("Revolving")).unwrap_or(false);
+                                                            let loan_id = loan.get("loan_id_hex").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                            let lender_w = loan.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                            let borrower_w = loan.get("borrower_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                            let status = loan.get("status").and_then(|v| v.as_str()).unwrap_or("active").to_string();
+                                                            let is_lender = my_wallet == lender_w;
+                                                            let is_delinquent = status == "delinquent" || status == "default";
+
+                                                            // Role class (yellow overrides)
+                                                            let role_class = if is_delinquent {
+                                                                "loan-card-v2 status-delinquent"
+                                                            } else if is_lender {
+                                                                "loan-card-v2 role-lender"
+                                                            } else {
+                                                                "loan-card-v2 role-borrower"
+                                                            };
+
+                                                            // Type badge
+                                                            let lt = loan.get("loan_type").cloned().unwrap_or(serde_json::Value::Null);
+                                                            let is_revolving = lt.to_string().contains("Revolving");
+                                                            let exit_rights_str = loan.get("exit_rights").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                            let type_badge = if !is_revolving {
+                                                                "T" // FixedSchedule
+                                                            } else if exit_rights_str.contains("LenderOnly") {
+                                                                "C" // Credit line
+                                                            } else {
+                                                                "R" // Revolving
+                                                            };
+
+                                                            // Name: local nickname or truncated counterparty
+                                                            let counterparty = if is_lender { &borrower_w } else { &lender_w };
+                                                            let counter_short = if counterparty.len() > 14 {
+                                                                format!("{}...{}", &counterparty[..6], &counterparty[counterparty.len()-4..])
+                                                            } else { counterparty.clone() };
+                                                            let display_name = nicks.get(&loan_id).cloned().unwrap_or_else(|| {
+                                                                // Check memo for "Borrower: ..." nickname
+                                                                loan.get("memo").and_then(|v| v.as_str())
+                                                                    .and_then(|m| m.strip_prefix("Borrower: "))
+                                                                    .map(|s| s.to_string())
+                                                                    .unwrap_or(counter_short.clone())
+                                                            });
+
+                                                            // Line 2: due info
+                                                            let principal_chronos = loan.get("principal_chronos").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                            let principal_kx = loan.get("principal_kx").and_then(|v| v.as_u64())
+                                                                .unwrap_or(if principal_chronos > 0 { principal_chronos / 1_000_000 } else { 0 });
+                                                            let rate_bps = loan.get("interest_rate").and_then(|v| v.get("Fixed")).and_then(|v| v.as_u64()).unwrap_or(0);
+                                                            let daily_interest = (principal_kx as f64) * (rate_bps as f64 / 10000.0) / 365.0;
+
+                                                            let collect_daily = loan.get("loan_type")
+                                                                .and_then(|v| v.get("Revolving"))
+                                                                .and_then(|v| v.get("collect_at_exit"))
+                                                                .and_then(|v| v.as_bool())
+                                                                .map(|b| !b) // collect_at_exit=false means collect daily
+                                                                .unwrap_or(true);
+
+                                                            let line2 = if is_delinquent {
+                                                                format!("\u{26a0}\u{fe0f} OVERDUE \u{00b7} {:.1} KX past due", daily_interest)
+                                                            } else if is_revolving && !collect_daily {
+                                                                format!("Renews daily \u{00b7} {:.1} KX/day accruing", daily_interest)
+                                                            } else if is_revolving {
+                                                                format!("Due: midnight UTC \u{00b7} {:.1} KX", daily_interest)
+                                                            } else {
+                                                                // Fixed — show due date if available
+                                                                let due_ts = loan.get("next_payment_at").and_then(|v| v.as_u64());
+                                                                if let Some(ts) = due_ts {
+                                                                    let d = js_sys::Date::new_0();
+                                                                    d.set_time((ts as f64) * 1000.0);
+                                                                    let ds = d.to_date_string().as_string().unwrap_or_else(|| "unknown".to_string());
+                                                                    format!("Due: {} \u{00b7} {} KX", ds, principal_kx)
+                                                                } else {
+                                                                    format!("Fixed term \u{00b7} {} KX", principal_kx)
+                                                                }
+                                                            };
+
+                                                            // Inline rename signals
+                                                            let editing = RwSignal::new(false);
+                                                            let edit_val = RwSignal::new(display_name.clone());
+                                                            let lid = loan_id.clone();
+                                                            let lid2 = loan_id.clone();
+                                                            let loan_clone = loan.clone();
+
                                                             view! {
-                                                                <div class="active-loan-card">
-                                                                    <div class="loan-card-icon">{"\u{1f7e2}"}</div>
-                                                                    <div class="loan-card-body">
-                                                                        <div class="loan-card-title">{format!("Active Loan \u{00b7} {}", if is_rev { "Revolving" } else { "Fixed" })}</div>
-                                                                        <div class="loan-card-detail">{format!("{} KX \u{00b7} Borrower: {}", pk, bw_short)}</div>
+                                                                <div class=role_class on:click={
+                                                                    let lc = loan_clone.clone();
+                                                                    move |_| {
+                                                                        if !editing.get() {
+                                                                            terms_modal_loan.set(Some(lc.clone()));
+                                                                        }
+                                                                    }
+                                                                }>
+                                                                    // Line 1: Name + type badge + edit button
+                                                                    <div class="loan-card-v2-line1">
+                                                                        {move || if editing.get() {
+                                                                            let lid_s = lid.clone();
+                                                                            view! {
+                                                                                <div class="loan-card-v2-name">
+                                                                                    <input type="text"
+                                                                                        prop:value=move || edit_val.get()
+                                                                                        on:input=move |ev| edit_val.set(event_target_value(&ev))
+                                                                                        on:keydown={
+                                                                                            let lid_k = lid_s.clone();
+                                                                                            move |ev: web_sys::KeyboardEvent| {
+                                                                                                if ev.key() == "Enter" {
+                                                                                                    let lid_k2 = lid_k.clone();
+                                                                                                    let val = edit_val.get();
+                                                                                                    editing.set(false);
+                                                                                                    spawn_local(async move {
+                                                                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                                                                            "loanId": lid_k2, "nickname": val
+                                                                                                        })).unwrap_or(no_args());
+                                                                                                        let _ = call::<()>("set_loan_nickname", args).await;
+                                                                                                        if let Ok(n) = call::<std::collections::HashMap<String,String>>("get_loan_nicknames", no_args()).await {
+                                                                                                            loan_nicknames.set(n);
+                                                                                                        }
+                                                                                                    });
+                                                                                                } else if ev.key() == "Escape" {
+                                                                                                    editing.set(false);
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                        on:blur={
+                                                                                            let lid_b = lid_s.clone();
+                                                                                            move |_| {
+                                                                                                let lid_b2 = lid_b.clone();
+                                                                                                let val = edit_val.get();
+                                                                                                editing.set(false);
+                                                                                                spawn_local(async move {
+                                                                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({
+                                                                                                        "loanId": lid_b2, "nickname": val
+                                                                                                    })).unwrap_or(no_args());
+                                                                                                    let _ = call::<()>("set_loan_nickname", args).await;
+                                                                                                    if let Ok(n) = call::<std::collections::HashMap<String,String>>("get_loan_nicknames", no_args()).await {
+                                                                                                        loan_nicknames.set(n);
+                                                                                                    }
+                                                                                                });
+                                                                                            }
+                                                                                        }
+                                                                                    />
+                                                                                </div>
+                                                                            }.into_any()
+                                                                        } else {
+                                                                            view! {
+                                                                                <span class="loan-card-v2-name">{edit_val.get()}</span>
+                                                                            }.into_any()
+                                                                        }}
+                                                                        <span class="loan-type-badge">{type_badge}</span>
+                                                                        <button class="loan-card-v2-edit" on:click=move |ev: web_sys::MouseEvent| {
+                                                                            ev.stop_propagation();
+                                                                            edit_val.set(loan_nicknames.get().get(&lid2).cloned().unwrap_or_else(|| edit_val.get()));
+                                                                            editing.set(true);
+                                                                        }>{"\u{270f}\u{fe0f}"}</button>
                                                                     </div>
-                                                                    <span class="loan-status-badge active">"ACTIVE"</span>
+                                                                    // Line 2: Due/renewal info
+                                                                    <div class="loan-card-v2-line2">
+                                                                        <span class=if is_delinquent { "overdue" } else { "" }>{line2}</span>
+                                                                    </div>
                                                                 </div>
                                                             }
                                                         }).collect();
@@ -2214,6 +2366,96 @@ fn App() -> impl IntoView {
                                                         }.into_any();
                                                     }
                                                 }
+                                                view! { <span></span> }.into_any()
+                                            }}
+                                            // ── Loan Terms Modal ──
+                                            {move || if let Some(loan) = terms_modal_loan.get() {
+                                                let my_wallet = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+                                                let lender_w = loan.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let borrower_w = loan.get("borrower_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                let is_lender = my_wallet == lender_w;
+                                                let counterparty = if is_lender { borrower_w.clone() } else { lender_w.clone() };
+                                                let role_label = if is_lender { "Borrower" } else { "Lender" };
+
+                                                // Build AI summary from on-chain fields
+                                                let principal_chronos = loan.get("principal_chronos").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let principal_kx = loan.get("principal_kx").and_then(|v| v.as_u64())
+                                                    .unwrap_or(if principal_chronos > 0 { principal_chronos / 1_000_000 } else { 0 });
+                                                let rate_bps = loan.get("interest_rate").and_then(|v| v.get("Fixed")).and_then(|v| v.as_u64()).unwrap_or(0);
+                                                let rate_pct = rate_bps as f64 / 100.0;
+                                                let lt = loan.get("loan_type").cloned().unwrap_or(serde_json::Value::Null);
+                                                let is_revolving = lt.to_string().contains("Revolving");
+                                                let exit_str = loan.get("exit_rights").and_then(|v| v.as_str()).unwrap_or("EitherParty");
+                                                let exit_label = match exit_str {
+                                                    "LenderOnly" => "The lender",
+                                                    "BorrowerOnly" => "The borrower",
+                                                    "Mutual" => "Both parties by mutual agreement",
+                                                    _ => "Either party",
+                                                };
+                                                let autopay = loan.get("requires_autopay").and_then(|v| v.as_bool()).unwrap_or(false);
+                                                let collateral = loan.get("collateral_lock_id").and_then(|v| v.as_str()).unwrap_or("");
+                                                let collateral_text = if collateral.is_empty() {
+                                                    "No collateral is held.".to_string()
+                                                } else {
+                                                    "Collateral is held on-chain.".to_string()
+                                                };
+
+                                                let summary = if is_revolving {
+                                                    let period = lt.get("Revolving")
+                                                        .and_then(|v| v.get("renewal_period"))
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("daily");
+                                                    let exit_hrs = loan.get("exit_notice_hours").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                    format!(
+                                                        "This is a {} revolving loan of {} KX at {:.1}% annual interest. {} may exit with {} hours notice. {} Interest accrues daily and settles at exit. {}",
+                                                        period, principal_kx, rate_pct, exit_label, exit_hrs, collateral_text,
+                                                        if autopay { "Auto-pay is required." } else { "Auto-pay is optional." }
+                                                    )
+                                                } else {
+                                                    let due_ts = loan.get("maturity_at").and_then(|v| v.as_u64());
+                                                    let due_label = if let Some(ts) = due_ts {
+                                                        let d = js_sys::Date::new_0();
+                                                        d.set_time((ts as f64) * 1000.0);
+                                                        d.to_date_string().as_string().unwrap_or_else(|| "unknown".to_string())
+                                                    } else { "TBD".to_string() };
+                                                    let sched = loan.get("payment_schedule").and_then(|v| v.as_str()).unwrap_or("Bullet");
+                                                    format!(
+                                                        "This is a fixed-term loan of {} KX at {:.1}% annual interest, due {}. Payment schedule: {}. {}",
+                                                        principal_kx, rate_pct, due_label, sched, collateral_text
+                                                    )
+                                                };
+
+                                                let portal_url = loan.get("servicer_portal_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                                                view! {
+                                                    <div class="terms-modal-overlay" on:click=move |_| terms_modal_loan.set(None)>
+                                                        <div class="terms-modal" on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                                                            <h3>{"\u{1f4c4} Loan Terms"}</h3>
+                                                            <div class="terms-modal-summary">{summary}</div>
+                                                            <div class="terms-modal-counterparty">
+                                                                {format!("{}: {}", role_label, counterparty)}
+                                                            </div>
+                                                            <div class="terms-modal-disclaimer">
+                                                                {"\u{26a0}\u{fe0f} This summary is generated automatically from on-chain data. The complete terms of this loan are maintained by the lender. In case of any discrepancy, the lender\u{2019}s published terms prevail."}
+                                                            </div>
+                                                            {if !portal_url.is_empty() {
+                                                                let url = portal_url.clone();
+                                                                view! {
+                                                                    <div class="terms-modal-link">
+                                                                        {"\u{1f4ce} Full Terms: "}
+                                                                        <a href=url.clone() target="_blank" rel="noopener">{url.clone()}</a>
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else {
+                                                                view! {
+                                                                    <div style="font-size:12px;color:#666;margin-bottom:14px">"No external terms URL provided by lender."</div>
+                                                                }.into_any()
+                                                            }}
+                                                            <button class="terms-modal-close" on:click=move |_| terms_modal_loan.set(None)>"Close"</button>
+                                                        </div>
+                                                    </div>
+                                                }.into_any()
+                                            } else {
                                                 view! { <span></span> }.into_any()
                                             }}
                                             <OpenPanel info=info lang=lang />
@@ -7110,7 +7352,7 @@ fn PromisesPanel(
 
     // v2.2.2: identity cache — maps wallet_address -> IdentityRecord
     let identity_cache: RwSignal<std::collections::HashMap<String, IdentityRecord>> =
-        RwSignal::new(std::collections::HashMap::new());
+        RwSignal::new(HashMap::new());
 
     let reload = move || {
         spawn_local(async move {
@@ -7983,7 +8225,7 @@ fn OpenPanel(
     let _ = &lang;
     let items = RwSignal::new(Vec::<OpenItem>::new());
     let loading = RwSignal::new(true);
-    let sort_by = RwSignal::new("expiring".to_string()); // "recent", "amount", "type", "expiring"
+    let sort_by = RwSignal::new("expiring".to_string()); // expiring, amount_due, date_added, name_az, role
     let dismiss_target = RwSignal::new(Option::<OpenItem>::None);
     let dismiss_busy = RwSignal::new(false);
 
@@ -8136,9 +8378,10 @@ fn OpenPanel(
                     prop:value=move || sort_by.get()
                 >
                     <option value="expiring">"Expiring Soon"</option>
-                    <option value="recent">"Recent"</option>
-                    <option value="amount">"Amount"</option>
-                    <option value="type">"Type"</option>
+                    <option value="amount_due">"Amount Due"</option>
+                    <option value="date_added">"Date Added"</option>
+                    <option value="name_az">"Name A\u{2013}Z"</option>
+                    <option value="role">"Role"</option>
                 </select>
             </div>
 
@@ -8159,14 +8402,21 @@ fn OpenPanel(
                 // Sort
                 let sort = sort_by.get();
                 match sort.as_str() {
-                    "recent" => list.sort_by(|a, b| b.sort_time.cmp(&a.sort_time)),
-                    "amount" => list.sort_by(|a, b| {
+                    "amount_due" => list.sort_by(|a, b| {
                         let aa = a.amount_kx.unwrap_or(0.0);
                         let bb = b.amount_kx.unwrap_or(0.0);
                         bb.partial_cmp(&aa).unwrap_or(std::cmp::Ordering::Equal)
                     }),
-                    "type" => list.sort_by(|a, b| a.item_type.cmp(&b.item_type)),
+                    "date_added" => list.sort_by(|a, b| b.sort_time.cmp(&a.sort_time)),
+                    "name_az" => list.sort_by(|a, b| a.description.to_lowercase().cmp(&b.description.to_lowercase())),
+                    "role" => list.sort_by(|a, b| {
+                        // Lender items (credit) first, then borrower items, then others
+                        let ra = if a.item_type == "credit" { 0 } else if a.item_type == "invoice" || a.item_type == "poke" || a.item_type == "request" { 2 } else { 1 };
+                        let rb = if b.item_type == "credit" { 0 } else if b.item_type == "invoice" || b.item_type == "poke" || b.item_type == "request" { 2 } else { 1 };
+                        ra.cmp(&rb).then(a.sort_time.cmp(&b.sort_time))
+                    }),
                     _ => list.sort_by(|a, b| {
+                        // "expiring" (default): earliest sort_time first, 0→end
                         let at = if a.sort_time == 0 { i64::MAX } else { a.sort_time };
                         let bt = if b.sort_time == 0 { i64::MAX } else { b.sort_time };
                         at.cmp(&bt)
@@ -8527,10 +8777,10 @@ fn HistoryPanel(
                 }
 
                 // Build cascade maps: which claim_secret_hash groups have any claimed lock?
-                let mut cascade_claimed: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
-                let mut cascade_lock_ids: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                let mut cascade_claimed: std::collections::HashMap<String, bool> = HashMap::new();
+                let mut cascade_lock_ids: std::collections::HashMap<String, Vec<String>> = HashMap::new();
                 // Map claim_secret_hash → (email, recipient_registered) from Email Send entries
-                let mut cascade_email: std::collections::HashMap<String, (String, Option<bool>)> = std::collections::HashMap::new();
+                let mut cascade_email: std::collections::HashMap<String, (String, Option<bool>)> = HashMap::new();
                 for e in &list {
                     if let Some(ref hash) = e.claim_secret_hash {
                         cascade_lock_ids.entry(hash.clone()).or_default().push(e.tx_id.clone());
@@ -8586,7 +8836,7 @@ fn HistoryPanel(
 
                 // Group cascade entries by claim_secret_hash for collapsed display
                 let mut seen_cascade_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
-                let mut cascade_groups: std::collections::HashMap<String, Vec<TxHistoryEntry>> = std::collections::HashMap::new();
+                let mut cascade_groups: std::collections::HashMap<String, Vec<TxHistoryEntry>> = HashMap::new();
                 for e in &page_list {
                     if let Some(ref hash) = e.claim_secret_hash {
                         if cascade_lock_ids.get(hash).map_or(false, |ids| ids.len() > 1) {

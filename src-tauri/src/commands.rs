@@ -22,6 +22,7 @@
 // ║    iOS:      cargo tauri ios build   (on macOS only)                       ║
 // ╚══════════════════════════════════════════════════════════════════════════════╝
 
+use std::collections::HashMap;
 use base64::Engine as _;
 use sha2::{Sha256, Digest};
 #[cfg(mobile)]
@@ -142,6 +143,9 @@ struct WalletConfig {
     /// Whether to broadcast identity (name/email) when sending KX. Default true.
     #[serde(default)]
     show_identity: Option<bool>,
+    /// Local nicknames for loans, keyed by loan_id_hex.
+    #[serde(default)]
+    loan_nicknames: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -182,6 +186,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             request_permission: None,
             show_badges: None,
             show_identity: None,
+            loan_nicknames: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -4297,4 +4302,27 @@ pub async fn get_loan_offers(app: AppHandle) -> Result<serde_json::Value, String
         .await
         .map_err(|e| format!("Failed to fetch loan offers: {e}"))?;
     Ok(result)
+}
+
+// ── Loan nicknames (local only) ──────────────────────────────────────────────
+
+/// Get all loan nicknames.
+#[tauri::command]
+pub async fn get_loan_nicknames(app: AppHandle) -> Result<HashMap<String, String>, String> {
+    let cfg = read_config(&app);
+    Ok(cfg.loan_nicknames.unwrap_or_default())
+}
+
+/// Set a nickname for a loan (or remove it if empty).
+#[tauri::command]
+pub async fn set_loan_nickname(app: AppHandle, loan_id: String, nickname: String) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    let mut nicks = cfg.loan_nicknames.take().unwrap_or_default();
+    if nickname.is_empty() {
+        nicks.remove(&loan_id);
+    } else {
+        nicks.insert(loan_id, nickname);
+    }
+    cfg.loan_nicknames = Some(nicks);
+    write_config(&app, &cfg)
 }

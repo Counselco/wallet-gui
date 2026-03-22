@@ -137,6 +137,8 @@ pub fn run() {
             commands::withdraw_loan_offer,
             commands::get_wallet_loans,
             commands::get_loan_offers,
+            commands::get_loan_nicknames,
+            commands::set_loan_nickname,
             commands::get_avatar_meta,
             commands::update_display_name,
             commands::get_sender_info,
