@@ -1631,7 +1631,13 @@ pub async fn check_biometric_available(app: AppHandle) -> String {
             Err(_) => "available".to_string(), // fallback: let auth attempt decide
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "android")]
+    {
+        // Permissive on Android — let the actual biometric prompt decide.
+        // BiometricManager.canAuthenticate is checked at prompt time by the Android OS.
+        "available".to_string()
+    }
+    #[cfg(not(any(windows, target_os = "android")))]
     {
         "not_supported".to_string()
     }
