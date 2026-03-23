@@ -4749,3 +4749,38 @@ pub async fn cancel_loan_rescission(
     let txid = build_sign_mine_submit(&kp, actions, &url).await?;
     Ok(txid)
 }
+
+/// Get a buy/sell KX quote from XChan.
+#[tauri::command]
+pub async fn xchan_get_quote(direction: String, amount_usd: f64) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({"direction": direction, "amount_usd": amount_usd});
+    let resp = client.post("https://api.chronx.io/api/xchan/buysell-quote")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Parse error: {e}"))?;
+    if let Some(err) = json.get("error").and_then(|e| e.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(json)
+}
+
+/// Execute a buy/sell KX trade via XChan.
+#[tauri::command]
+pub async fn xchan_execute(quote_data: serde_json::Value) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client.post("https://api.chronx.io/api/xchan/buysell-execute")
+        .json(&quote_data)
+        .timeout(std::time::Duration::from_secs(15))
+        .send().await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Parse error: {e}"))?;
+    if let Some(err) = json.get("error").and_then(|e| e.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(json)
+}

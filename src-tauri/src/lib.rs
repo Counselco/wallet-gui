@@ -208,6 +208,8 @@ pub fn run() {
             commands::check_jurisdiction_rules,
             commands::submit_loan_exit,
             commands::cancel_loan_rescission,
+            commands::xchan_get_quote,
+            commands::xchan_execute,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
