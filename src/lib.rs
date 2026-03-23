@@ -6598,9 +6598,25 @@ fn SendPanel(
                             "memo": memo_opt,
                             "claimCode": claim_code.clone(),
                         })).unwrap_or(no_args());
+                        // Check if recipient is registered (auto-delivers, no claim code needed)
+                        let recip_registered = {
+                            let check_args = serde_wasm_bindgen::to_value(&serde_json::json!({"email": email_str.clone()})).unwrap_or(no_args());
+                            call::<bool>("check_email_registered", check_args).await.unwrap_or(false)
+                        };
                         match call::<()>("notify_email_recipient", notify_args).await {
                             Ok(_) => {
-                                if unlock_unix == 0 {
+                                if recip_registered {
+                                    if unlock_unix == 0 {
+                                        msg.set(format!("\u{2705} Sent! Delivering to registered wallet."));
+                                    } else {
+                                        let dt = {
+                                            let d = js_sys::Date::new_0();
+                                            d.set_time((unlock_unix as f64) * 1000.0);
+                                            d.to_date_string().as_string().unwrap_or_else(|| "the unlock date".to_string())
+                                        };
+                                        msg.set(format!("\u{2705} Sent! Delivering to registered wallet on {dt}."));
+                                    }
+                                } else if unlock_unix == 0 {
                                     msg.set(format!("\u{2705} Delivered!\n{email_str} has been notified.\nThey have 72 hours to claim their KX.\nClaim code: {claim_code}"));
                                 } else {
                                     let dt = {
@@ -6608,9 +6624,9 @@ fn SendPanel(
                                         d.set_time((unlock_unix as f64) * 1000.0);
                                         d.to_date_string().as_string().unwrap_or_else(|| "the unlock date".to_string())
                                     };
-                                    msg.set(format!("\u{2705} Promise created!\n{email_str} has been notified.\nThey'll receive a claim email when it unlocks on {dt}."));
+                                    msg.set(format!("\u{2705} Promise created!\n{email_str} has been notified.\nClaim code: {claim_code}\nThey'll receive a claim email when it unlocks on {dt}."));
                                 }
-                                spam_warn.set(true);
+                                spam_warn.set(!recip_registered);
                             }
                             Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                         }
@@ -6751,8 +6767,19 @@ fn SendPanel(
                                 "memo": memo_opt,
                                 "claimCode": claim_code.clone(),
                             })).unwrap_or(no_args());
+                            let ser_registered = {
+                                let ca = serde_wasm_bindgen::to_value(&serde_json::json!({"email": email_str.clone()})).unwrap_or(no_args());
+                                call::<bool>("check_email_registered", ca).await.unwrap_or(false)
+                            };
                             match call::<()>("notify_email_recipient", notify_args).await {
-                                Ok(_) => { msg.set(format!("\u{2705} Series created!\n{count} promises sent. {email_str} has been notified.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                                Ok(_) => {
+                                    if ser_registered {
+                                        msg.set(format!("\u{2705} Series created!\n{count} promises sent. Delivering to registered wallet."));
+                                    } else {
+                                        msg.set(format!("\u{2705} Series created!\n{count} promises sent. {email_str} has been notified.\nClaim code: {claim_code}"));
+                                    }
+                                    spam_warn.set(!ser_registered);
+                                }
                                 Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Series on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
                             // Poll for balance update
@@ -6826,8 +6853,20 @@ fn SendPanel(
                                 "memo": memo_opt,
                                 "claimCode": claim_code.clone(),
                             })).unwrap_or(no_args());
+                            let sl_registered = {
+                                let ca = serde_wasm_bindgen::to_value(&serde_json::json!({"email": email_str.clone()})).unwrap_or(no_args());
+                                call::<bool>("check_email_registered", ca).await.unwrap_or(false)
+                            };
                             match call::<()>("notify_email_recipient", notify_args).await {
-                                Ok(_) => { msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                                Ok(_) => {
+                                    if sl_registered {
+                                        let dt = { let d = js_sys::Date::new_0(); d.set_time((unlock_unix as f64) * 1000.0); d.to_date_string().as_string().unwrap_or_else(|| "the unlock date".to_string()) };
+                                        msg.set(format!("\u{2705} Sent! Delivering to registered wallet on {dt}."));
+                                    } else {
+                                        msg.set(format!("\u{2705} Sent! Email delivered.\nClaim code: {claim_code}"));
+                                    }
+                                    spam_warn.set(!sl_registered);
+                                }
                                 Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Sent on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                             }
                             let prev_nonce = info.get_untracked().as_ref().map(|a| a.nonce).unwrap_or(0);
@@ -7415,21 +7454,23 @@ fn SendPanel(
                         // v2.5.29: Public memo toggle — desktop only, hidden when memo empty
                         {move || if is_desktop() && !memo.get().is_empty() {
                             view! {
-                                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:12px;color:#9ca3af">
-                                    <input type="checkbox"
-                                        prop:checked=move || memo_public.get()
-                                        on:change=move |ev| {
-                                            use wasm_bindgen::JsCast;
-                                            let checked = ev.target()
-                                                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                                .map(|i| i.checked())
-                                                .unwrap_or(false);
-                                            memo_public.set(checked);
-                                        }
-                                        style="accent-color:#d4a84b" />
-                                    "Make this memo public"
-                                </label>
-                                <p style="font-size:0.7rem;color:#6b7280;margin:2px 0 0 22px">"Public memos are permanently visible to everyone on the blockchain."</p>
+                                <div style="text-align:left">
+                                    <label style="display:inline-flex;align-items:center;gap:8px;margin-top:6px;cursor:pointer;font-size:12px;color:#9ca3af">
+                                        <input type="checkbox"
+                                            prop:checked=move || memo_public.get()
+                                            on:change=move |ev| {
+                                                use wasm_bindgen::JsCast;
+                                                let checked = ev.target()
+                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                    .map(|i| i.checked())
+                                                    .unwrap_or(false);
+                                                memo_public.set(checked);
+                                            }
+                                            style="accent-color:#d4a84b;margin:0" />
+                                        "Make this memo public"
+                                    </label>
+                                    <p style="font-size:0.7rem;color:#6b7280;margin:2px 0 0 24px">"Public memos are permanently visible to everyone on the blockchain."</p>
+                                </div>
                             }.into_any()
                         } else {
                             view! { <span></span> }.into_any()
@@ -8149,8 +8190,19 @@ fn CascadeSendPanel(
                         "memo": memo_opt,
                         "claimCode": claim_code.clone(),
                     })).unwrap_or(no_args());
+                    let casc_registered = {
+                        let ca = serde_wasm_bindgen::to_value(&serde_json::json!({"email": email_str.clone()})).unwrap_or(no_args());
+                        call::<bool>("check_email_registered", ca).await.unwrap_or(false)
+                    };
                     match call::<()>("notify_email_recipient", notify_args).await {
-                        Ok(_) => { msg.set(format!("\u{2705} Cascade created!\n{count} stages sent. Recipient has been notified.\nClaim code: {claim_code}")); spam_warn.set(true); }
+                        Ok(_) => {
+                            if casc_registered {
+                                msg.set(format!("\u{2705} Cascade created!\n{count} stages sent. Delivering to registered wallet."));
+                            } else {
+                                msg.set(format!("\u{2705} Cascade created!\n{count} stages sent. Recipient has been notified.\nClaim code: {claim_code}"));
+                            }
+                            spam_warn.set(!casc_registered);
+                        }
                         Err(_) => { msg.set(format!("\u{26a0}\u{fe0f} Cascade on-chain! Email failed.\nClaim code: {claim_code}\nShare this code with the recipient manually.")); }
                     }
                     email.set(String::new());
@@ -8255,21 +8307,23 @@ fn CascadeSendPanel(
                         // v2.5.29: Public memo toggle (desktop only, hidden when memo empty)
                         {move || if !memo.get().is_empty() {
                             view! {
-                                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:12px;color:#9ca3af">
-                                    <input type="checkbox"
-                                        prop:checked=move || memo_public.get()
-                                        on:change=move |ev| {
-                                            use wasm_bindgen::JsCast;
-                                            let checked = ev.target()
-                                                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                                .map(|i| i.checked())
-                                                .unwrap_or(false);
-                                            memo_public.set(checked);
-                                        }
-                                        style="accent-color:#d4a84b" />
-                                    "Make this memo public"
-                                </label>
-                                <p style="font-size:0.7rem;color:#6b7280;margin:2px 0 0 22px">"Public memos are permanently visible to everyone on the blockchain."</p>
+                                <div style="text-align:left">
+                                    <label style="display:inline-flex;align-items:center;gap:8px;margin-top:6px;cursor:pointer;font-size:12px;color:#9ca3af">
+                                        <input type="checkbox"
+                                            prop:checked=move || memo_public.get()
+                                            on:change=move |ev| {
+                                                use wasm_bindgen::JsCast;
+                                                let checked = ev.target()
+                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                    .map(|i| i.checked())
+                                                    .unwrap_or(false);
+                                                memo_public.set(checked);
+                                            }
+                                            style="accent-color:#d4a84b;margin:0" />
+                                        "Make this memo public"
+                                    </label>
+                                    <p style="font-size:0.7rem;color:#6b7280;margin:2px 0 0 24px">"Public memos are permanently visible to everyone on the blockchain."</p>
+                                </div>
                             }.into_any()
                         } else {
                             view! { <span></span> }.into_any()
