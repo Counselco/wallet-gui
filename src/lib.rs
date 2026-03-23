@@ -6419,7 +6419,7 @@ fn SendPanel(
             Err(_) => { msg.set("Error: invalid amount.".into()); return; }
         };
         let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
-        let is_memo_public = memo_public.get_untracked();
+        let is_memo_public = memo_public.get_untracked() && memo_opt.is_some();
 
         // Balance check — reject before PoW mining starts (account for pending email sends)
         if let Some(ref ai) = info.get_untracked() {
@@ -8144,7 +8144,7 @@ fn CascadeSendPanel(
         let email_str = email.get_untracked().trim().to_string();
         let memo_str = memo.get_untracked().trim().to_string();
         let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
-        let is_memo_public = memo_public.get_untracked();
+        let is_memo_public = memo_public.get_untracked() && memo_opt.is_some();
         let st = stages.get_untracked();
 
         // Build entries for create_email_timelock_series

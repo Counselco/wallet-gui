@@ -762,6 +762,7 @@ pub async fn create_timelock(
     let cancellation_window = if cancel_window < 60 { None } else { Some(cancel_window) };
 
     let is_ai = ai_percentage.map_or(false, |p| p > 0);
+    let has_public_memo = memo.is_some() && memo_is_public.unwrap_or(false);
 
     let actions = vec![Action::TimeLockCreate {
         recipient,
@@ -804,8 +805,8 @@ pub async fn create_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-        memo_encrypted: !memo_is_public.unwrap_or(false),
-        memo_public: memo_is_public.unwrap_or(false),
+        memo_encrypted: !has_public_memo,
+        memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
     }];
@@ -928,6 +929,7 @@ pub async fn create_email_timelock(
     } else {
         None
     };
+    let has_public_memo = memo.is_some() && memo_is_public.unwrap_or(false);
 
     let actions = vec![Action::TimeLockCreate {
         recipient,
@@ -970,8 +972,8 @@ pub async fn create_email_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-        memo_encrypted: !memo_is_public.unwrap_or(false),
-        memo_public: memo_is_public.unwrap_or(false),
+        memo_encrypted: !has_public_memo,
+        memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
     }];
@@ -2788,6 +2790,7 @@ pub async fn create_email_timelock_series(
             });
             // Map unlock_at_unix <= 0 to `now` for "Immediately" stages
             let unlock = if e.unlock_at_unix <= 0 { now } else { e.unlock_at_unix };
+            let has_public_memo = memo.is_some() && memo_is_public.unwrap_or(false);
             Action::TimeLockCreate {
                 recipient: recipient.clone(),
                 amount: chronos,
@@ -2829,8 +2832,8 @@ pub async fn create_email_timelock_series(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-                memo_encrypted: !memo_is_public.unwrap_or(false),
-                memo_public: memo_is_public.unwrap_or(false),
+                memo_encrypted: !has_public_memo,
+                memo_public: has_public_memo,
                 pay_as_amount: None,
                 beneficiary_package: None,
             }
@@ -3713,6 +3716,7 @@ pub async fn create_freeform_timelock(
     let cancellation_window = if cancel_window < 60 { None } else { Some(cancel_window) };
 
     let is_ai = ai_percentage.map_or(false, |p| p > 0);
+    let has_public_memo = memo.is_some() && memo_is_public.unwrap_or(false);
 
     let actions = vec![Action::TimeLockCreate {
         recipient,
@@ -3755,8 +3759,8 @@ pub async fn create_freeform_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-        memo_encrypted: !memo_is_public.unwrap_or(false),
-        memo_public: memo_is_public.unwrap_or(false),
+        memo_encrypted: !has_public_memo,
+        memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
     }];
@@ -4289,6 +4293,9 @@ pub async fn create_loan_offer(
         memo,
         channel_id: None,
         lender_signature: lender_sig,
+        min_credit_history_months: None,
+        require_accredited_lender_history: None,
+        require_public_credit_history: None,
     };
 
     let actions = vec![Action::LoanOffer(offer)];
