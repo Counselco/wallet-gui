@@ -548,10 +548,29 @@ async fn build_sign_mine_submit(
         .await
         .map_err(|e| format!("Sending transaction: {e}"))?;
 
-    result
+    let tx_id_str = result
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| "No TxId in response".to_string())
+        .ok_or_else(|| "No TxId in response".to_string())?;
+
+    // v2.5.30: Confirm tx was accepted by polling nonce change (10s timeout)
+    let expected_nonce = nonce + 1;
+    let mut confirmed = false;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if let Ok(res) = rpc_call(url, "chronx_getAccount", serde_json::json!([account_id_b58])).await {
+            let current_nonce = res["nonce"].as_u64().unwrap_or(0);
+            if current_nonce >= expected_nonce {
+                confirmed = true;
+                break;
+            }
+        }
+    }
+    if !confirmed {
+        return Err("Transaction failed to confirm on chain. Please retry.".to_string());
+    }
+
+    Ok(tx_id_str)
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
