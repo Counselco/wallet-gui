@@ -3813,15 +3813,17 @@ fn App() -> impl IntoView {
                                                                 view! { <div class="wiz-field"><label>{label}</label><input type="text" placeholder="e.g. 5.0" prop:value=move || wiz_rate_bps.get() on:input=move |ev| wiz_rate_bps.set(event_target_value(&ev)) /></div> }.into_any()
                                                             }
                                                         }}
-                                                        // Type-specific info boxes
+                                                        // Type-specific info boxes (Arabic text pre-computed outside view!)
                                                         {move || {
                                                             let lt = wiz_loan_type.get();
+                                                            let murabaha_ar = String::from("\u{0627}\u{0644}\u{0645}\u{0631}\u{0627}\u{0628}\u{062d}\u{0629}: \u{0628}\u{064a}\u{0639} \u{0628}\u{0627}\u{0644}\u{062a}\u{0643}\u{0644}\u{0641}\u{0629} \u{0632}\u{0627}\u{0626}\u{062f} \u{0627}\u{0644}\u{0631}\u{0628}\u{062d}. \u{0644}\u{0627} \u{062a}\u{062a}\u{0631}\u{0627}\u{0643}\u{0645} \u{0641}\u{0648}\u{0627}\u{0626}\u{062f}.");
+                                                            let qard_ar = String::from("\u{0627}\u{0644}\u{0642}\u{0631}\u{0636} \u{0627}\u{0644}\u{062d}\u{0633}\u{0646}: \u{064a}\u{0633}\u{062f}\u{062f} \u{0627}\u{0644}\u{0645}\u{0642}\u{062a}\u{0631}\u{0636} \u{0627}\u{0644}\u{0645}\u{0628}\u{0644}\u{063a} \u{0627}\u{0644}\u{0623}\u{0635}\u{0644}\u{064a} \u{0641}\u{0642}\u{0637}.");
                                                             if lt == 4 {
                                                                 view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Bond: 100 years, 0% interest. Only lender can request early return via DrawRequest."</p></div> }.into_any()
                                                             } else if lt == 5 {
-                                                                view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Murabaha: cost-plus sale. No interest accrues. Profit margin fixed at creation."</p></div> }.into_any()
+                                                                view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Murabaha: cost-plus sale. No interest accrues. Profit margin fixed at creation."</p><p style="direction:rtl;text-align:right;margin-top:8px;font-size:13px;color:#e5e7eb">{murabaha_ar}</p></div> }.into_any()
                                                             } else if lt == 6 {
-                                                                view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Qard Hasan: borrower repays principal only. No interest, ever."</p></div> }.into_any()
+                                                                view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Qard Hasan: borrower repays principal only. No interest, ever."</p><p style="direction:rtl;text-align:right;margin-top:8px;font-size:13px;color:#e5e7eb">{qard_ar}</p></div> }.into_any()
                                                             } else {
                                                                 view! { <span></span> }.into_any()
                                                             }
@@ -3884,6 +3886,14 @@ fn App() -> impl IntoView {
                                                                 </div>
                                                             }.into_any()
                                                         }}
+                                                        // Jurisdiction field (all loan types)
+                                                        <div class="wiz-field">
+                                                            <label>"Jurisdiction"</label>
+                                                            <input type="text" placeholder="e.g. State of New York, USA"
+                                                                prop:value=move || wiz_servicer_url.get()
+                                                                on:input=move |ev| wiz_servicer_url.set(event_target_value(&ev)) />
+                                                            <span style="font-size:10px;color:rgba(232,232,216,0.35);margin-top:3px;display:block">"You are responsible for legal compliance in your jurisdiction."</span>
+                                                        </div>
                                                         {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
                                                     </div>
                                                 }.into_any(),
@@ -4172,6 +4182,46 @@ fn App() -> impl IntoView {
                                                                             view! { <span></span> }.into_any()
                                                                         }
                                                                     }}
+                                                                    // PDF download button
+                                                                    <div style="margin-top:12px">
+                                                                        <button style="background:transparent;border:1px solid #d4a84b;color:#d4a84b;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer" on:click=move |_| {
+                                                                            if let Some(ref txid) = wiz_success_tx.get() {
+                                                                                let tx = txid.clone();
+                                                                                let lt = wiz_loan_type.get_untracked();
+                                                                                let borrower_val = wiz_borrower.get_untracked();
+                                                                                let principal_val = wiz_amount.get_untracked();
+                                                                                let rate_val = wiz_rate_bps.get_untracked();
+                                                                                let term_val = wiz_term_months.get_untracked();
+                                                                                let jurisdiction_val = wiz_servicer_url.get_untracked();
+                                                                                let type_name = match lt { 0 => "straight_term", 1 => "revolving", 2 => "amortizing", 3 => "construction", 4 => "bond_instrument", 5 => "murabaha", 6 => "qard_hasan", 7 => "line_of_credit", _ => "other" };
+                                                                                spawn_local(async move {
+                                                                                    let loan_data = serde_json::json!({
+                                                                                        "loan_type": type_name,
+                                                                                        "lender_wallet": "self",
+                                                                                        "borrower_wallet": borrower_val,
+                                                                                        "principal_display": format!("{} KX", principal_val),
+                                                                                        "interest_rate": rate_val.parse::<f64>().unwrap_or(0.0),
+                                                                                        "term_days": term_val.parse::<f64>().unwrap_or(0.0) * 30.0,
+                                                                                        "jurisdiction": jurisdiction_val,
+                                                                                        "offer_tx_id": tx,
+                                                                                        "wallet_version": "2.5.35"
+                                                                                    });
+                                                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanData": loan_data})).unwrap_or(no_args());
+                                                                                    match call::<Vec<u8>>("generate_loan_pdf_draft", args).await {
+                                                                                        Ok(bytes) => {
+                                                                                            let fname = format!("ChronX-Loan-Draft-{}.pdf", &tx[..8.min(tx.len())]);
+                                                                                            let save_args = serde_wasm_bindgen::to_value(&serde_json::json!({"bytes": bytes, "filename": fname})).unwrap_or(no_args());
+                                                                                            match call::<String>("save_pdf_to_file", save_args).await {
+                                                                                                Ok(path) => { web_sys::window().unwrap().alert_with_message(&format!("Saved to: {}", path)).ok(); }
+                                                                                                Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Save failed: {}", e)).ok(); }
+                                                                                            }
+                                                                                        }
+                                                                                        Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("PDF failed: {}", e)).ok(); }
+                                                                                    }
+                                                                                });
+                                                                            }
+                                                                        }>"Download Draft Agreement"</button>
+                                                                    </div>
                                                                 </div>
                                                             }.into_any()
                                                         } else { view! { <span></span> }.into_any() }}
