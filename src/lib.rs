@@ -1191,7 +1191,7 @@ fn App() -> impl IntoView {
     let wizard_open = RwSignal::new(false);
     let wizard_step = RwSignal::new(1u8); // 1-6
     // Wizard form fields
-    let wiz_loan_type = RwSignal::new(0u8); // 0=Fixed, 1=Revolving
+    let wiz_loan_type = RwSignal::new(0u8); // 0=Fixed, 1=Revolving, 2=Amortizing, 3=Construction, 4=Bond, 5=Murabaha, 6=QardHasan, 7=LineOfCredit
     let wiz_borrower = RwSignal::new(String::new());
     let wiz_nickname = RwSignal::new(String::new());
     let wiz_amount = RwSignal::new(String::new());
@@ -3650,6 +3650,42 @@ fn App() -> impl IntoView {
                                                                 <div class="wiz-type-icon">{"\u{1f504}"}</div>
                                                                 <div class="wiz-type-name">"Revolving"</div>
                                                                 <div class="wiz-type-desc">"Auto-renews each period. Either party can exit with notice."</div>
+                                                            </div>
+                                                            <div class=move || if wiz_loan_type.get()==2 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(2)>
+                                                                <div class="wiz-type-icon">{"\u{1f4ca}"}</div>
+                                                                <div class="wiz-type-name">"Amortizing"</div>
+                                                                <div class="wiz-type-desc">"Equal payments over the term. Principal + interest combined."</div>
+                                                            </div>
+                                                            <div class=move || if wiz_loan_type.get()==3 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(3)>
+                                                                <div class="wiz-type-icon">{"\u{1f3d7}\u{fe0f}"}</div>
+                                                                <div class="wiz-type-name">"Construction / Milestone Draw"</div>
+                                                                <div class="wiz-type-desc">"Principal released in installments when milestones are met."</div>
+                                                            </div>
+                                                            <div class=move || if wiz_loan_type.get()==4 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(4)>
+                                                                <div class="wiz-type-icon">{"\u{1f4dc}"}</div>
+                                                                <div class="wiz-type-name">"Bond Instrument"</div>
+                                                                <div class="wiz-type-desc">"100-year, 0% interest. Lender-only exit via DrawRequest."</div>
+                                                            </div>
+                                                            <div class=move || if wiz_loan_type.get()==5 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(5)>
+                                                                <div class="wiz-type-icon">{"\u{2764}\u{fe0f}"}</div>
+                                                                <div class="wiz-type-name">"Murabaha \u{2014} \u{0645}\u{0631}\u{0627}\u{0628}\u{062d}\u{0629}"</div>
+                                                                <div class="wiz-type-desc">"Cost-plus sale. Fixed profit, no interest. Sharia-compliant."</div>
+                                                            </div>
+                                                            <div class=move || if wiz_loan_type.get()==6 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(6)>
+                                                                <div class="wiz-type-icon">{"\u{1f91d}"}</div>
+                                                                <div class="wiz-type-name">"Qard Hasan \u{2014} \u{0642}\u{0631}\u{0636} \u{062d}\u{0633}\u{0646}"</div>
+                                                                <div class="wiz-type-desc">"Benevolent loan. Zero profit. Principal only. Sharia-compliant."</div>
+                                                            </div>
+                                                            <div class=move || if wiz_loan_type.get()==7 {"wiz-type-card selected"} else {"wiz-type-card"}
+                                                                on:click=move |_| wiz_loan_type.set(7)>
+                                                                <div class="wiz-type-icon">{"\u{1f4b3}"}</div>
+                                                                <div class="wiz-type-name">"Line of Credit"</div>
+                                                                <div class="wiz-type-desc">"Pre-authorized credit ceiling. Draw as needed, pay interest on drawn amount."</div>
                                                             </div>
                                                         </div>
                                                         // A6: Loan Reference Number
