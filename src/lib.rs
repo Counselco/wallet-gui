@@ -2331,7 +2331,7 @@ fn App() -> impl IntoView {
                                                                                 spawn_local(async move {
                                                                                     // 15s timeout via race with delay
                                                                                     let result = {
-                                                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
+                                                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id, "ageConfirmed": true})).unwrap_or(no_args());
                                                                                         call::<String>("accept_loan_offer", args).await
                                                                                     };
                                                                                     match result {
@@ -3359,7 +3359,7 @@ fn App() -> impl IntoView {
                                                                                     on:click=move |_| {
                                                                                         let id = lid.clone();
                                                                                         spawn_local(async move {
-                                                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
+                                                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id, "ageConfirmed": true})).unwrap_or(no_args());
                                                                                             match call::<String>("accept_loan_offer", args).await {
                                                                                                 Ok(_) => {
                                                                                                     if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); }
@@ -3577,7 +3577,7 @@ fn App() -> impl IntoView {
                                                 let lid = lid_cancel.clone();
                                                 spawn_local(async move {
                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": lid})).unwrap_or(no_args());
-                                                    let _ = call::<String>("decline_loan_offer", args).await;
+                                                    let _ = call::<String>("cancel_loan_rescission", args).await;
                                                 });
                                                 cooloff_loan_id.set(None);
                                             }>

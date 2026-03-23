@@ -184,6 +184,10 @@ struct WalletConfig {
     /// Self-declared jurisdiction tag for regulatory compliance stubs.
     #[serde(default)]
     pub jurisdiction: Option<JurisdictionTag>,
+
+    /// Credit history visibility preference (dormant until governance activation).
+    #[serde(default)]
+    pub credit_visibility: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -230,6 +234,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             autopay_prefs: None,
             privacy_level: PrivacyLevel::default(),
             jurisdiction: None,
+            credit_visibility: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -783,6 +788,7 @@ pub async fn create_timelock(
         memo_encrypted: !memo_is_public.unwrap_or(false),
         memo_public: memo_is_public.unwrap_or(false),
         pay_as_amount: None,
+        beneficiary_package: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -948,6 +954,7 @@ pub async fn create_email_timelock(
         memo_encrypted: !memo_is_public.unwrap_or(false),
         memo_public: memo_is_public.unwrap_or(false),
         pay_as_amount: None,
+        beneficiary_package: None,
     }];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -2806,6 +2813,7 @@ pub async fn create_email_timelock_series(
                 memo_encrypted: !memo_is_public.unwrap_or(false),
                 memo_public: memo_is_public.unwrap_or(false),
                 pay_as_amount: None,
+                beneficiary_package: None,
             }
         })
         .collect();
@@ -3731,6 +3739,7 @@ pub async fn create_freeform_timelock(
         memo_encrypted: !memo_is_public.unwrap_or(false),
         memo_public: memo_is_public.unwrap_or(false),
         pay_as_amount: None,
+        beneficiary_package: None,
     }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -4270,7 +4279,7 @@ pub async fn create_loan_offer(
 
 /// Borrower accepts a pending loan offer.
 #[tauri::command]
-pub async fn accept_loan_offer(app: AppHandle, loan_id_hex: String) -> Result<String, String> {
+pub async fn accept_loan_offer(app: AppHandle, loan_id_hex: String, age_confirmed: Option<bool>) -> Result<String, String> {
     use chronx_core::transaction::LoanAcceptance;
 
     let url = rpc_url(&app);
@@ -4289,6 +4298,7 @@ pub async fn accept_loan_offer(app: AppHandle, loan_id_hex: String) -> Result<St
         loan_id,
         accepted_at: now,
         borrower_signature: sig,
+        age_confirmed: age_confirmed.unwrap_or(false),
     };
 
     let actions = vec![Action::LoanAcceptance(acceptance)];
@@ -4675,6 +4685,26 @@ pub async fn submit_loan_exit(app: AppHandle, loan_id_hex: String) -> Result<Str
     let actions = vec![Action::LoanExit {
         loan_id,
         exiting_party_signature: sig,
+    }];
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(txid)
+}
+
+/// Cancel a loan during the rescission window (v2.5.29).
+#[tauri::command]
+pub async fn cancel_loan_rescission(
+    app: AppHandle,
+    loan_id_hex: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let wallet_str = kp.account_id.to_b58();
+
+    let actions = vec![Action::LoanRescissionCancel {
+        loan_id: loan_id_hex.clone(),
+        cancelled_by: wallet_str,
+        reason: None,
     }];
     let txid = build_sign_mine_submit(&kp, actions, &url).await?;
     Ok(txid)
