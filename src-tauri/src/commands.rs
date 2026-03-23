@@ -4302,6 +4302,9 @@ pub async fn create_loan_offer(
         min_credit_history_months: None,
         require_accredited_lender_history: None,
         require_public_credit_history: None,
+        milestone_draws_enabled: None,
+        lender_only_exit: None,
+        draw_requestor: None,
     };
 
     let actions = vec![Action::LoanOffer(offer)];
