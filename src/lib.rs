@@ -3802,12 +3802,30 @@ fn App() -> impl IntoView {
                                                                 </select>
                                                             </div>
                                                         </div>
-                                                        <div class="wiz-field">
-                                                            <label>"Annual Interest Rate (%)"</label>
-                                                            <input type="text" placeholder="e.g. 5.0"
-                                                                prop:value=move || wiz_rate_bps.get()
-                                                                on:input=move |ev| wiz_rate_bps.set(event_target_value(&ev)) />
-                                                        </div>
+                                                        {move || {
+                                                            let lt = wiz_loan_type.get();
+                                                            if lt == 4 || lt == 6 {
+                                                                // Bond (4) and Qard Hasan (6): locked 0%
+                                                                let label = if lt == 4 { "0% (protocol-enforced)" } else { "0% (Qard Hasan)" };
+                                                                view! { <div class="wiz-field"><label>"Interest Rate"</label><p style="color:rgba(232,232,216,0.4);font-size:13px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px">{label}</p></div> }.into_any()
+                                                            } else {
+                                                                let label = if lt == 5 { "Profit Margin (%)" } else { "Annual Interest Rate (%)" };
+                                                                view! { <div class="wiz-field"><label>{label}</label><input type="text" placeholder="e.g. 5.0" prop:value=move || wiz_rate_bps.get() on:input=move |ev| wiz_rate_bps.set(event_target_value(&ev)) /></div> }.into_any()
+                                                            }
+                                                        }}
+                                                        // Type-specific info boxes
+                                                        {move || {
+                                                            let lt = wiz_loan_type.get();
+                                                            if lt == 4 {
+                                                                view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Bond: 100 years, 0% interest. Only lender can request early return via DrawRequest."</p></div> }.into_any()
+                                                            } else if lt == 5 {
+                                                                view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Murabaha: cost-plus sale. No interest accrues. Profit margin fixed at creation."</p></div> }.into_any()
+                                                            } else if lt == 6 {
+                                                                view! { <div style="margin:8px 0 0;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6"><p>"Qard Hasan: borrower repays principal only. No interest, ever."</p></div> }.into_any()
+                                                            } else {
+                                                                view! { <span></span> }.into_any()
+                                                            }
+                                                        }}
                                                         // A7: Live payment preview
                                                         {move || {
                                                             let amount: f64 = wiz_amount.get().parse().unwrap_or(0.0);
@@ -3831,12 +3849,13 @@ fn App() -> impl IntoView {
                                                                 view! { <span></span> }.into_any()
                                                             }
                                                         }}
-                                                        {move || if wiz_loan_type.get() == 0 {
+                                                        {move || if wiz_loan_type.get() == 0 || wiz_loan_type.get() == 2 || wiz_loan_type.get() == 3 || wiz_loan_type.get() == 5 || wiz_loan_type.get() == 6 || wiz_loan_type.get() == 7 {
                                                             view! {
                                                                 <div class="wiz-field">
-                                                                    <label>"Term (months)"</label>
+                                                                    <label>{move || if wiz_loan_type.get() == 4 { "Term" } else { "Term (months)" }}</label>
                                                                     <input type="text" placeholder="e.g. 24"
-                                                                        prop:value=move || wiz_term_months.get()
+                                                                        prop:value=move || if wiz_loan_type.get() == 4 { "1200".to_string() } else { wiz_term_months.get() }
+                                                                        disabled=move || wiz_loan_type.get() == 4
                                                                         on:input=move |ev| wiz_term_months.set(event_target_value(&ev)) />
                                                                 </div>
                                                             }.into_any()
