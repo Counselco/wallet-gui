@@ -662,6 +662,7 @@ pub async fn create_timelock(
     risk_level: Option<u32>,
     ai_percentage: Option<u32>,
     axiom_consent_hash: Option<String>,
+    memo_is_public: Option<bool>,
 ) -> Result<String, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
@@ -779,8 +780,8 @@ pub async fn create_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-        memo_encrypted: true,
-        memo_public: false,
+        memo_encrypted: !memo_is_public.unwrap_or(false),
+        memo_public: memo_is_public.unwrap_or(false),
         pay_as_amount: None,
     }];
 
@@ -807,6 +808,7 @@ pub async fn create_email_timelock(
     risk_level: Option<u32>,
     ai_percentage: Option<u32>,
     axiom_consent_hash: Option<String>,
+    memo_is_public: Option<bool>,
 ) -> Result<EmailLockResult, String> {
     use chronx_core::account::UnclaimedAction;
     // grantor_intent now stored in dedicated TimeLockCreate field
@@ -943,8 +945,8 @@ pub async fn create_email_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-        memo_encrypted: true,
-        memo_public: false,
+        memo_encrypted: !memo_is_public.unwrap_or(false),
+        memo_public: memo_is_public.unwrap_or(false),
         pay_as_amount: None,
     }];
 
@@ -2695,6 +2697,7 @@ pub async fn create_email_timelock_series(
     app: AppHandle,
     email: String,
     entries: Vec<SeriesEntryInput>,
+    memo_is_public: Option<bool>,
 ) -> Result<EmailSeriesResult, String> {
     use chronx_core::account::UnclaimedAction;
 
@@ -2800,8 +2803,8 @@ pub async fn create_email_timelock_series(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-                memo_encrypted: true,
-                memo_public: false,
+                memo_encrypted: !memo_is_public.unwrap_or(false),
+                memo_public: memo_is_public.unwrap_or(false),
                 pay_as_amount: None,
             }
         })
@@ -3599,6 +3602,7 @@ pub async fn create_freeform_timelock(
     risk_level: Option<u32>,
     ai_percentage: Option<u32>,
     axiom_consent_hash: Option<String>,
+    memo_is_public: Option<bool>,
 ) -> Result<String, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
@@ -3724,8 +3728,8 @@ pub async fn create_freeform_timelock(
         succession_group: None,
         backup_executors: None,
         executor_threshold: None,
-        memo_encrypted: true,
-        memo_public: false,
+        memo_encrypted: !memo_is_public.unwrap_or(false),
+        memo_public: memo_is_public.unwrap_or(false),
         pay_as_amount: None,
     }];
 

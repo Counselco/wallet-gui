@@ -2085,7 +2085,7 @@ fn App() -> impl IntoView {
                             match tab {
                                 // Tab 0: Receive
                                 0 => view! {
-                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal pending_loan_offers_count=pending_loan_offers_count />
+                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal pending_loan_offers_count=pending_loan_offers_count loans_data=loans_data />
                                 }.into_any(),
                                 // Tab 1: Send / Request KX
                                 1 => view! {
@@ -2261,6 +2261,10 @@ fn App() -> impl IntoView {
                                                             // A2: Terms viewed gate
                                                             let terms_viewed = RwSignal::new(false);
                                                             let accept_disabled = is_blocked;
+                                                            // v2.5.29: Age confirmation + immediate feedback spinner
+                                                            let age_confirmed = RwSignal::new(false);
+                                                            let processing = RwSignal::new(0u8); // 0=idle, 1=accepting, 2=declining, 3=accepted, 4=declined
+                                                            let proc_error = RwSignal::new(String::new());
                                                             view! {
                                                                 <div class="offer-card">
                                                                     <div class="offer-card-left">
@@ -2282,6 +2286,30 @@ fn App() -> impl IntoView {
                                                                     } else {
                                                                         view! { <span></span> }.into_any()
                                                                     }}
+                                                                    // Error message
+                                                                    {move || {
+                                                                        let err = proc_error.get();
+                                                                        if !err.is_empty() {
+                                                                            view! { <p style="color:#ef4444;font-size:12px;margin:4px 0">{err}</p> }.into_any()
+                                                                        } else {
+                                                                            view! { <span></span> }.into_any()
+                                                                        }
+                                                                    }}
+                                                                    // v2.5.29: Age confirmation checkbox
+                                                                    <label style="display:flex;align-items:center;gap:6px;margin:8px 0 4px;cursor:pointer;font-size:12px;color:#9ca3af">
+                                                                        <input type="checkbox"
+                                                                            prop:checked=move || age_confirmed.get()
+                                                                            on:change=move |ev| {
+                                                                                use wasm_bindgen::JsCast;
+                                                                                let checked = ev.target()
+                                                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                                                    .map(|i| i.checked())
+                                                                                    .unwrap_or(false);
+                                                                                age_confirmed.set(checked);
+                                                                            }
+                                                                            style="accent-color:#d4a84b" />
+                                                                        "I confirm I am 18 years of age or older"
+                                                                    </label>
                                                                     <div class="offer-card-actions">
                                                                         // A2: View Terms button
                                                                         <button style="background:transparent;border:1px solid #d4a84b;color:#d4a84b;padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px;" on:click=move |_| {
@@ -2289,40 +2317,75 @@ fn App() -> impl IntoView {
                                                                         }>
                                                                             "View Terms"
                                                                         </button>
-                                                                        // A2: Accept button — disabled until terms viewed; A3: permanently disabled if blocked
+                                                                        // Accept button — requires terms viewed + age confirmed + spinner feedback
                                                                         <button class="offer-accept-btn"
-                                                                            disabled=move || accept_disabled || !terms_viewed.get()
-                                                                            style=move || if accept_disabled || !terms_viewed.get() { "opacity:0.4;cursor:not-allowed;" } else { "" }
+                                                                            disabled=move || { accept_disabled || !terms_viewed.get() || !age_confirmed.get() || processing.get() != 0 }
+                                                                            style=move || if accept_disabled || !terms_viewed.get() || !age_confirmed.get() || processing.get() != 0 { "opacity:0.4;cursor:not-allowed;" } else { "" }
                                                                             on:click=move |_| {
-                                                                                if accept_disabled || !terms_viewed.get() { return; }
+                                                                                if accept_disabled || !terms_viewed.get() || !age_confirmed.get() || processing.get() != 0 { return; }
+                                                                                processing.set(1);
+                                                                                proc_error.set(String::new());
                                                                                 let id = lid.clone();
-                                                                                // A4: Start cooloff after accept
                                                                                 let cid = cooloff_loan_id;
                                                                                 let crem = cooloff_remaining;
                                                                                 spawn_local(async move {
-                                                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
-                                                                                    match call::<String>("accept_loan_offer", args).await {
+                                                                                    // 15s timeout via race with delay
+                                                                                    let result = {
+                                                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
+                                                                                        call::<String>("accept_loan_offer", args).await
+                                                                                    };
+                                                                                    match result {
                                                                                         Ok(_) => {
+                                                                                            processing.set(3); // accepted
                                                                                             cid.set(Some(id));
-                                                                                            crem.set(600);
+                                                                                            crem.set(259200); // 72 hours rescission window
                                                                                             if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); }
                                                                                             if let Ok(v) = call::<serde_json::Value>("get_wallet_loans", no_args()).await { loans_data.set(v); }
                                                                                         }
-                                                                                        Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Accept failed: {}", e)).ok(); }
+                                                                                        Err(e) => {
+                                                                                            processing.set(0);
+                                                                                            proc_error.set(format!("Failed \u{2014} please try again"));
+                                                                                            let _ = e;
+                                                                                        }
                                                                                     }
                                                                                 });
-                                                                            }>{"\u{2713} Accept"}</button>
+                                                                            }>
+                                                                            {move || match processing.get() {
+                                                                                1 => "\u{23F3} Processing\u{2026}".to_string(),
+                                                                                3 => "Accepted \u{2713}".to_string(),
+                                                                                _ => "\u{2713} Accept".to_string(),
+                                                                            }}
+                                                                        </button>
+                                                                        // Decline button — with immediate spinner feedback
                                                                         <button class="offer-decline-btn"
+                                                                            disabled=move || processing.get() != 0
+                                                                            style=move || if processing.get() != 0 { "opacity:0.4;cursor:not-allowed;" } else { "" }
                                                                             on:click=move |_| {
+                                                                                if processing.get() != 0 { return; }
+                                                                                processing.set(2);
+                                                                                proc_error.set(String::new());
                                                                                 let id = lid2.clone();
                                                                                 spawn_local(async move {
                                                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": id})).unwrap_or(no_args());
                                                                                     match call::<String>("decline_loan_offer", args).await {
-                                                                                        Ok(_) => { if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); } }
-                                                                                        Err(e) => { web_sys::window().unwrap().alert_with_message(&format!("Decline failed: {}", e)).ok(); }
+                                                                                        Ok(_) => {
+                                                                                            processing.set(4); // declined
+                                                                                            if let Ok(v) = call::<serde_json::Value>("get_loan_offers", no_args()).await { loan_offers.set(v); }
+                                                                                        }
+                                                                                        Err(e) => {
+                                                                                            processing.set(0);
+                                                                                            proc_error.set(format!("Failed \u{2014} please try again"));
+                                                                                            let _ = e;
+                                                                                        }
                                                                                     }
                                                                                 });
-                                                                            }>{"\u{2717} Decline"}</button>
+                                                                            }>
+                                                                            {move || match processing.get() {
+                                                                                2 => "\u{23F3} Processing\u{2026}".to_string(),
+                                                                                4 => "Declined".to_string(),
+                                                                                _ => "\u{2717} Decline".to_string(),
+                                                                            }}
+                                                                        </button>
                                                                     </div>
                                                                 </div>
                                                             }
@@ -2433,7 +2496,7 @@ fn App() -> impl IntoView {
                                                 if let Some(arr) = data.as_array() {
                                                     let active: Vec<_> = arr.iter().filter(|l| {
                                                         let st = l.get("status").and_then(|s| s.as_str()).unwrap_or("");
-                                                        st == "active" || st == "delinquent" || st == "default"
+                                                        st == "active" || st == "delinquent" || st == "default" || st == "accepted_pending_rescission"
                                                     }).cloned().collect();
                                                     if !active.is_empty() {
                                                         let cards: Vec<_> = active.iter().map(|loan| {
@@ -2443,12 +2506,13 @@ fn App() -> impl IntoView {
                                                             let status = loan.get("status").and_then(|v| v.as_str()).unwrap_or("active").to_string();
                                                             let is_lender = my_wallet == lender_w;
                                                             let is_delinquent = status == "delinquent" || status == "default";
-                                                            let role_class = if is_delinquent { "loan-card-v2 status-delinquent" } else if is_lender { "loan-card-v2 role-lender" } else { "loan-card-v2 role-borrower" };
+                                                            let is_pending_rescission = status == "accepted_pending_rescission";
+                                                            let role_class = if is_pending_rescission { "loan-card-v2 role-borrower" } else if is_delinquent { "loan-card-v2 status-delinquent" } else if is_lender { "loan-card-v2 role-lender" } else { "loan-card-v2 role-borrower" };
                                                             // Type badge
                                                             let lt = loan.get("loan_type").cloned().unwrap_or(serde_json::Value::Null);
                                                             let is_revolving = lt.to_string().contains("Revolving");
                                                             let exit_rights_str = loan.get("exit_rights").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                                            let type_badge = if !is_revolving { "T" } else if exit_rights_str.contains("LenderOnly") { "C" } else { "R" };
+                                                            let type_badge = if is_pending_rescission { "PENDING" } else if !is_revolving { "T" } else if exit_rights_str.contains("LenderOnly") { "C" } else { "R" };
                                                             // Role-aware display name
                                                             let counterparty = if is_lender { &borrower_w } else { &lender_w };
                                                             let counter_short = if counterparty.len() > 14 { format!("{}...{}", &counterparty[..6], &counterparty[counterparty.len()-4..]) } else { counterparty.clone() };
@@ -2470,7 +2534,13 @@ fn App() -> impl IntoView {
                                                             } else { ((principal_kx as f64) * (rate_pct / 100.0) / 365.0, "per day") };
                                                             // Next due
                                                             let next_due_ts = loan.get("next_payment_at").and_then(|v| v.as_u64());
-                                                            let due_str = if is_delinquent {
+                                                            let due_str = if is_pending_rescission {
+                                                                let rescission_at = loan.get("rescission_expires_at").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                                let now_s = (js_sys::Date::now() / 1000.0) as u64;
+                                                                let remaining = rescission_at.saturating_sub(now_s);
+                                                                let hours = remaining / 3600;
+                                                                format!("PENDING \u{2014} Funds transfer in {}h", hours)
+                                                            } else if is_delinquent {
                                                                 "OVERDUE".to_string()
                                                             } else if let Some(ts) = next_due_ts {
                                                                 let now_s = (js_sys::Date::now() / 1000.0) as u64;
@@ -2485,7 +2555,7 @@ fn App() -> impl IntoView {
                                                                     format!("Next Due: In {} days  ({} {})", days, months.get(m).unwrap_or(&"???"), d.get_date())
                                                                 }
                                                             } else { "Next Due: \u{2014}".to_string() };
-                                                            let due_class = if is_delinquent { "mobile-loan-due overdue" } else { "mobile-loan-due" };
+                                                            let due_class = if is_pending_rescission { "mobile-loan-due" } else if is_delinquent { "mobile-loan-due overdue" } else { "mobile-loan-due" };
                                                             // Autopay
                                                             let requires_autopay = loan.get("requires_autopay").and_then(|v| v.as_bool()).unwrap_or(false);
                                                             let user_autopay = ap.get(&loan_id).copied().unwrap_or(false);
@@ -3481,22 +3551,26 @@ fn App() -> impl IntoView {
                     </div>
                     </div> // close main-content
 
-                    // ── A4: Cooloff Modal — 10min cancel window after accepting a loan ──
+                    // ── Rescission Window Modal — 72h cancel window after accepting a loan ──
                     {move || {
                         if let Some(ref loan_id) = cooloff_loan_id.get() {
                             let secs = cooloff_remaining.get();
-                            let mins = secs / 60;
+                            let hours = secs / 3600;
+                            let mins = (secs % 3600) / 60;
                             let s = secs % 60;
                             let lid_cancel = loan_id.clone();
                             view! {
                                 <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;">
                                     <div style="background:var(--bg2,#0f1422);border:1px solid #d4a84b;border-radius:12px;padding:32px;max-width:400px;text-align:center;">
                                         <h3 style="color:#d4a84b;margin-bottom:16px;">"Loan Accepted"</h3>
+                                        <p style="color:#e5e7eb;font-size:18px;font-weight:700;margin-bottom:8px;font-variant-numeric:tabular-nums">
+                                            {format!("{}h {:02}m {:02}s", hours, mins, s)}
+                                        </p>
                                         <p style="color:#e5e7eb;font-size:14px;margin-bottom:16px;">
-                                            {format!("{:02}:{:02} remaining to cancel", mins, s)}
+                                            "Funds will transfer automatically when the rescission window closes."
                                         </p>
                                         <p style="color:rgba(232,232,216,0.5);font-size:12px;margin-bottom:20px;">
-                                            "You may cancel within 10 minutes by submitting a cancellation transaction."
+                                            "You may cancel this loan at no cost within the rescission window."
                                         </p>
                                         <div style="display:flex;gap:12px;justify-content:center;">
                                             <button style="background:#e74c3c;color:#fff;border:none;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;" on:click=move |_| {
@@ -3512,7 +3586,7 @@ fn App() -> impl IntoView {
                                             <button style="background:transparent;border:1px solid #374151;color:#9ca3af;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;" on:click=move |_| {
                                                 cooloff_loan_id.set(None);
                                             }>
-                                                "Dismiss"
+                                                "Close"
                                             </button>
                                         </div>
                                     </div>
@@ -4917,6 +4991,7 @@ fn AccountPanel(
     show_profile_modal: RwSignal<bool>,
     badge: RwSignal<String>,
     pending_loan_offers_count: RwSignal<u32>,
+    loans_data: RwSignal<serde_json::Value>,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
@@ -5857,38 +5932,59 @@ fn AccountPanel(
                     }.into_any()
                 }}
 
-                // ── Incoming promise link at bottom ──────────────────────────
+                // ── 1A: Incoming promises hyperlink ──────────────────────────
                 {move || {
                     let count = incoming.get().len();
                     if count > 0 {
                         view! {
-                            <p style="margin-top:14px;font-size:13px;color:#9ca3af;text-align:center">
-                                {format!("You have {} incoming promise{}.", count, if count == 1 { "" } else { "s" })}
-                                " "
+                            <p style="margin-top:14px;font-size:13px;text-align:center;margin-bottom:0">
                                 <a href="#" style="color:#d4a84b;text-decoration:underline;cursor:pointer" on:click=move |ev| {
                                     ev.prevent_default();
-                                    active_tab.set(2); activity_sub.set(1); // navigate to Promises
-                                }>{t(&lang.get(), "view_promises")}</a>
+                                    active_tab.set(2); activity_sub.set(1);
+                                }>{format!("You have {} incoming promise{}", count, if count == 1 { "" } else { "s" })}</a>
                             </p>
                         }.into_any()
                     } else {
                         view! { <span></span> }.into_any()
                     }
                 }}
-                // ── Incoming loan offer count link (A1) ──────────────────────
+                // ── 1B: Items needing attention hyperlink ────────────────────
                 {move || {
-                    let count = pending_loan_offers_count.get();
-                    if count > 0 {
+                    let offer_count = pending_loan_offers_count.get() as usize;
+                    // Count other action items: poke requests etc. could be added here
+                    let attention_count = offer_count;
+                    if attention_count > 0 {
                         view! {
-                            <div style="margin-top:6px;text-align:center">
-                                <a href="#" style="color:#d4a84b;font-size:13px;text-decoration:none" on:click=move |e| {
-                                    e.prevent_default();
-                                    active_tab.set(2);
-                                    activity_sub.set(2);
-                                }>
-                                    {format!("You have {} new offer(s)", count)}
-                                </a>
-                            </div>
+                            <p style="margin-top:6px;font-size:13px;text-align:center;margin-bottom:0">
+                                <a href="#" style="color:#d4a84b;text-decoration:underline;cursor:pointer;font-weight:600" on:click=move |ev| {
+                                    ev.prevent_default();
+                                    active_tab.set(2); activity_sub.set(2);
+                                }>{format!("\u{26A1} You have {} item{} needing your attention", attention_count, if attention_count == 1 { "" } else { "s" })}</a>
+                            </p>
+                        }.into_any()
+                    } else {
+                        view! { <span></span> }.into_any()
+                    }
+                }}
+                // ── 1C: Open lines hyperlink ─────────────────────────────────
+                {move || {
+                    let data = loans_data.get();
+                    let my_acct = info.get().map(|a| a.account_id.clone()).unwrap_or_default();
+                    let open_count = if let Some(arr) = data.as_array() {
+                        arr.iter().filter(|l| {
+                            let status = l.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                            let borrower = l.get("borrower").and_then(|s| s.as_str()).unwrap_or("");
+                            (status == "active" || status == "accepted_pending_rescission") && borrower == my_acct
+                        }).count()
+                    } else { 0 };
+                    if open_count > 0 {
+                        view! {
+                            <p style="margin-top:6px;font-size:13px;text-align:center;margin-bottom:0">
+                                <a href="#" style="color:#b8943b;text-decoration:underline;cursor:pointer;opacity:0.85" on:click=move |ev| {
+                                    ev.prevent_default();
+                                    active_tab.set(2); activity_sub.set(2);
+                                }>{format!("You have {} open line{}", open_count, if open_count == 1 { "" } else { "s" })}</a>
+                            </p>
                         }.into_any()
                     } else {
                         view! { <span></span> }.into_any()
@@ -6153,6 +6249,7 @@ fn SendPanel(
     let amount   = RwSignal::new(String::new());
     let lock_date = RwSignal::new(String::new());
     let memo     = RwSignal::new(String::new());
+    let memo_public = RwSignal::new(false); // v2.5.29: public memo toggle (desktop only)
     let sending   = RwSignal::new(false);
     let msg       = RwSignal::new(String::new());
     let scan_msg  = RwSignal::new(String::new());
@@ -6322,6 +6419,7 @@ fn SendPanel(
             Err(_) => { msg.set("Error: invalid amount.".into()); return; }
         };
         let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
+        let is_memo_public = memo_public.get_untracked();
 
         // Balance check — reject before PoW mining starts (account for pending email sends)
         if let Some(ref ai) = info.get_untracked() {
@@ -6391,6 +6489,7 @@ fn SendPanel(
                         "riskLevel": lp_risk,
                         "aiPercentage": lp_ai_pct,
                         "axiomConsentHash": lp_hash,
+                        "memoIsPublic": is_memo_public,
                     })).unwrap_or(no_args());
                     match call::<String>("create_freeform_timelock", args).await {
                         Ok(txid) => {
@@ -6398,6 +6497,7 @@ fn SendPanel(
                             amount.set(String::new());
                             lock_date.set(String::new());
                             memo.set(String::new());
+                            memo_public.set(false);
                             freeform_recip.set(String::new());
                             grantor_intent.set(String::new());
                             risk_level.set(50);
@@ -6425,6 +6525,7 @@ fn SendPanel(
                         "riskLevel": lp_risk,
                         "aiPercentage": lp_ai_pct,
                         "axiomConsentHash": lp_hash,
+                        "memoIsPublic": is_memo_public,
                     })).unwrap_or(no_args());
                     match call::<String>("create_timelock", args).await {
                         Ok(txid) => {
@@ -6432,6 +6533,7 @@ fn SendPanel(
                             amount.set(String::new());
                             lock_date.set(String::new());
                             memo.set(String::new());
+                            memo_public.set(false);
                             to_pubkey.set(String::new());
                             grantor_intent.set(String::new());
                             risk_level.set(50);
@@ -6471,6 +6573,7 @@ fn SendPanel(
                     "amountKx": amt,
                     "unlockAtUnix": unlock_unix,
                     "memo": memo_opt.clone(),
+                    "memoIsPublic": is_memo_public,
                 })).unwrap_or(no_args());
                 match call::<EmailLockResult>("create_email_timelock", args).await {
                     Ok(result) => {
@@ -6487,6 +6590,7 @@ fn SendPanel(
                         email.set(String::new());
                         amount.set(String::new());
                         memo.set(String::new());
+                        memo_public.set(false);
                         let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
                             "email": email_str,
                             "amountKx": amt,
@@ -6536,6 +6640,7 @@ fn SendPanel(
                         email.set(String::new());
                         amount.set(String::new());
                         memo.set(String::new());
+                        memo_public.set(false);
                     }
                     Err(e) => {
                         pending_email_chronos.set(0);
@@ -6612,6 +6717,7 @@ fn SendPanel(
                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                         "email": email_str.clone(),
                         "entries": entries_json,
+                        "memoIsPublic": is_memo_public,
                     })).unwrap_or(no_args());
                     match call::<EmailSeriesResult>("create_email_timelock_series", args).await {
                         Ok(result) => {
@@ -6635,6 +6741,7 @@ fn SendPanel(
                             amount.set(String::new());
                             lock_date.set(String::new());
                             memo.set(String::new());
+                            memo_public.set(false);
                             series_entries.set(Vec::new());
                             // Notify recipient (series-aware)
                             let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
@@ -6688,6 +6795,7 @@ fn SendPanel(
                         "riskLevel": lp_risk,
                         "aiPercentage": lp_ai_pct,
                         "axiomConsentHash": lp_hash2,
+                        "memoIsPublic": is_memo_public,
                     })).unwrap_or(no_args());
                     match call::<EmailLockResult>("create_email_timelock", args).await {
                         Ok(result) => {
@@ -6710,6 +6818,7 @@ fn SendPanel(
                             amount.set(String::new());
                             lock_date.set(String::new());
                             memo.set(String::new());
+                            memo_public.set(false);
                             let notify_args = serde_wasm_bindgen::to_value(&serde_json::json!({
                                 "email": email_str,
                                 "amountKx": amt,
@@ -7303,33 +7412,65 @@ fn SendPanel(
                             prop:value=move || memo.get()
                             on:input=move |ev| memo.set(event_target_value(&ev))
                             disabled=move || sending.get()></textarea>
-                        <p style="font-size:0.75rem;color:#d4a84b;font-style:italic;margin:4px 0 0">"Memos are publicly visible on the blockchain. Do not include sensitive personal information."</p>
+                        // v2.5.29: Public memo toggle — desktop only, hidden when memo empty
+                        {move || if is_desktop() && !memo.get().is_empty() {
+                            view! {
+                                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:12px;color:#9ca3af">
+                                    <input type="checkbox"
+                                        prop:checked=move || memo_public.get()
+                                        on:change=move |ev| {
+                                            use wasm_bindgen::JsCast;
+                                            let checked = ev.target()
+                                                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                .map(|i| i.checked())
+                                                .unwrap_or(false);
+                                            memo_public.set(checked);
+                                        }
+                                        style="accent-color:#d4a84b" />
+                                    "Make this memo public"
+                                </label>
+                                <p style="font-size:0.7rem;color:#6b7280;margin:2px 0 0 22px">"Public memos are permanently visible to everyone on the blockchain."</p>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
                     </div>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
-            // Beneficiary description (grantor_intent) — Send Later, desktop only
+            // Beneficiary Information (Verifas) — Send Later, desktop only
             {move || if send_mode.get() == 1 && is_desktop() {
+                // Check if unlock date is more than 2 years from now
+                let is_long_horizon = {
+                    let ld = lock_date.get();
+                    if ld.is_empty() { false } else {
+                        let now_ms = js_sys::Date::now();
+                        let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(&ld));
+                        let unlock_ms = d.get_time();
+                        let two_years_ms = 2.0 * 365.25 * 86400.0 * 1000.0;
+                        unlock_ms - now_ms > two_years_ms
+                    }
+                };
                 view! {
                     <div class="beneficiary-field">
-                        <label>"Beneficiary Description"</label>
-                        <p style="color:#888;font-size:12px;font-style:italic;margin:2px 0 6px">"Additional beneficiary info is strongly recommended for promises over 1 year."</p>
-                        <textarea class="lp-textarea" rows="3" maxlength="1000"
-                            placeholder="Who is this for? Describe the intended recipient so they can be identified in the future.\nExample: Emma Johnson, my daughter, born 2019. Last known email: emma@example.com."
+                        <label>"Beneficiary Information (optional)"</label>
+                        <textarea class="lp-textarea" rows="4" maxlength="2000"
+                            placeholder="e.g. \"I leave this to my daughter Sarah Monroe, born March 22 2008, Phoenix Arizona. She may have changed her name by marriage.\""
                             prop:value=move || grantor_intent.get()
                             on:input=move |ev| grantor_intent.set(event_target_value(&ev))
                             disabled=move || sending.get()></textarea>
-                        <div class="field-meta">
-                            <span class="field-hint">"In 20 years your recipient may have a different email. Help them \u{2014} and us \u{2014} find them."</span>
-                            <span class=move || { let c = grantor_intent.get().len(); if c > 900 { "char-counter near-limit" } else { "char-counter" } }>
-                                {move || format!("{} / 1000", grantor_intent.get().len())}
+                        <div style="display:flex;justify-content:flex-end;margin-top:2px">
+                            <span class=move || { let c = grantor_intent.get().len(); if c > 1800 { "char-counter near-limit" } else { "char-counter" } }
+                                style="font-size:11px;color:#6b7280">
+                                {move || format!("{} / 2,000", grantor_intent.get().len())}
                             </span>
                         </div>
-                        <p class="beneficiary-disclosure">
-                            "The information you type here will be securely encrypted on the blockchain. \
-                             It becomes readable by bonded verifiers only if the funds are undeliverable \
-                             after 90 days."
-                        </p>
+                        <p style="font-size:0.7rem;color:#6b7280;margin:4px 0 0">"Encrypted to Verifas. Only a Verifas attestor can read this."</p>
+                        {if is_long_horizon {
+                            view! { <p style="font-size:0.7rem;color:#9ca3af;margin:4px 0 0;font-style:italic">"For long-horizon promises, beneficiary info helps Verifas locate your recipient."</p> }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
                     </div>
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
@@ -7884,6 +8025,7 @@ fn CascadeSendPanel(
 ) -> impl IntoView {
     let email = RwSignal::new(String::new());
     let memo = RwSignal::new(String::new());
+    let memo_public = RwSignal::new(false); // v2.5.29: public memo toggle
     let stages: RwSignal<Vec<CascadeStage>> = RwSignal::new(vec![make_stage()]);
     let sending = RwSignal::new(false);
     let msg = RwSignal::new(String::new());
@@ -7961,6 +8103,7 @@ fn CascadeSendPanel(
         let email_str = email.get_untracked().trim().to_string();
         let memo_str = memo.get_untracked().trim().to_string();
         let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
+        let is_memo_public = memo_public.get_untracked();
         let st = stages.get_untracked();
 
         // Build entries for create_email_timelock_series
@@ -7986,6 +8129,7 @@ fn CascadeSendPanel(
             let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                 "email": email_str.clone(),
                 "entries": entries_json,
+                "memoIsPublic": is_memo_public,
             })).unwrap_or(no_args());
             match call::<EmailSeriesResult>("create_email_timelock_series", args).await {
                 Ok(result) => {
@@ -8011,6 +8155,7 @@ fn CascadeSendPanel(
                     }
                     email.set(String::new());
                     memo.set(String::new());
+                    memo_public.set(false);
                     stages.set(vec![make_stage()]);
                     // Poll for balance update
                     poll_balance_update(info).await;
@@ -8107,7 +8252,28 @@ fn CascadeSendPanel(
                             prop:value=move || memo.get()
                             on:input=move |ev| memo.set(event_target_value(&ev))
                             disabled=move || sending.get() />
-                        <p style="font-size:0.75rem;color:#d4a84b;font-style:italic;margin:4px 0 0">"Memos are publicly visible on the blockchain. Do not include sensitive personal information."</p>
+                        // v2.5.29: Public memo toggle (desktop only, hidden when memo empty)
+                        {move || if !memo.get().is_empty() {
+                            view! {
+                                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:12px;color:#9ca3af">
+                                    <input type="checkbox"
+                                        prop:checked=move || memo_public.get()
+                                        on:change=move |ev| {
+                                            use wasm_bindgen::JsCast;
+                                            let checked = ev.target()
+                                                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                .map(|i| i.checked())
+                                                .unwrap_or(false);
+                                            memo_public.set(checked);
+                                        }
+                                        style="accent-color:#d4a84b" />
+                                    "Make this memo public"
+                                </label>
+                                <p style="font-size:0.7rem;color:#6b7280;margin:2px 0 0 22px">"Public memos are permanently visible to everyone on the blockchain."</p>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }}
                     </div>
                     // Stage builder
                     <div style="margin-bottom:8px">
