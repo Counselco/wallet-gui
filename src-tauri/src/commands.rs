@@ -188,6 +188,10 @@ struct WalletConfig {
     /// Credit history visibility preference (dormant until governance activation).
     #[serde(default)]
     pub credit_visibility: Option<String>,
+
+    /// Last used USDC recipient Base address (convenience pre-fill).
+    #[serde(default)]
+    pub last_usdc_recipient: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -235,6 +239,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             privacy_level: PrivacyLevel::default(),
             jurisdiction: None,
             credit_visibility: None,
+            last_usdc_recipient: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
