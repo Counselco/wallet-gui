@@ -111,6 +111,21 @@ pub enum JurisdictionCheckResult {
     Block(String),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LoanPreferences {
+    #[serde(default)] pub default_loan_type: Option<String>,
+    #[serde(default)] pub default_currency: Option<String>,
+    #[serde(default)] pub default_interest_rate: Option<f64>,
+    #[serde(default)] pub default_term_days: Option<u32>,
+    #[serde(default)] pub default_payment_interval: Option<String>,
+    #[serde(default)] pub show_payaas: bool,
+    #[serde(default)] pub show_advanced_fields: bool,
+    #[serde(default)] pub payaas_explainer_seen: bool,
+    #[serde(default)] pub last_loan_type: Option<String>,
+    #[serde(default)] pub jurisdiction: Option<String>,
+    #[serde(default)] pub remember_last_borrower: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 struct WalletConfig {
     node_url: String,
@@ -192,6 +207,10 @@ struct WalletConfig {
     /// Last used USDC recipient Base address (convenience pre-fill).
     #[serde(default)]
     pub last_usdc_recipient: Option<String>,
+
+    /// Loan tab preferences (desktop only).
+    #[serde(default)]
+    pub loan_preferences: Option<LoanPreferences>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -240,6 +259,7 @@ fn read_config(app: &AppHandle) -> WalletConfig {
             jurisdiction: None,
             credit_visibility: None,
             last_usdc_recipient: None,
+            loan_preferences: None,
         });
     // Auto-migrate: if old single claim_email exists but claim_emails is empty, migrate it.
     if cfg.claim_emails.is_none() {
@@ -4783,4 +4803,59 @@ pub async fn xchan_execute(quote_data: serde_json::Value) -> Result<serde_json::
         return Err(err.to_string());
     }
     Ok(json)
+}
+
+/// Generate a draft loan PDF (after LoanOffer, before acceptance).
+#[tauri::command]
+pub async fn generate_loan_pdf_draft(loan_data: serde_json::Value) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::new();
+    let resp = client.post("https://api.chronx.io/loans/pdf/draft")
+        .json(&loan_data)
+        .timeout(std::time::Duration::from_secs(15))
+        .send().await.map_err(|e| format!("PDF request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("PDF server returned {}", resp.status()));
+    }
+    Ok(resp.bytes().await.map_err(|e| format!("PDF read failed: {e}"))?.to_vec())
+}
+
+/// Generate a final loan PDF (after both parties sign).
+#[tauri::command]
+pub async fn generate_loan_pdf_final(loan_data: serde_json::Value) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::new();
+    let resp = client.post("https://api.chronx.io/loans/pdf/final")
+        .json(&loan_data)
+        .timeout(std::time::Duration::from_secs(15))
+        .send().await.map_err(|e| format!("PDF request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("PDF server returned {}", resp.status()));
+    }
+    Ok(resp.bytes().await.map_err(|e| format!("PDF read failed: {e}"))?.to_vec())
+}
+
+/// Save PDF bytes to Downloads folder.
+#[tauri::command]
+pub async fn save_pdf_to_file(bytes: Vec<u8>, filename: String) -> Result<String, String> {
+    let download_dir = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(|h| std::path::PathBuf::from(h).join("Downloads"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&download_dir);
+    let path = download_dir.join(&filename);
+    std::fs::write(&path, &bytes).map_err(|e| format!("Write failed: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Get loan preferences from WalletConfig.
+#[tauri::command]
+pub async fn get_loan_preferences(app: AppHandle) -> Result<LoanPreferences, String> {
+    Ok(read_config(&app).loan_preferences.unwrap_or_default())
+}
+
+/// Save loan preferences to WalletConfig.
+#[tauri::command]
+pub async fn save_loan_preferences(app: AppHandle, prefs: LoanPreferences) -> Result<(), String> {
+    let mut cfg = read_config(&app);
+    cfg.loan_preferences = Some(prefs);
+    write_config(&app, &cfg)
 }

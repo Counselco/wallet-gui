@@ -210,6 +210,11 @@ pub fn run() {
             commands::cancel_loan_rescission,
             commands::xchan_get_quote,
             commands::xchan_execute,
+            commands::generate_loan_pdf_draft,
+            commands::generate_loan_pdf_final,
+            commands::save_pdf_to_file,
+            commands::get_loan_preferences,
+            commands::save_loan_preferences,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]
