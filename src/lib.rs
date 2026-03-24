@@ -134,6 +134,21 @@ fn is_ios() -> bool {
     }
 }
 
+/// Map raw loan status to friendly display text + color.
+fn friendly_loan_status(raw: &str) -> (&'static str, &'static str) {
+    match raw.to_lowercase().as_str() {
+        "pending" => ("Pending Acceptance", "#d4a84b"),
+        "active" => ("Active", "#4ade80"),
+        "accepted_pending_rescission" => ("Active (rescission)", "#4ade80"),
+        "delinquent" | "default" | "defaulted" => ("Defaulted", "#ef4444"),
+        "completed" => ("Completed", "#6b7280"),
+        "rescinded" | "declined" => ("Rescinded", "#6b7280"),
+        "closed" | "exited" => ("Exited", "#6b7280"),
+        "payment_failed" => ("Payment Failed", "#ef4444"),
+        _ => ("Unknown", "#6b7280"),
+    }
+}
+
 /// Calculate amortization schedule for loan preview.
 fn calc_amortization(principal: f64, annual_rate_pct: f64, term_months: u32) -> Vec<(u32, String, String, String, String)> {
     if principal <= 0.0 || term_months == 0 { return vec![]; }
@@ -1231,6 +1246,8 @@ fn App() -> impl IntoView {
     let wiz_penalty_enabled = RwSignal::new(false);
     let wiz_penalty_type = RwSignal::new(String::from("Flat"));
     let wiz_penalty_amount = RwSignal::new(String::new());
+    // Jurisdiction (separate from servicer_url) (v2.5.37)
+    let wiz_jurisdiction = RwSignal::new(String::new());
     // Construction milestone fields (v2.5.36)
     let wiz_draw_requestor = RwSignal::new(0u8); // 0=Borrower,1=Lender,2=Either
     let wiz_milestone_count = RwSignal::new(3usize);
@@ -2543,7 +2560,8 @@ fn App() -> impl IntoView {
                                                             let lt = loan.get("loan_type").cloned().unwrap_or(serde_json::Value::Null);
                                                             let is_revolving = lt.to_string().contains("Revolving");
                                                             let exit_rights_str = loan.get("exit_rights").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                                            let type_badge = if is_pending_rescission { "PENDING" } else if !is_revolving { "T" } else if exit_rights_str.contains("LenderOnly") { "C" } else { "R" };
+                                                            let (status_text, status_color) = friendly_loan_status(&status);
+                                                            let type_badge = if is_pending_rescission { status_text } else if !is_revolving { "T" } else if exit_rights_str.contains("LenderOnly") { "C" } else { "R" };
                                                             // Role-aware display name
                                                             let counterparty = if is_lender { &borrower_w } else { &lender_w };
                                                             let counter_short = if counterparty.len() > 14 { format!("{}...{}", &counterparty[..6], &counterparty[counterparty.len()-4..]) } else { counterparty.clone() };
@@ -4007,8 +4025,8 @@ fn App() -> impl IntoView {
                                                         <div class="wiz-field">
                                                             <label>"Jurisdiction"</label>
                                                             <input type="text" placeholder="e.g. State of New York, USA"
-                                                                prop:value=move || wiz_servicer_url.get()
-                                                                on:input=move |ev| wiz_servicer_url.set(event_target_value(&ev)) />
+                                                                prop:value=move || wiz_jurisdiction.get()
+                                                                on:input=move |ev| wiz_jurisdiction.set(event_target_value(&ev)) />
                                                             <span style="font-size:10px;color:rgba(232,232,216,0.35);margin-top:3px;display:block">"You are responsible for legal compliance in your jurisdiction."</span>
                                                         </div>
                                                         // PAY_AS collapsible section
@@ -4356,7 +4374,7 @@ fn App() -> impl IntoView {
                                                                                 let principal_val = wiz_amount.get_untracked();
                                                                                 let rate_val = wiz_rate_bps.get_untracked();
                                                                                 let term_val = wiz_term_months.get_untracked();
-                                                                                let jurisdiction_val = wiz_servicer_url.get_untracked();
+                                                                                let jurisdiction_val = wiz_jurisdiction.get_untracked();
                                                                                 let type_name = match lt { 0 => "straight_term", 1 => "revolving", 2 => "amortizing", 3 => "construction", 4 => "bond_instrument", 5 => "murabaha", 6 => "qard_hasan", 7 => "line_of_credit", _ => "other" };
                                                                                 spawn_local(async move {
                                                                                     let loan_data = serde_json::json!({

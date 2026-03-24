@@ -208,6 +208,7 @@ pub fn run() {
             commands::check_jurisdiction_rules,
             commands::submit_loan_exit,
             commands::cancel_loan_rescission,
+            commands::lookup_wallet_by_email,
             commands::xchan_get_quote,
             commands::xchan_execute,
             commands::generate_loan_pdf_draft,

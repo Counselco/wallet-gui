@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "chronx-wallet-gui"
-version = "2.5.35"
+version = "2.5.36"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

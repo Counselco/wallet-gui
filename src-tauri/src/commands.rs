@@ -3090,6 +3090,24 @@ pub async fn remove_from_address_book(app: AppHandle, email: String) -> Result<(
     write_config(&app, &cfg)
 }
 
+/// Lookup wallet address by registered email.
+#[tauri::command]
+pub async fn lookup_wallet_by_email(email: String) -> Result<serde_json::Value, String> {
+    let encoded = email.trim().replace("@", "%40");
+    let url = format!("https://api.chronx.io/wallet/lookup-email/{}", encoded);
+    let client = reqwest::Client::new();
+    let resp = client.get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("Lookup failed: {e}"))?;
+    if resp.status() == 404 {
+        return Ok(serde_json::json!({"found": false}));
+    }
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Parse error: {e}"))?;
+    Ok(json)
+}
+
 #[tauri::command]
 pub async fn check_email_registered(app: AppHandle, email: String) -> Result<bool, String> {
     let url = format!("https://api.chronx.io/check-email?email={}", email.trim());
