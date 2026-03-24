@@ -134,6 +134,24 @@ fn is_ios() -> bool {
     }
 }
 
+/// Calculate amortization schedule for loan preview.
+fn calc_amortization(principal: f64, annual_rate_pct: f64, term_months: u32) -> Vec<(u32, String, String, String, String)> {
+    if principal <= 0.0 || term_months == 0 { return vec![]; }
+    let r = if annual_rate_pct > 0.0 { annual_rate_pct / 100.0 / 12.0 } else { 0.0 };
+    let n = term_months as f64;
+    let payment = if r > 0.0 { principal * r * (1.0 + r).powf(n) / ((1.0 + r).powf(n) - 1.0) } else { principal / n };
+    let mut balance = principal;
+    let mut rows = vec![];
+    for i in 1..=term_months {
+        let interest = balance * r;
+        let prin = (payment - interest).min(balance);
+        balance -= prin;
+        if balance < 0.01 { balance = 0.0; }
+        rows.push((i, format!("{:.2} KX", payment), format!("{:.2} KX", prin), format!("{:.2} KX", interest), format!("{:.2} KX", balance)));
+    }
+    rows
+}
+
 /// Evaluate a loan offer for predatory lending flags.
 /// Returns (is_blocked, is_warned, messages).
 fn check_loan_flags(rate: f64, principal_kx: f64) -> (bool, bool, Vec<String>) {
@@ -1213,6 +1231,19 @@ fn App() -> impl IntoView {
     let wiz_penalty_enabled = RwSignal::new(false);
     let wiz_penalty_type = RwSignal::new(String::from("Flat"));
     let wiz_penalty_amount = RwSignal::new(String::new());
+    // Construction milestone fields (v2.5.36)
+    let wiz_draw_requestor = RwSignal::new(0u8); // 0=Borrower,1=Lender,2=Either
+    let wiz_milestone_count = RwSignal::new(3usize);
+    let wiz_milestone_names: RwSignal<Vec<String>> = RwSignal::new(vec![String::new(); 3]);
+    let wiz_proof_required = RwSignal::new(false);
+    let wiz_op_agreement = RwSignal::new(String::new());
+    // PAY_AS fields (v2.5.36)
+    let wiz_payaas_open = RwSignal::new(false);
+    let wiz_payaas_currency = RwSignal::new("KX".to_string());
+    let wiz_payaas_mode = RwSignal::new("floating".to_string());
+    let wiz_payaas_seen = RwSignal::new(false);
+    // PDF state (v2.5.36)
+    let wiz_pdf_busy = RwSignal::new(false);
     // Submission state
     let wiz_submitting = RwSignal::new(false);
     let wiz_error = RwSignal::new(String::new());
@@ -3886,6 +3917,92 @@ fn App() -> impl IntoView {
                                                                 </div>
                                                             }.into_any()
                                                         }}
+                                                        // Construction milestone fields (type 3)
+                                                        {move || if wiz_loan_type.get() == 3 {
+                                                            view! {
+                                                                <div>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Draw Requestor"</label>
+                                                                        <div style="display:flex;gap:8px">
+                                                                            <button style=move || if wiz_draw_requestor.get()==0 {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_draw_requestor.set(0)>"Borrower"</button>
+                                                                            <button style=move || if wiz_draw_requestor.get()==1 {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_draw_requestor.set(1)>"Lender"</button>
+                                                                            <button style=move || if wiz_draw_requestor.get()==2 {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_draw_requestor.set(2)>"Either"</button>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Number of Milestones"</label>
+                                                                        <div style="display:flex;align-items:center;gap:16px">
+                                                                            <button style="width:32px;height:32px;border-radius:50%;border:1px solid #d4a84b;color:#d4a84b;background:transparent;cursor:pointer;font-size:18px" on:click=move |_| {
+                                                                                let n = wiz_milestone_count.get();
+                                                                                if n > 1 { wiz_milestone_count.set(n - 1); wiz_milestone_names.update(|v| { v.pop(); }); }
+                                                                            }>{"\u{2212}"}</button>
+                                                                            <span style="font-size:16px;min-width:24px;text-align:center">{move || wiz_milestone_count.get().to_string()}</span>
+                                                                            <button style="width:32px;height:32px;border-radius:50%;border:1px solid #d4a84b;color:#d4a84b;background:transparent;cursor:pointer;font-size:18px" on:click=move |_| {
+                                                                                let n = wiz_milestone_count.get();
+                                                                                if n < 20 { wiz_milestone_count.set(n + 1); wiz_milestone_names.update(|v| { v.push(String::new()); }); }
+                                                                            }>"+"</button>
+                                                                        </div>
+                                                                    </div>
+                                                                    {move || {
+                                                                        let count = wiz_milestone_count.get();
+                                                                        let inputs: Vec<_> = (0..count).map(|i| {
+                                                                            let idx = i;
+                                                                            view! {
+                                                                                <div class="wiz-field">
+                                                                                    <label>{format!("Milestone {}", idx + 1)}</label>
+                                                                                    <input type="text" placeholder="e.g. Foundation complete"
+                                                                                        on:input=move |ev| { wiz_milestone_names.update(|v| { if let Some(n) = v.get_mut(idx) { *n = event_target_value(&ev); } }); } />
+                                                                                </div>
+                                                                            }
+                                                                        }).collect();
+                                                                        view! { <div>{inputs}</div> }
+                                                                    }}
+                                                                    <div class="wiz-field">
+                                                                        <label>"Proof Required for Each Draw"</label>
+                                                                        <div style="display:flex;gap:8px">
+                                                                            <button style=move || if !wiz_proof_required.get() {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_proof_required.set(false)>"No"</button>
+                                                                            <button style=move || if wiz_proof_required.get() {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_proof_required.set(true)>"Yes"</button>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="wiz-field">
+                                                                        <label>"Operating Agreement Hash (optional)"</label>
+                                                                        <input type="text" placeholder="BLAKE3 hash of your signed agreement"
+                                                                            prop:value=move || wiz_op_agreement.get()
+                                                                            on:input=move |ev| wiz_op_agreement.set(event_target_value(&ev)) />
+                                                                        <span style="font-size:10px;color:rgba(232,232,216,0.35);margin-top:3px;display:block">"Keep the actual document offline. The hash proves it existed at creation."</span>
+                                                                    </div>
+                                                                </div>
+                                                            }.into_any()
+                                                        } else { view! { <span></span> }.into_any() }}
+                                                        // Amortization preview (types 0=Fixed, 2=Amortizing)
+                                                        {move || {
+                                                            let lt = wiz_loan_type.get();
+                                                            if lt != 0 && lt != 2 { return view! { <span></span> }.into_any(); }
+                                                            let p: f64 = wiz_amount.get().parse().unwrap_or(0.0);
+                                                            let r: f64 = wiz_rate_bps.get().parse().unwrap_or(0.0);
+                                                            let t: u32 = wiz_term_months.get().parse().unwrap_or(0);
+                                                            if p <= 0.0 || t == 0 { return view! { <span></span> }.into_any(); }
+                                                            let rows = calc_amortization(p, r, t);
+                                                            if rows.is_empty() { return view! { <span></span> }.into_any(); }
+                                                            let total_interest: f64 = rows.iter().map(|r| r.3.replace(" KX","").parse::<f64>().unwrap_or(0.0)).sum();
+                                                            let display_rows: Vec<_> = rows.iter().take(6).map(|(num, pmt, prin, int, bal)| {
+                                                                view! { <tr style="border-bottom:1px solid rgba(255,255,255,0.05)"><td style="padding:3px 6px;font-size:11px;color:rgba(232,232,216,0.5)">{num.to_string()}</td><td style="padding:3px 6px;font-size:11px;color:rgba(232,232,216,0.5)">{pmt.clone()}</td><td style="padding:3px 6px;font-size:11px;color:rgba(232,232,216,0.5)">{prin.clone()}</td><td style="padding:3px 6px;font-size:11px;color:rgba(232,232,216,0.5)">{int.clone()}</td><td style="padding:3px 6px;font-size:11px;color:rgba(232,232,216,0.5)">{bal.clone()}</td></tr> }
+                                                            }).collect();
+                                                            let more_count = if rows.len() > 6 { rows.len() - 6 } else { 0 };
+                                                            let more_text = if more_count > 0 { format!("... and {} more payments (all included in PDF)", more_count) } else { String::new() };
+                                                            let total_text = format!("Total interest: {:.2} KX", total_interest);
+                                                            view! {
+                                                                <div style="margin:12px 0;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;max-height:220px;overflow-y:auto">
+                                                                    <div style="font-size:10px;color:#d4a84b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">"Payment Schedule Preview"</div>
+                                                                    <table style="width:100%;border-collapse:collapse">
+                                                                        <thead><tr><th style="padding:3px 6px;font-size:10px;color:#d4a84b;text-align:left">"#"</th><th style="padding:3px 6px;font-size:10px;color:#d4a84b;text-align:left">"Payment"</th><th style="padding:3px 6px;font-size:10px;color:#d4a84b;text-align:left">"Principal"</th><th style="padding:3px 6px;font-size:10px;color:#d4a84b;text-align:left">"Interest"</th><th style="padding:3px 6px;font-size:10px;color:#d4a84b;text-align:left">"Balance"</th></tr></thead>
+                                                                        <tbody>{display_rows}</tbody>
+                                                                    </table>
+                                                                    {if !more_text.is_empty() { view! { <p style="font-size:10px;color:rgba(232,232,216,0.4);text-align:center;margin-top:6px">{more_text}</p> }.into_any() } else { view! { <span></span> }.into_any() }}
+                                                                    <p style="font-size:11px;color:#e5e7eb;text-align:right;margin-top:6px">{total_text}</p>
+                                                                </div>
+                                                            }.into_any()
+                                                        }}
                                                         // Jurisdiction field (all loan types)
                                                         <div class="wiz-field">
                                                             <label>"Jurisdiction"</label>
@@ -3894,6 +4011,53 @@ fn App() -> impl IntoView {
                                                                 on:input=move |ev| wiz_servicer_url.set(event_target_value(&ev)) />
                                                             <span style="font-size:10px;color:rgba(232,232,216,0.35);margin-top:3px;display:block">"You are responsible for legal compliance in your jurisdiction."</span>
                                                         </div>
+                                                        // PAY_AS collapsible section
+                                                        {move || {
+                                                            let payaas_info = "PAY_AS: your loan is measured in USD but payments move as KX, converted at the XChan rate on each payment date. The obligation is fixed. The conversion is automatic.";
+                                                            view! {
+                                                                <div style="margin-top:12px">
+                                                                    <button style="background:transparent;border:none;color:#d4a84b;cursor:pointer;font-size:12px;padding:4px 0" on:click=move |_| {
+                                                                        let new_val = !wiz_payaas_open.get();
+                                                                        wiz_payaas_open.set(new_val);
+                                                                    }>{move || if wiz_payaas_open.get() { "Denominate in a different currency (PAY_AS)" } else { "Denominate in a different currency (PAY_AS)" }}</button>
+                                                                    {move || if wiz_payaas_open.get() {
+                                                                        view! {
+                                                                            <div style="margin-top:8px;padding:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:8px">
+                                                                                {move || if !wiz_payaas_seen.get() {
+                                                                                    view! {
+                                                                                        <div style="margin-bottom:12px;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6">
+                                                                                            <p>{payaas_info}</p>
+                                                                                            <button style="margin-top:8px;padding:4px 12px;background:transparent;border:1px solid #d4a84b;color:#d4a84b;border-radius:4px;font-size:11px;cursor:pointer" on:click=move |_| { wiz_payaas_seen.set(true); }>"Got it"</button>
+                                                                                        </div>
+                                                                                    }.into_any()
+                                                                                } else { view! { <span></span> }.into_any() }}
+                                                                                <div class="wiz-field">
+                                                                                    <label>"Currency"</label>
+                                                                                    <div style="display:flex;gap:8px">
+                                                                                        <button style=move || if wiz_payaas_currency.get()=="KX" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_currency.set("KX".into())>"KX"</button>
+                                                                                        <button style=move || if wiz_payaas_currency.get()=="USD" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_currency.set("USD".into())>"USD"</button>
+                                                                                        <button style=move || if wiz_payaas_currency.get()=="BTC" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_currency.set("BTC".into())>"BTC"</button>
+                                                                                    </div>
+                                                                                </div>
+                                                                                {move || if wiz_payaas_currency.get() != "KX" {
+                                                                                    view! {
+                                                                                        <div class="wiz-field"><label>"Settlement"</label><p style="color:rgba(232,232,216,0.4);font-size:13px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px">"Always KX at XChan rate on payment date"</p></div>
+                                                                                        <div class="wiz-field">
+                                                                                            <label>"Mode"</label>
+                                                                                            <div style="display:flex;gap:8px">
+                                                                                                <button style=move || if wiz_payaas_mode.get()=="floating" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_mode.set("floating".into())>"Floating"</button>
+                                                                                                <span style="padding:6px 14px;border:1px solid rgba(255,255,255,0.05);border-radius:6px;color:rgba(232,232,216,0.25);font-size:12px">"Hedged (Q4 2026)"</span>
+                                                                                                <button style=move || if wiz_payaas_mode.get()=="usdc" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_mode.set("usdc".into())>"USDC Direct"</button>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    }.into_any()
+                                                                                } else { view! { <span></span> }.into_any() }}
+                                                                            </div>
+                                                                        }.into_any()
+                                                                    } else { view! { <span></span> }.into_any() }}
+                                                                </div>
+                                                            }
+                                                        }}
                                                         {move || { let e = wiz_error.get(); if !e.is_empty() { view! { <p class="wiz-error">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
                                                     </div>
                                                 }.into_any(),
