@@ -4322,6 +4322,8 @@ pub async fn create_loan_offer(
     collateral_lock_hex: Option<String>,
     servicer_url: Option<String>,
     memo: Option<String>,
+    pay_as_amount: Option<f64>,
+    hedge_instrument_id: Option<String>,
 ) -> Result<String, String> {
     use chronx_core::transaction::{
         LoanOffer, InterestRate, LoanType, ExitRights, RevivalCondition,
@@ -4337,7 +4339,25 @@ pub async fn create_loan_offer(
     if principal_kx <= 0.0 {
         return Err("Principal must be greater than 0".to_string());
     }
-    let principal_chronos = (principal_kx * CHRONOS_PER_KX as f64) as u64;
+
+    // When PAY_AS is USD/EUR, principal_kx from the frontend is the dollar amount.
+    // Convert to KX equivalent using XChan rate.
+    let principal_chronos = if pay_as_amount.is_some() && (pay_as_currency == "USD" || pay_as_currency == "EUR") {
+        // Fetch live KX/USD rate from XChan API
+        let xchan_rate: f64 = match reqwest::get("https://api.chronx.io/api/xchan/price").await {
+            Ok(resp) => {
+                resp.json::<serde_json::Value>().await.ok()
+                    .and_then(|v| v.get("price").and_then(|p| p.as_f64()))
+                    .unwrap_or(0.003077) // Fallback to ICO price
+            }
+            Err(_) => 0.003077,
+        };
+        // Convert: $20 USD / $0.003077 per KX = ~6,501 KX
+        let kx_equivalent = principal_kx / xchan_rate;
+        (kx_equivalent * CHRONOS_PER_KX as f64) as u64
+    } else {
+        (principal_kx * CHRONOS_PER_KX as f64) as u64
+    };
 
     let pay_as = match pay_as_currency.as_str() {
         "USD" => Some(PayAsDenomination::UsdEquivalentAtMaturity),

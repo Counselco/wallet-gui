@@ -2461,21 +2461,26 @@ fn App() -> impl IntoView {
                                                                             view! { <span></span> }.into_any()
                                                                         }
                                                                     }}
-                                                                    // v2.5.29: Age confirmation checkbox
-                                                                    <label style="display:flex;align-items:center;gap:6px;margin:8px 0 4px;cursor:pointer;font-size:12px;color:#9ca3af">
-                                                                        <input type="checkbox"
-                                                                            prop:checked=move || age_confirmed.get()
-                                                                            on:change=move |ev| {
-                                                                                use wasm_bindgen::JsCast;
-                                                                                let checked = ev.target()
-                                                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                                                                    .map(|i| i.checked())
-                                                                                    .unwrap_or(false);
-                                                                                age_confirmed.set(checked);
-                                                                            }
-                                                                            style="accent-color:#d4a84b" />
-                                                                        "I confirm I am 18 years of age or older"
-                                                                    </label>
+                                                                    // v2.5.40: Consent section
+                                                                    <div style="margin:10px 0 6px;padding:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:8px">
+                                                                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#9ca3af">
+                                                                            <input type="checkbox"
+                                                                                prop:checked=move || age_confirmed.get()
+                                                                                on:change=move |ev| {
+                                                                                    use wasm_bindgen::JsCast;
+                                                                                    let checked = ev.target()
+                                                                                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                                                                        .map(|i| i.checked())
+                                                                                        .unwrap_or(false);
+                                                                                    age_confirmed.set(checked);
+                                                                                }
+                                                                                style="accent-color:#d4a84b" />
+                                                                            "I confirm I am 18 years of age or older"
+                                                                        </label>
+                                                                        <p style="font-size:11px;color:rgba(232,232,216,0.35);margin-top:8px;line-height:1.5">
+                                                                            "You may cancel this loan at no cost within 72 hours. After 72 hours, standard exit terms apply."
+                                                                        </p>
+                                                                    </div>
                                                                     <div class="offer-card-actions">
                                                                         // A2: View Terms button
                                                                         <button style="background:transparent;border:1px solid #d4a84b;color:#d4a84b;padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px;" on:click=move |_| {
@@ -4681,10 +4686,25 @@ fn App() -> impl IntoView {
                                                     };
                                                     // A5: Wire offer expiry
                                                     let expiry_secs = { let v = wiz_offer_expiry.get_untracked(); if v == 0 { None::<u64> } else { Some(v) } };
+                                                    // Sync PAY_AS currency to submission
+                                                    let effective_currency = wiz_payaas_currency.get_untracked();
+                                                    let raw_amount = wiz_amount.get_untracked().trim().parse::<f64>().unwrap_or(0.0);
+                                                    // If USD/EUR mode, send the USD amount as payAsAmount
+                                                    // and let the backend convert to KX equivalent
+                                                    let (principal_kx, pay_as_amount) = if effective_currency == "USD" || effective_currency == "EUR" {
+                                                        // raw_amount IS the dollar/euro amount
+                                                        // Let backend convert to KX using XChan rate
+                                                        (raw_amount, Some(raw_amount))
+                                                    } else {
+                                                        (raw_amount, None::<f64>)
+                                                    };
+                                                    let hedge_id = wiz_hedge_instrument_id.get_untracked();
                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({
                                                         "borrowerAddress": wiz_borrower.get_untracked(),
-                                                        "principalKx": wiz_amount.get_untracked().trim().parse::<f64>().unwrap_or(0.0),
-                                                        "payAsCurrency": wiz_currency.get_untracked(),
+                                                        "principalKx": principal_kx,
+                                                        "payAsCurrency": effective_currency,
+                                                        "payAsAmount": pay_as_amount,
+                                                        "hedgeInstrumentId": if hedge_id.is_empty() { None::<String> } else { Some(hedge_id) },
                                                         "interestRateAnnualPct": wiz_rate_bps.get_untracked().trim().parse::<f64>().unwrap_or(0.0),
                                                         "termMonths": wiz_term_months.get_untracked().trim().parse::<u32>().ok(),
                                                         "scheduleType": sched,
