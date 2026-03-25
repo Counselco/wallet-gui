@@ -134,13 +134,101 @@ fn is_ios() -> bool {
     }
 }
 
+// ── Biometric JS bridge helpers (Android) ─────────────────────────────────────
+// On Android, BiometricPrompt is exposed via @JavascriptInterface on the WebView.
+// These helpers call it from WASM, bypassing the Tauri command which only works
+// on Windows.
+
+/// Check biometric availability via the Kotlin JS bridge.
+/// Returns "available", "not_configured", or "not_supported".
+fn js_biometric_available() -> String {
+    let Some(window) = web_sys::window() else { return "not_supported".into() };
+    let Ok(bridge) = js_sys::Reflect::get(&window, &"__chronxBiometric".into()) else {
+        return "not_supported".into()
+    };
+    if bridge.is_undefined() || bridge.is_null() { return "not_supported".into(); }
+    let Ok(func) = js_sys::Reflect::get(&bridge, &"isAvailable".into()) else {
+        return "not_supported".into()
+    };
+    if let Ok(func) = func.dyn_into::<js_sys::Function>() {
+        if let Ok(result) = func.call0(&bridge) {
+            return result.as_string().unwrap_or_else(|| "not_supported".into());
+        }
+    }
+    "not_supported".into()
+}
+
+/// Authenticate via the Kotlin BiometricPrompt JS bridge.
+/// Sets up a Promise callback, triggers the native prompt, and awaits the result.
+async fn js_biometric_authenticate() -> Result<bool, String> {
+    let window = web_sys::window().ok_or("No window")?;
+    let bridge = js_sys::Reflect::get(&window, &"__chronxBiometric".into())
+        .map_err(|_| "Biometric bridge not available".to_string())?;
+    if bridge.is_undefined() || bridge.is_null() {
+        return Err("Biometric bridge not available".to_string());
+    }
+
+    // Create a JS Promise; store the resolve function on window.__chronxBiometricResult.
+    // Kotlin's evaluateJavascript("window.__chronxBiometricResult('success')") resolves it.
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(win) = web_sys::window() {
+            let _ = js_sys::Reflect::set(&win, &"__chronxBiometricResult".into(), &resolve);
+        }
+    });
+
+    // Trigger the native BiometricPrompt
+    if let Ok(func) = js_sys::Reflect::get(&bridge, &"authenticate".into()) {
+        if let Ok(func) = func.dyn_into::<js_sys::Function>() {
+            let _ = func.call0(&bridge);
+        }
+    }
+
+    // Wait for Kotlin to call __chronxBiometricResult
+    let result = wasm_bindgen_futures::JsFuture::from(promise).await
+        .map_err(|e| format!("{:?}", e))?;
+    let result_str = result.as_string().unwrap_or_default();
+
+    if result_str == "success" {
+        Ok(true)
+    } else if result_str.starts_with("error:") {
+        Err(result_str[6..].to_string())
+    } else {
+        Ok(false)
+    }
+}
+
+/// Platform-aware biometric availability check.
+async fn platform_check_biometric() -> String {
+    if !is_desktop() {
+        // Mobile — use Kotlin JS bridge
+        js_biometric_available()
+    } else {
+        // Desktop — use Tauri command (Windows Hello)
+        call::<String>("check_biometric_available", no_args()).await
+            .unwrap_or_else(|_| "not_supported".to_string())
+    }
+}
+
+/// Platform-aware biometric authentication.
+async fn platform_authenticate_biometric() -> Result<bool, String> {
+    if !is_desktop() {
+        // Mobile — use Kotlin JS bridge
+        js_biometric_authenticate().await
+    } else {
+        // Desktop — use Tauri command (Windows Hello)
+        call::<bool>("authenticate_biometric", no_args()).await
+            .map_err(|e| format!("{:?}", e))
+    }
+}
+
 /// Map raw loan status to friendly display text + color.
 fn friendly_loan_status(raw: &str) -> (&'static str, &'static str) {
     match raw.to_lowercase().as_str() {
         "pending" => ("Pending Acceptance", "#d4a84b"),
         "active" => ("Active", "#4ade80"),
-        "accepted_pending_rescission" => ("Active (rescission)", "#4ade80"),
-        "delinquent" | "default" | "defaulted" => ("Defaulted", "#ef4444"),
+        "accepted_pending_rescission" => ("\u{23f1} Active (rescission)", "#f59e0b"),
+        "delinquent" => ("Overdue", "#f59e0b"),
+        "default" | "defaulted" => ("Defaulted", "#ef4444"),
         "completed" => ("Completed", "#6b7280"),
         "rescinded" | "declined" => ("Rescinded", "#6b7280"),
         "closed" | "exited" => ("Exited", "#6b7280"),
@@ -1254,11 +1342,12 @@ fn App() -> impl IntoView {
     let wiz_milestone_names: RwSignal<Vec<String>> = RwSignal::new(vec![String::new(); 3]);
     let wiz_proof_required = RwSignal::new(false);
     let wiz_op_agreement = RwSignal::new(String::new());
-    // PAY_AS fields (v2.5.36)
-    let wiz_payaas_open = RwSignal::new(false);
-    let wiz_payaas_currency = RwSignal::new("KX".to_string());
+    // Payment Calculation Method (v2.5.39)
+    let wiz_payaas_open = RwSignal::new(true); // Open by default now
+    let wiz_payaas_currency = RwSignal::new("USD".to_string()); // USD pre-selected
     let wiz_payaas_mode = RwSignal::new("floating".to_string());
-    let wiz_payaas_seen = RwSignal::new(false);
+    let wiz_payaas_seen = RwSignal::new(true); // Skip info box by default
+    let wiz_hedge_instrument_id = RwSignal::new(String::new());
     // PDF state (v2.5.36)
     let wiz_pdf_busy = RwSignal::new(false);
     // Submission state
@@ -1296,12 +1385,19 @@ fn App() -> impl IntoView {
     // A4: Cooling-off state after accepting a loan offer
     let cooloff_loan_id = RwSignal::new(Option::<String>::None);
     let cooloff_remaining = RwSignal::new(0i64);
+    // Waive rescission modal
+    let waive_loan_id = RwSignal::new(Option::<String>::None);
+    let waive_submitting = RwSignal::new(false);
+    let waive_error = RwSignal::new(String::new());
     // A6: Loan reference number in wizard
     let wiz_loan_ref = RwSignal::new(String::new());
     // A8: Wizard success TX hash
     let wiz_success_tx = RwSignal::new(Option::<String>::None);
     // A9: Track whether loans data has been loaded at least once
     let loans_loaded = RwSignal::new(false);
+    // Optimistic update: skip loan data refresh while user is editing a loan name
+    let is_editing_loan = RwSignal::new(false);
+    let pending_loans_data = RwSignal::new(Option::<serde_json::Value>::None);
     // A5: Wizard email-first flow
     let wiz_borrower_email = RwSignal::new(String::new());
     let wiz_email_resolved = RwSignal::new(Option::<String>::None);
@@ -2242,7 +2338,29 @@ fn App() -> impl IntoView {
                                             loan_offers.set(v);
                                         }
                                         if let Ok(v) = call::<serde_json::Value>("get_wallet_loans", no_args()).await {
-                                            loans_data.set(v);
+                                            // Fetch wallet labels for all counterparties (display name priority)
+                                            let my_wallet = info.get_untracked().map(|a| a.account_id.clone()).unwrap_or_default();
+                                            if let Some(arr) = v.as_array() {
+                                                let mut labels = wallet_labels.get_untracked();
+                                                for loan in arr {
+                                                    let lw = loan.get("lender_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                    let bw = loan.get("borrower_wallet").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                    let cp = if my_wallet == lw { bw } else { lw };
+                                                    if !cp.is_empty() && !labels.contains_key(&cp) {
+                                                        let cp2 = cp.clone();
+                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({"walletAddress": cp2})).unwrap_or(no_args());
+                                                        if let Ok(label) = call::<String>("get_wallet_label", args).await {
+                                                            labels.insert(cp, label);
+                                                        }
+                                                    }
+                                                }
+                                                wallet_labels.set(labels);
+                                            }
+                                            if is_editing_loan.get_untracked() {
+                                                pending_loans_data.set(Some(v));
+                                            } else {
+                                                loans_data.set(v);
+                                            }
                                         }
                                         if let Ok(n) = call::<std::collections::HashMap<String,String>>("get_loan_nicknames", no_args()).await {
                                             loan_nicknames.set(n);
@@ -2651,17 +2769,22 @@ fn App() -> impl IntoView {
                                                                                                 let lid_k = lid_nick.get();
                                                                                                 let val = edit_val.get();
                                                                                                 editing.set(false);
+                                                                                                is_editing_loan.set(false);
+                                                                                                if let Some(v) = pending_loans_data.get_untracked() { loans_data.set(v); pending_loans_data.set(None); }
                                                                                                 spawn_local(async move {
                                                                                                     let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanId": lid_k, "nickname": val})).unwrap_or(no_args());
                                                                                                     let _ = call::<()>("set_loan_nickname", args).await;
                                                                                                     if let Ok(n) = call::<std::collections::HashMap<String,String>>("get_loan_nicknames", no_args()).await { loan_nicknames.set(n); }
                                                                                                 });
-                                                                                            } else if ev.key() == "Escape" { editing.set(false); }
+                                                                                            } else if ev.key() == "Escape" { editing.set(false); is_editing_loan.set(false); if let Some(v) = pending_loans_data.get_untracked() { loans_data.set(v); pending_loans_data.set(None); } }
                                                                                         }
                                                                                         on:blur=move |_| {
                                                                                             let lid_b = lid_nick.get();
                                                                                             let val = edit_val.get();
                                                                                             editing.set(false);
+                                                                                            is_editing_loan.set(false);
+                                                                                            // Apply any pending loan data that arrived during editing
+                                                                                            if let Some(v) = pending_loans_data.get_untracked() { loans_data.set(v); pending_loans_data.set(None); }
                                                                                             spawn_local(async move {
                                                                                                 let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanId": lid_b, "nickname": val})).unwrap_or(no_args());
                                                                                                 let _ = call::<()>("set_loan_nickname", args).await;
@@ -2683,12 +2806,22 @@ fn App() -> impl IntoView {
                                                                             ev.stop_propagation();
                                                                             edit_val.set(loan_nicknames.get().get(&lid_nick.get()).cloned().unwrap_or_else(|| edit_val.get()));
                                                                             editing.set(true);
+                                                                            is_editing_loan.set(true);
                                                                         }>{"\u{270f}\u{fe0f}"}</button>
                                                                         <span class="loan-type-badge" style="margin-left:auto">{type_badge}</span>
                                                                     </div>
                                                                     // ROW 2: Three detail lines
                                                                     <div class="mobile-loan-row2">
                                                                         <div class=due_class>{due_str}</div>
+                                                                        {if is_pending_rescission {
+                                                                            let lid_waive = loan_id.clone();
+                                                                            view! { <a style="font-size:12px;color:#d4a84b;text-decoration:underline;cursor:pointer;display:inline-block;margin-top:4px" on:click=move |ev: web_sys::MouseEvent| {
+                                                                                ev.stop_propagation();
+                                                                                waive_loan_id.set(Some(lid_waive.clone()));
+                                                                                waive_error.set(String::new());
+                                                                                waive_submitting.set(false);
+                                                                            }>"Waive rescission period"</a> }.into_any()
+                                                                        } else { view! { <span></span> }.into_any() }}
                                                                         <div class="mobile-loan-autopay">
                                                                             {if requires_autopay {
                                                                                 view! { <span style="color:rgba(232,232,216,0.4)">"Auto-Payment: Required"</span> }.into_any()
@@ -3002,7 +3135,11 @@ fn App() -> impl IntoView {
                                                 }
                                                 wallet_labels.set(labels);
                                             }
-                                            loans_data.set(loans_val);
+                                            if is_editing_loan.get_untracked() {
+                                                pending_loans_data.set(Some(loans_val));
+                                            } else {
+                                                loans_data.set(loans_val);
+                                            }
                                             loans_loaded.set(true); // A9: mark loaded
                                         }
                                         if let Ok(offers_val) = call::<serde_json::Value>("get_loan_offers", no_args()).await {
@@ -3039,6 +3176,11 @@ fn App() -> impl IntoView {
                                             // ════════════════════════════════════
                                             view! {
                                                 <div>
+                                                    // ── Governance Notice: Pre-ICO Loan Cap ──
+                                                    <div style="margin-bottom:16px;padding:12px 16px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:8px;display:flex;align-items:flex-start;gap:10px">
+                                                        <span style="font-size:18px;line-height:1">{"\u{26a0}"}</span>
+                                                        <span style="font-size:13px;color:#d4a84b;line-height:1.5">"ChronX Governance Notice: Loans are currently capped at 80,000 KX per offer (~$250 USDC) during the pre-ICO period."</span>
+                                                    </div>
                                                     <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
                                                         <button class="send-mode-btn active" style="font-size:13px;padding:8px 16px"
                                                             on:click=move |_| { wizard_step.set(1); wiz_loan_type.set(0); wiz_borrower.set(String::new()); wiz_nickname.set(String::new()); wiz_amount.set(String::new()); wiz_rate_bps.set(String::new()); wiz_term_months.set(String::new()); wiz_collateral_id.set(String::new()); wiz_servicer_url.set(String::new()); wiz_error.set(String::new()); wiz_success.set(false); wiz_success_tx.set(None); wiz_loan_ref.set(String::new()); wiz_borrower_email.set(String::new()); wiz_email_resolved.set(None); wiz_email_display.set(String::new()); wiz_offer_expiry.set(0); wiz_penalty_enabled.set(false); wiz_penalty_type.set(String::from("Flat")); wiz_penalty_amount.set(String::new()); wizard_open.set(true); }>"+ New Loan"</button>
@@ -3646,6 +3788,57 @@ fn App() -> impl IntoView {
                         }
                     }}
 
+                    // ── Waive Rescission Confirmation Modal ──
+                    {move || {
+                        if let Some(ref lid) = waive_loan_id.get() {
+                            let lid_confirm = lid.clone();
+                            view! {
+                                <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;">
+                                    <div style="background:var(--bg2,#0f1422);border:1px solid #d4a84b;border-radius:12px;padding:32px;max-width:420px;text-align:left;">
+                                        <h3 style="color:#d4a84b;margin-bottom:16px;text-align:center">"Bypass Right of Rescission"</h3>
+                                        <p style="color:#e5e7eb;font-size:14px;margin-bottom:12px">"Waiving the rescission period means:"</p>
+                                        <ul style="color:#e5e7eb;font-size:13px;margin:0 0 16px 20px;line-height:1.8">
+                                            <li>"Funds transfer immediately"</li>
+                                            <li>"The loan cannot be cancelled after this point"</li>
+                                            <li>"Both parties are bound by the loan terms"</li>
+                                        </ul>
+                                        <p style="color:rgba(232,232,216,0.5);font-size:13px;margin-bottom:20px">"Are you sure you want to waive the rescission period?"</p>
+                                        {move || { let e = waive_error.get(); if !e.is_empty() { view! { <p style="color:#e74c3c;font-size:13px;margin-bottom:12px">{e}</p> }.into_any() } else { view! { <span></span> }.into_any() }}}
+                                        <div style="display:flex;gap:12px;justify-content:center;">
+                                            <button style="background:transparent;border:1px solid #374151;color:#9ca3af;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;" on:click=move |_| {
+                                                waive_loan_id.set(None);
+                                            }>
+                                                "Cancel"
+                                            </button>
+                                            <button style="background:#e74c3c;color:#fff;border:none;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;" disabled=move || waive_submitting.get() on:click=move |_| {
+                                                let lid = lid_confirm.clone();
+                                                waive_submitting.set(true);
+                                                waive_error.set(String::new());
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({"loanIdHex": lid})).unwrap_or(no_args());
+                                                    match call::<String>("waive_rescission", args).await {
+                                                        Ok(_) => {
+                                                            waive_loan_id.set(None);
+                                                            waive_submitting.set(false);
+                                                        }
+                                                        Err(e) => {
+                                                            waive_error.set(format!("{:?}", e));
+                                                            waive_submitting.set(false);
+                                                        }
+                                                    }
+                                                });
+                                            }>
+                                                {move || if waive_submitting.get() { "Processing..." } else { "Yes, Transfer Now" }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        }
+                    }}
+
                     // ── Loan Wizard Modal (Desktop Only) ──
                     {move || if wizard_open.get() && is_desktop() {
                         let step = wizard_step.get();
@@ -4029,47 +4222,60 @@ fn App() -> impl IntoView {
                                                                 on:input=move |ev| wiz_jurisdiction.set(event_target_value(&ev)) />
                                                             <span style="font-size:10px;color:rgba(232,232,216,0.35);margin-top:3px;display:block">"You are responsible for legal compliance in your jurisdiction."</span>
                                                         </div>
-                                                        // PAY_AS collapsible section
+                                                        // Payment Calculation Method (v2.5.39)
                                                         {move || {
-                                                            let payaas_info = "PAY_AS: your loan is measured in USD but payments move as KX, converted at the XChan rate on each payment date. The obligation is fixed. The conversion is automatic.";
+                                                            let active_btn = "padding:8px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px;text-align:left";
+                                                            let inactive_btn = "padding:8px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px;text-align:left";
                                                             view! {
-                                                                <div style="margin-top:12px">
-                                                                    <button style="background:transparent;border:none;color:#d4a84b;cursor:pointer;font-size:12px;padding:4px 0" on:click=move |_| {
-                                                                        let new_val = !wiz_payaas_open.get();
-                                                                        wiz_payaas_open.set(new_val);
-                                                                    }>{move || if wiz_payaas_open.get() { "Denominate in a different currency (PAY_AS)" } else { "Denominate in a different currency (PAY_AS)" }}</button>
-                                                                    {move || if wiz_payaas_open.get() {
+                                                                <div style="margin-top:16px">
+                                                                    <label style="font-size:13px;color:rgba(232,232,216,0.7);display:block;margin-bottom:8px">"Payment Calculation Method"</label>
+                                                                    <div style="display:flex;flex-direction:column;gap:6px">
+                                                                        <button style=move || if wiz_payaas_currency.get()=="KX" {active_btn} else {inactive_btn}
+                                                                            on:click=move |_| { wiz_payaas_currency.set("KX".into()); wiz_payaas_mode.set("floating".into()); }>
+                                                                            <div style="font-weight:500">"Fixed KX"</div>
+                                                                            <div style="font-size:10px;margin-top:2px;opacity:0.6">"Lend and repay exact KX amounts. No conversion."</div>
+                                                                        </button>
+                                                                        <button style=move || if wiz_payaas_currency.get()=="USD" && wiz_payaas_mode.get()=="floating" {active_btn} else {inactive_btn}
+                                                                            on:click=move |_| { wiz_payaas_currency.set("USD".into()); wiz_payaas_mode.set("floating".into()); }>
+                                                                            <div style="display:flex;align-items:center;gap:6px">
+                                                                                <span style="font-weight:500">"USD-Pegged (PAY_AS)"</span>
+                                                                                <span style="font-size:9px;padding:2px 6px;background:rgba(212,168,75,0.15);color:#d4a84b;border-radius:3px">"RECOMMENDED"</span>
+                                                                            </div>
+                                                                            <div style="font-size:10px;margin-top:2px;opacity:0.6">"Payments calculated at XChan USD rate on each payment date."</div>
+                                                                        </button>
+                                                                        <button style=move || if wiz_payaas_currency.get()=="USD" && wiz_payaas_mode.get()=="hedged" {active_btn} else {inactive_btn}
+                                                                            on:click=move |_| { wiz_payaas_currency.set("USD".into()); wiz_payaas_mode.set("hedged".into()); }>
+                                                                            <div style="font-weight:500">"Hedged"</div>
+                                                                            <div style="font-size:10px;margin-top:2px;opacity:0.6">"USD-Pegged + USDC locked in HedgeKX escrow."</div>
+                                                                        </button>
+                                                                        <button style=move || if wiz_payaas_currency.get()=="EUR" {active_btn} else {inactive_btn}
+                                                                            on:click=move |_| { wiz_payaas_currency.set("EUR".into()); wiz_payaas_mode.set("floating".into()); }>
+                                                                            <div style="font-weight:500">"EUR-Pegged (PAY_AS)"</div>
+                                                                            <div style="font-size:10px;margin-top:2px;opacity:0.6">"Payments calculated at XChan EUR rate on each payment date."</div>
+                                                                        </button>
+                                                                    </div>
+                                                                    // Settlement note for non-KX modes
+                                                                    {move || if wiz_payaas_currency.get() != "KX" {
                                                                         view! {
-                                                                            <div style="margin-top:8px;padding:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:8px">
-                                                                                {move || if !wiz_payaas_seen.get() {
-                                                                                    view! {
-                                                                                        <div style="margin-bottom:12px;padding:10px 14px;background:rgba(212,168,75,0.08);border:1px solid rgba(212,168,75,0.25);border-radius:6px;font-size:12px;color:#d4a84b;line-height:1.6">
-                                                                                            <p>{payaas_info}</p>
-                                                                                            <button style="margin-top:8px;padding:4px 12px;background:transparent;border:1px solid #d4a84b;color:#d4a84b;border-radius:4px;font-size:11px;cursor:pointer" on:click=move |_| { wiz_payaas_seen.set(true); }>"Got it"</button>
-                                                                                        </div>
-                                                                                    }.into_any()
-                                                                                } else { view! { <span></span> }.into_any() }}
-                                                                                <div class="wiz-field">
-                                                                                    <label>"Currency"</label>
-                                                                                    <div style="display:flex;gap:8px">
-                                                                                        <button style=move || if wiz_payaas_currency.get()=="KX" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_currency.set("KX".into())>"KX"</button>
-                                                                                        <button style=move || if wiz_payaas_currency.get()=="USD" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_currency.set("USD".into())>"USD"</button>
-                                                                                        <button style=move || if wiz_payaas_currency.get()=="BTC" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_currency.set("BTC".into())>"BTC"</button>
-                                                                                    </div>
+                                                                            <p style="margin-top:8px;color:rgba(232,232,216,0.35);font-size:11px">"Settlement is always in KX at the XChan rate on each payment date."</p>
+                                                                        }.into_any()
+                                                                    } else { view! { <span></span> }.into_any() }}
+                                                                    // HedgeKX deposit section (only when Hedged selected)
+                                                                    {move || if wiz_payaas_mode.get() == "hedged" {
+                                                                        view! {
+                                                                            <div style="margin-top:12px;padding:12px;background:rgba(212,168,75,0.05);border:1px solid rgba(212,168,75,0.2);border-radius:8px">
+                                                                                <label style="font-size:12px;color:#d4a84b;font-weight:500">"HedgeKX Deposit"</label>
+                                                                                <p style="font-size:11px;color:rgba(232,232,216,0.5);margin-top:4px;line-height:1.5">"To activate hedging, deposit USDC into the HedgeKX escrow contract. This locks your USDC as collateral against KX price movement."</p>
+                                                                                <a href="https://hedgekx.io" target="_blank" style="display:inline-block;margin-top:8px;padding:6px 16px;background:rgba(212,168,75,0.15);border:1px solid #d4a84b;color:#d4a84b;border-radius:6px;font-size:12px;text-decoration:none;cursor:pointer">"Open HedgeKX"</a>
+                                                                                <div style="margin-top:10px">
+                                                                                    <label style="font-size:11px;color:rgba(232,232,216,0.5)">"After depositing, paste your hedge instrument ID:"</label>
+                                                                                    <input type="text"
+                                                                                        class="wiz-input"
+                                                                                        style="margin-top:4px;font-size:12px"
+                                                                                        placeholder="e.g. 0x3a5b..."
+                                                                                        prop:value=move || wiz_hedge_instrument_id.get()
+                                                                                        on:input=move |ev| wiz_hedge_instrument_id.set(event_target_value(&ev)) />
                                                                                 </div>
-                                                                                {move || if wiz_payaas_currency.get() != "KX" {
-                                                                                    view! {
-                                                                                        <div class="wiz-field"><label>"Settlement"</label><p style="color:rgba(232,232,216,0.4);font-size:13px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px">"Always KX at XChan rate on payment date"</p></div>
-                                                                                        <div class="wiz-field">
-                                                                                            <label>"Mode"</label>
-                                                                                            <div style="display:flex;gap:8px">
-                                                                                                <button style=move || if wiz_payaas_mode.get()=="floating" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_mode.set("floating".into())>"Floating"</button>
-                                                                                                <span style="padding:6px 14px;border:1px solid rgba(255,255,255,0.05);border-radius:6px;color:rgba(232,232,216,0.25);font-size:12px">"Hedged (Q4 2026)"</span>
-                                                                                                <button style=move || if wiz_payaas_mode.get()=="usdc" {"padding:6px 14px;border:1px solid #d4a84b;border-radius:6px;background:rgba(212,168,75,0.1);color:#d4a84b;cursor:pointer;font-size:12px"} else {"padding:6px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;background:transparent;color:rgba(232,232,216,0.5);cursor:pointer;font-size:12px"} on:click=move |_| wiz_payaas_mode.set("usdc".into())>"USDC Direct"</button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    }.into_any()
-                                                                                } else { view! { <span></span> }.into_any() }}
                                                                             </div>
                                                                         }.into_any()
                                                                     } else { view! { <span></span> }.into_any() }}
@@ -4435,6 +4641,12 @@ fn App() -> impl IntoView {
                                                         if wiz_amount.get_untracked().trim().is_empty() || wiz_amount.get_untracked().trim().parse::<f64>().is_err() {
                                                             wiz_error.set("Enter a valid principal amount.".into());
                                                             return;
+                                                        }
+                                                        if let Ok(amt) = wiz_amount.get_untracked().trim().parse::<f64>() {
+                                                            if amt > 80_000.0 {
+                                                                wiz_error.set("Loan cap: maximum 80,000 KX per offer during pre-ICO period.".into());
+                                                                return;
+                                                            }
                                                         }
                                                         if wiz_rate_bps.get_untracked().trim().is_empty() || wiz_rate_bps.get_untracked().trim().parse::<f64>().is_err() {
                                                             wiz_error.set("Enter a valid interest rate.".into());
@@ -4840,7 +5052,7 @@ fn PinScreen(
             spawn_local(async move {
                 let method = call::<String>("get_auth_method", no_args()).await.unwrap_or_else(|_| "pin".to_string());
                 if method == "biometric" {
-                    match call::<bool>("authenticate_biometric", no_args()).await {
+                    match platform_authenticate_biometric().await {
                         Ok(true) => {
                             // Success — emit a synthetic "biometric-unlock" event
                             // The parent handles unlock via bio_show_pin signal
@@ -6007,6 +6219,36 @@ fn AccountPanel(
                 </div>
 
                 <hr style="border:none;border-top:1px solid #1e2130;margin:14px 0" />
+
+                // ── Smart notice lines (above claim code) ──
+                {move || {
+                    let count = incoming.get().len();
+                    if count > 0 {
+                        let s = if count == 1 { "" } else { "s" };
+                        view! {
+                            <p style="font-size:13px;text-align:center;margin:0 0 8px">
+                                <a href="#" style="color:#d4a84b;text-decoration:underline;cursor:pointer" on:click=move |ev| {
+                                    ev.prevent_default();
+                                    active_tab.set(2); activity_sub.set(1);
+                                }>{format!("You have {} promise{} coming due \u{2192}", count, s)}</a>
+                            </p>
+                        }.into_any()
+                    } else { view! { <span></span> }.into_any() }
+                }}
+                {move || {
+                    let offer_count = pending_loan_offers_count.get() as usize;
+                    if offer_count > 0 {
+                        let s = if offer_count == 1 { "" } else { "s" };
+                        view! {
+                            <p style="font-size:13px;text-align:center;margin:0 0 8px">
+                                <a href="#" style="color:#f59e0b;text-decoration:underline;cursor:pointer;font-weight:600" on:click=move |ev| {
+                                    ev.prevent_default();
+                                    active_tab.set(2); activity_sub.set(2);
+                                }>{format!("You have {} open item{} requiring attention \u{2192}", offer_count, s)}</a>
+                            </p>
+                        }.into_any()
+                    } else { view! { <span></span> }.into_any() }
+                }}
 
                 // ── Claim Code (collapsible when user has verified emails) ──
                 <div style="border:1px solid rgba(212,168,75,0.3);border-radius:8px;padding:12px;margin-top:0">
@@ -12024,17 +12266,17 @@ fn SettingsPanel(
                                 auth_method_loading.set(true);
                                 spawn_local(async move {
                                     // Check availability first
-                                    let avail = call::<String>("check_biometric_available", no_args()).await.unwrap_or_else(|_| "not_supported".to_string());
+                                    let avail = platform_check_biometric().await;
                                     if avail != "available" {
                                         cp_msg.set(if avail == "not_configured" {
-                                            "Windows Hello is not configured. Set it up in Windows Settings first.".to_string()
+                                            "Please set up fingerprint or screen lock in your device settings first.".to_string()
                                         } else {
                                             "Biometric authentication not supported on this device.".to_string()
                                         });
                                         auth_method_loading.set(false);
                                         return;
                                     }
-                                    match call::<bool>("authenticate_biometric", no_args()).await {
+                                    match platform_authenticate_biometric().await {
                                         Ok(true) => {
                                             let args = serde_wasm_bindgen::to_value(
                                                 &serde_json::json!({ "method": "biometric" })

@@ -834,7 +834,26 @@ pub async fn create_timelock(
         memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
-    }];
+    
+        transferable: None,
+        current_owner_account: None,
+        transfer_history: None,
+        terms_visibility: None,
+        tranche_info: None,
+        retirement_status: None,
+        retired_fraction: None,
+        escalation_wallet: None,
+        escalation_lock_seconds: None,
+        min_attestors_pct: None,
+        required_hedge_ids: None,
+        success_payment_wallet: None,
+        success_payment_chronos: None,
+        condition_type: None,
+        oracle_pair: None,
+        oracle_trigger_threshold: None,
+        oracle_trigger_direction: None,
+        linked_instrument_id: None,
+}];
 
     build_sign_mine_submit(&kp, actions, &url).await
 }
@@ -1001,7 +1020,26 @@ pub async fn create_email_timelock(
         memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
-    }];
+    
+        transferable: None,
+        current_owner_account: None,
+        transfer_history: None,
+        terms_visibility: None,
+        tranche_info: None,
+        retirement_status: None,
+        retired_fraction: None,
+        escalation_wallet: None,
+        escalation_lock_seconds: None,
+        min_attestors_pct: None,
+        required_hedge_ids: None,
+        success_payment_wallet: None,
+        success_payment_chronos: None,
+        condition_type: None,
+        oracle_pair: None,
+        oracle_trigger_threshold: None,
+        oracle_trigger_direction: None,
+        linked_instrument_id: None,
+}];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
     Ok(EmailLockResult { tx_id, claim_code })
@@ -2867,7 +2905,26 @@ pub async fn create_email_timelock_series(
                 memo_public: has_public_memo,
                 pay_as_amount: None,
                 beneficiary_package: None,
-            }
+            
+                transferable: None,
+                current_owner_account: None,
+                transfer_history: None,
+                terms_visibility: None,
+                tranche_info: None,
+                retirement_status: None,
+                retired_fraction: None,
+                escalation_wallet: None,
+                escalation_lock_seconds: None,
+                min_attestors_pct: None,
+                required_hedge_ids: None,
+                success_payment_wallet: None,
+                success_payment_chronos: None,
+                condition_type: None,
+                oracle_pair: None,
+                oracle_trigger_threshold: None,
+                oracle_trigger_direction: None,
+                linked_instrument_id: None,
+}
         })
         .collect();
 
@@ -3812,7 +3869,26 @@ pub async fn create_freeform_timelock(
         memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
-    }];
+    
+        transferable: None,
+        current_owner_account: None,
+        transfer_history: None,
+        terms_visibility: None,
+        tranche_info: None,
+        retirement_status: None,
+        retired_fraction: None,
+        escalation_wallet: None,
+        escalation_lock_seconds: None,
+        min_attestors_pct: None,
+        required_hedge_ids: None,
+        success_payment_wallet: None,
+        success_payment_chronos: None,
+        condition_type: None,
+        oracle_pair: None,
+        oracle_trigger_threshold: None,
+        oracle_trigger_direction: None,
+        linked_instrument_id: None,
+}];
 
     build_sign_mine_submit(&kp, actions, &url).await
 }
@@ -4348,7 +4424,15 @@ pub async fn create_loan_offer(
         milestone_draws_enabled: None,
         lender_only_exit: None,
         draw_requestor: None,
-    };
+    
+        transferable: None,
+        current_owner: None,
+        transfer_history: None,
+        terms_visibility: None,
+        tranche_info: None,
+        retirement_status: None,
+        retired_fraction: None,
+};
 
     let actions = vec![Action::LoanOffer(offer)];
     let txid = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -4771,6 +4855,27 @@ pub async fn submit_loan_exit(app: AppHandle, loan_id_hex: String) -> Result<Str
 /// Cancel a loan during the rescission window (v2.5.29).
 #[tauri::command]
 pub async fn cancel_loan_rescission(
+    app: AppHandle,
+    loan_id_hex: String,
+) -> Result<String, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    let wallet_str = kp.account_id.to_b58();
+
+    let actions = vec![Action::LoanRescissionCancel {
+        loan_id: loan_id_hex.clone(),
+        cancelled_by: wallet_str,
+        reason: None,
+    }];
+    let txid = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(txid)
+}
+
+/// Waive the rescission period — skip the remaining wait and activate
+/// the loan immediately.  Either party may call this.
+#[tauri::command]
+pub async fn waive_rescission(
     app: AppHandle,
     loan_id_hex: String,
 ) -> Result<String, String> {
