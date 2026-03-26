@@ -5878,7 +5878,7 @@ fn AccountPanel(
                                 let base: u128 = base_str.parse().unwrap_or(0);
                                 let spendable = base.saturating_sub(pending as u128).saturating_sub(escrow);
                                 let usd = (spendable as f64) / 1_000_000.0 * 0.001755;
-                                format!("\u{2248} ${:.2} USD", usd)
+                                format!("\u{2248} ${:.2} USDC", usd)
                             }}
                         </p>
                         {move || {
@@ -5912,12 +5912,22 @@ fn AccountPanel(
                             }.into_any()
                         }}
                         <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
-                        <p style="margin-top:8px;font-size:12px">
-                            <a class="exchange-link exchange-link-mobile" href="#" on:click=move |ev| {
-                                ev.prevent_default();
-                                convert_visible.set(!convert_visible.get_untracked());
-                            }>{move || if convert_visible.get() { "\u{25BC} Convert KX \u{2194} USDC" } else { "\u{25B6} Convert KX \u{2194} USDC" }}</a>
-                        </p>
+                        // Buy KX / Sell KX buttons
+                        <div style="display:flex;gap:8px;margin-top:10px;justify-content:center">
+                            <button style="flex:1;max-width:140px;padding:8px 0;border-radius:8px;background:#1a3a1a;border:1px solid #22c55e;color:#22c55e;font-weight:700;font-size:13px;cursor:pointer"
+                                on:click=move |_| {
+                                    convert_visible.set(true);
+                                    // Pre-select buy mode (future: separate buy flow)
+                                }>
+                                {"\u{25B2} Buy KX"}
+                            </button>
+                            <button style="flex:1;max-width:140px;padding:8px 0;border-radius:8px;background:#3a1a1a;border:1px solid #ef4444;color:#ef4444;font-weight:700;font-size:13px;cursor:pointer"
+                                on:click=move |_| {
+                                    convert_visible.set(!convert_visible.get_untracked());
+                                }>
+                                {"\u{25BC} Sell KX"}
+                            </button>
+                        </div>
                         {move || {
                             if !convert_visible.get() { return view! { <span></span> }.into_any(); }
                             let l = lang.get();
@@ -11860,6 +11870,9 @@ fn SettingsPanel(
     let settings_badges_on = RwSignal::new(true);
     let settings_identity_on = RwSignal::new(true);
 
+    // Saved Base addresses (for Funds Management display)
+    let convert_saved_addrs = RwSignal::new(Vec::<(String, String)>::new());
+
     Effect::new(move |_| {
         spawn_local(async move {
             let url = call::<String>("get_node_url", no_args()).await.unwrap_or_default();
@@ -11870,6 +11883,15 @@ fn SettingsPanel(
             verified_emails.set(verified);
             let method = call::<String>("get_auth_method", no_args()).await.unwrap_or_else(|_| "pin".to_string());
             auth_method.set(method);
+            // Load saved Base addresses for Funds Management display
+            if let Ok(addrs) = call::<Vec<serde_json::Value>>("get_base_addresses", no_args()).await {
+                let parsed: Vec<(String, String)> = addrs.into_iter().filter_map(|v| {
+                    let addr = v.get("address")?.as_str()?.to_string();
+                    let nick = v.get("nickname")?.as_str()?.to_string();
+                    Some((addr, nick))
+                }).collect();
+                convert_saved_addrs.set(parsed);
+            }
             // Load privacy settings
             settings_badges_on.set(call::<bool>("get_show_badges", no_args()).await.unwrap_or(true));
             settings_identity_on.set(call::<bool>("get_show_identity", no_args()).await.unwrap_or(true));
@@ -12986,6 +13008,60 @@ fn SettingsPanel(
                 }.into_any()
             }
 
+
+            // ── Funds Management (Auto-Sweep KX → USDC) ──────────────────────
+            <div class="settings-section" style="order:90">
+                <p class="label" style="color:#d4a84b;font-weight:700;margin-bottom:6px">"FUNDS MANAGEMENT"</p>
+
+                // Auto-Sweep toggle
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <div>
+                        <p style="font-size:13px;color:#ccc;margin:0">"Auto-Sweep KX to USDC"</p>
+                        <p style="font-size:11px;color:#888;margin:2px 0 0">"Convert incoming KX to USDC automatically"</p>
+                    </div>
+                    <div style="opacity:0.5;pointer-events:none;background:#333;border-radius:12px;padding:4px 12px;font-size:11px;color:#888">
+                        "OFF"
+                    </div>
+                </div>
+                <div style="background:#1a1a0a;border:1px solid #d4a84b33;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+                    <p style="font-size:11px;color:#d4a84b;margin:0">
+                        "\u{26a0} Auto-Sweep requires governance activation. Currently available for testing only."
+                    </p>
+                </div>
+
+                // Saved Base address
+                <div style="margin-bottom:8px">
+                    <p style="font-size:12px;color:#aaa;margin:0 0 4px">"Base address (for USDC):"</p>
+                    {move || {
+                        let addrs = convert_saved_addrs.get();
+                        if addrs.is_empty() {
+                            view! {
+                                <p style="font-size:11px;color:#666;font-style:italic">"No Base address saved. Add one in the Sell KX flow on the Receive tab."</p>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div style="display:flex;flex-wrap:wrap;gap:4px">
+                                    {addrs.into_iter().map(|(addr, nick)| {
+                                        let short = if addr.len() > 14 { format!("{}...{}", &addr[..6], &addr[addr.len()-4..]) } else { addr.clone() };
+                                        let label = if nick.is_empty() { short } else { format!("{} ({})", nick, short) };
+                                        view! {
+                                            <span style="background:#222;border:1px solid #444;border-radius:6px;padding:3px 8px;font-size:11px;color:#ccc;font-family:monospace">
+                                                {label}
+                                            </span>
+                                        }
+                                    }).collect_view()}
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+                </div>
+
+                // Sweep config (dormant — governance gated)
+                <div style="display:flex;gap:12px;font-size:11px;color:#666">
+                    <span>"Min sweep: 100 KX"</span>
+                    <span>"Interval: 5 min"</span>
+                </div>
+            </div>
 
             // About (no section label — just centered buttons)
             <div style="order:99;text-align:center;padding:12px 0 4px">
