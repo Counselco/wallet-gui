@@ -217,6 +217,7 @@ pub fn run() {
             commands::save_pdf_to_file,
             commands::get_loan_preferences,
             commands::save_loan_preferences,
+            commands::get_loan_escrow_balance,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

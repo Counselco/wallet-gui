@@ -1431,6 +1431,7 @@ fn App() -> impl IntoView {
     let avatar_uploading = RwSignal::new(false);
     let show_profile_modal = RwSignal::new(false);
     let badge_signal = RwSignal::new(String::new());
+    let verified_identity_tx = RwSignal::new(String::new()); // TX ID if identity verified on-chain
 
     // Load avatar URL + display name whenever account info becomes available
     Effect::new(move |_| {
@@ -1450,6 +1451,13 @@ fn App() -> impl IntoView {
                             badge_signal.set(b.to_string());
                         }
                     }
+                }
+            }
+            // Fetch verified identity (TYPE L IdentityVerified)
+            if let Ok(Some(id_val)) = call::<Option<serde_json::Value>>("get_verified_identity", no_args()).await {
+                if id_val.get("verified").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    let tx = id_val.get("tx_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    verified_identity_tx.set(tx);
                 }
             }
         });
@@ -2229,7 +2237,7 @@ fn App() -> impl IntoView {
                             match tab {
                                 // Tab 0: Receive
                                 0 => view! {
-                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal pending_loan_offers_count=pending_loan_offers_count loans_data=loans_data />
+                                    <AccountPanel info=info loading=loading err_msg=err_msg on_refresh=on_refresh pending_email_chronos=pending_email_chronos active_tab=active_tab activity_sub=activity_sub deep_link_code=deep_link_code lang=lang avatar_url=avatar_url avatar_bust=avatar_bust display_name=g_display_name display_name_editing=g_display_name_editing display_name_input=g_display_name_input avatar_msg=avatar_msg avatar_uploading=avatar_uploading show_profile_modal=show_profile_modal badge=badge_signal pending_loan_offers_count=pending_loan_offers_count loans_data=loans_data verified_identity_tx=verified_identity_tx />
                                 }.into_any(),
                                 // Tab 1: Send / Request KX
                                 1 => view! {
@@ -5511,6 +5519,7 @@ fn AccountPanel(
     badge: RwSignal<String>,
     pending_loan_offers_count: RwSignal<u32>,
     loans_data: RwSignal<serde_json::Value>,
+    verified_identity_tx: RwSignal<String>,
 ) -> impl IntoView {
     let copy_success = RwSignal::new(false);
     let incoming     = RwSignal::new(Vec::<TimeLockInfo>::new());
@@ -5643,6 +5652,27 @@ fn AccountPanel(
                 incoming.set(locks);
             }
             inc_loading.set(false);
+        });
+    });
+
+    // Escrow balance (funds locked during loan rescission)
+    let escrow_total_chronos = RwSignal::new(0u128);
+    let escrow_loan_count    = RwSignal::new(0u32);
+    Effect::new(move |_| {
+        // Re-run when info changes (balance refresh)
+        let _trigger = info.get();
+        spawn_local(async move {
+            if let Ok(val) = call::<serde_json::Value>("get_loan_escrow_balance", no_args()).await {
+                let total: u128 = val.get("total_locked_chronos")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let count = val.get("loan_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                escrow_total_chronos.set(total);
+                escrow_loan_count.set(count);
+            }
         });
     });
 
@@ -5821,28 +5851,66 @@ fn AccountPanel(
                         }
                     }
                 }}
-                        <p class="label" style="margin-top:4px">
-                            "Spendable: "
+                        <p class="label" style="margin-top:4px;font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px">"SPENDABLE BALANCE"</p>
+                        <p class="label" style="margin-top:2px;font-size:18px;color:#d4a84b;font-weight:700">
                             {move || {
-                                if loading.get() { "\u{2026}".into() }
-                                else {
-                                    let pending = pending_email_chronos.get();
-                                    let base_str = info.get()
-                                        .map(|a| a.spendable_chronos)
-                                        .unwrap_or_default();
-                                    if base_str.is_empty() { return "\u{2014}".into(); }
-                                    if pending > 0 {
-                                        let base: u128 = base_str.parse().unwrap_or(0);
-                                        let spendable = base.saturating_sub(pending as u128);
-                                        format!("{} KX  ({} KX pending email)",
-                                            format_kx(&spendable.to_string()),
-                                            format_kx(&pending.to_string()))
-                                    } else {
-                                        format!("{} KX", format_kx(&base_str))
-                                    }
-                                }
+                                if loading.get() { return "\u{2026}".into(); }
+                                let pending = pending_email_chronos.get();
+                                let escrow = escrow_total_chronos.get();
+                                let base_str = info.get()
+                                    .map(|a| a.spendable_chronos)
+                                    .unwrap_or_default();
+                                if base_str.is_empty() { return "\u{2014}".into(); }
+                                let base: u128 = base_str.parse().unwrap_or(0);
+                                let spendable = base.saturating_sub(pending as u128).saturating_sub(escrow);
+                                format!("{} KX", format_kx(&spendable.to_string()))
                             }}
                         </p>
+                        <p style="margin-top:1px;font-size:12px;color:#888">
+                            {move || {
+                                if loading.get() { return String::new(); }
+                                let pending = pending_email_chronos.get();
+                                let escrow = escrow_total_chronos.get();
+                                let base_str = info.get()
+                                    .map(|a| a.spendable_chronos)
+                                    .unwrap_or_default();
+                                if base_str.is_empty() { return String::new(); }
+                                let base: u128 = base_str.parse().unwrap_or(0);
+                                let spendable = base.saturating_sub(pending as u128).saturating_sub(escrow);
+                                let usd = (spendable as f64) / 1_000_000.0 * 0.001755;
+                                format!("\u{2248} ${:.2} USD", usd)
+                            }}
+                        </p>
+                        {move || {
+                            let escrow = escrow_total_chronos.get();
+                            let pending = pending_email_chronos.get();
+                            if escrow == 0 && pending == 0 { return view! { <span></span> }.into_any(); }
+                            let base_str = info.get().map(|a| a.spendable_chronos).unwrap_or_default();
+                            let base: u128 = base_str.parse().unwrap_or(0);
+                            let loan_count = escrow_loan_count.get();
+                            view! {
+                                <div style="margin-top:4px;font-size:11px;color:#999;text-align:center">
+                                    {if base > 0 {
+                                        format!("Total available: {} KX", format_kx(&base.to_string()))
+                                    } else { String::new() }}
+                                </div>
+                                {if escrow > 0 {
+                                    let label = if loan_count == 1 { "1 loan".to_string() } else { format!("{loan_count} loans") };
+                                    view! {
+                                        <div style="margin-top:2px;font-size:11px;color:#d4a84b;text-align:center;opacity:0.8">
+                                            {format!("In escrow: {} KX ({})", format_kx(&escrow.to_string()), label)}
+                                        </div>
+                                    }.into_any()
+                                } else { view! { <span></span> }.into_any() }}
+                                {if pending > 0 {
+                                    view! {
+                                        <div style="margin-top:2px;font-size:11px;color:#888;text-align:center">
+                                            {format!("{} KX pending email", format_kx(&pending.to_string()))}
+                                        </div>
+                                    }.into_any()
+                                } else { view! { <span></span> }.into_any() }}
+                            }.into_any()
+                        }}
                         <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
                         <p style="margin-top:8px;font-size:12px">
                             <a class="exchange-link exchange-link-mobile" href="#" on:click=move |ev| {
@@ -6634,6 +6702,31 @@ fn AccountPanel(
                             "GENESIS_MEMBER" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#d4a84b;color:black;font-size:13px;font-weight:700;margin-top:4px">{"Genesis Member"}</span> }.into_any(),
                             "PROTOCOL_PATRON" => view! { <span style="display:inline-block;padding:4px 14px;border-radius:6px;background:#e2e8f0;color:#1a1a2e;font-size:13px;font-weight:700;margin-top:4px">{"Protocol Patron"}</span> }.into_any(),
                             _ => view! { <span></span> }.into_any(),
+                        }}
+                        // Identity verification checkmark (TYPE L IdentityVerified)
+                        {move || {
+                            let tx = verified_identity_tx.get();
+                            if tx.is_empty() { return view! { <span></span> }.into_any(); }
+                            let short_tx = if tx.len() > 12 { format!("{}...{}", &tx[..6], &tx[tx.len()-4..]) } else { tx.clone() };
+                            let tx_clone = tx.clone();
+                            view! {
+                                <div style="display:flex;flex-direction:column;align-items:center;margin-top:2px">
+                                    <span style="color:#d4a84b;font-size:13px;font-weight:600">
+                                        {"\u{2713} Identity Verified"}
+                                    </span>
+                                    <span style="font-size:10px;color:#666;cursor:pointer;font-family:monospace;margin-top:1px"
+                                        title="View on explorer"
+                                        on:click=move |_| {
+                                            let url = format!("https://explorer.chronx.io/tx/{}", tx_clone);
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "url": url })).unwrap_or(JsValue::NULL);
+                                                let _ = call::<()>("open_url", args).await;
+                                            });
+                                        }>
+                                        {"TX: "}{short_tx}
+                                    </span>
+                                </div>
+                            }.into_any()
                         }}
                         // QR code (gold on dark, using existing make_qr_svg)
                         <div style="background:#0d0d1a;border:1px solid #333;border-radius:12px;padding:16px">

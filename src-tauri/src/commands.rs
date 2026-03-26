@@ -4245,7 +4245,26 @@ pub async fn get_promises_needing_sign_of_life(_app: AppHandle) -> Result<Vec<se
 // v2.2.2 — Verified Identity + KXGO Badges + Commitments (stubs)
 
 #[tauri::command]
-pub async fn get_verified_identity(_app: AppHandle) -> Result<Option<serde_json::Value>, String> { Ok(None) }
+pub async fn get_verified_identity(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+    let entries = rpc_call(&url, "chronx_getIdentityHistory", serde_json::json!([b58]))
+        .await
+        .unwrap_or(serde_json::Value::Array(vec![]));
+    if let Some(arr) = entries.as_array() {
+        for entry in arr {
+            if entry.get("entry_type").and_then(|v| v.as_str()) == Some("IdentityVerified") {
+                return Ok(Some(serde_json::json!({
+                    "verified": true,
+                    "tx_id": entry.get("entry_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "timestamp": entry.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0),
+                })));
+            }
+        }
+    }
+    Ok(None)
+}
 
 #[tauri::command]
 pub async fn get_wallet_badges(_app: AppHandle, wallet_address: Option<String>) -> Result<Vec<serde_json::Value>, String> {
@@ -4904,10 +4923,9 @@ pub async fn waive_rescission(
 
     let wallet_str = kp.account_id.to_b58();
 
-    let actions = vec![Action::LoanRescissionCancel {
+    let actions = vec![Action::LoanRescissionWaive {
         loan_id: loan_id_hex.clone(),
-        cancelled_by: wallet_str,
-        reason: None,
+        waived_by: wallet_str,
     }];
     let txid = build_sign_mine_submit(&kp, actions, &url).await?;
     Ok(txid)
@@ -5001,4 +5019,16 @@ pub async fn save_loan_preferences(app: AppHandle, prefs: LoanPreferences) -> Re
     let mut cfg = read_config(&app);
     cfg.loan_preferences = Some(prefs);
     write_config(&app, &cfg)
+}
+
+/// Get loan escrow balance for the current wallet (funds locked during rescission).
+#[tauri::command]
+pub async fn get_loan_escrow_balance(app: AppHandle) -> Result<serde_json::Value, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+    let result = rpc_call(&url, "chronx_getLoanEscrowBalance", serde_json::json!([b58]))
+        .await
+        .map_err(|e| format!("RPC failed: {e}"))?;
+    Ok(result)
 }
