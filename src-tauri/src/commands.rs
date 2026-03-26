@@ -5032,3 +5032,15 @@ pub async fn get_loan_escrow_balance(app: AppHandle) -> Result<serde_json::Value
         .map_err(|e| format!("RPC failed: {e}"))?;
     Ok(result)
 }
+
+/// Get savings account balance and yield info.
+#[tauri::command]
+pub async fn get_savings_balance(app: AppHandle) -> Result<serde_json::Value, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+    let b58 = kp.account_id.to_b58();
+    let result = rpc_call(&url, "chronx_getSavingsBalance", serde_json::json!([b58]))
+        .await
+        .map_err(|e| format!("RPC failed: {e}"))?;
+    Ok(result)
+}

@@ -5658,6 +5658,10 @@ fn AccountPanel(
     // Escrow balance (funds locked during loan rescission)
     let escrow_total_chronos = RwSignal::new(0u128);
     let escrow_loan_count    = RwSignal::new(0u32);
+    // Savings balance
+    let savings_chronos      = RwSignal::new(0u128);
+    let savings_invested     = RwSignal::new(false);
+    let savings_rate_pct     = RwSignal::new(0.0f64);
     Effect::new(move |_| {
         // Re-run when info changes (balance refresh)
         let _trigger = info.get();
@@ -5672,6 +5676,15 @@ fn AccountPanel(
                     .unwrap_or(0) as u32;
                 escrow_total_chronos.set(total);
                 escrow_loan_count.set(count);
+            }
+            if let Ok(val) = call::<serde_json::Value>("get_savings_balance", no_args()).await {
+                let s: u128 = val.get("savings_chronos")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                savings_chronos.set(s);
+                savings_invested.set(val.get("invested").and_then(|v| v.as_bool()).unwrap_or(false));
+                savings_rate_pct.set(val.get("annual_rate_pct").and_then(|v| v.as_f64()).unwrap_or(0.0));
             }
         });
     });
@@ -5912,6 +5925,53 @@ fn AccountPanel(
                             }.into_any()
                         }}
                         <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
+
+                        // ── Savings bucket ──────────────────────────────────
+                        <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
+                            <div style="display:flex;justify-content:space-between;align-items:center">
+                                <p style="font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;margin:0">"SAVINGS"</p>
+                                <span style="font-size:10px;color:#d4a84b;cursor:pointer;opacity:0.7">"+ Add"</span>
+                            </div>
+                            <p style="font-size:15px;color:#ccc;font-weight:600;margin:2px 0 0">
+                                {move || {
+                                    let s = savings_chronos.get();
+                                    if s == 0 { "0.00 KX".to_string() } else { format!("{} KX", format_kx(&s.to_string())) }
+                                }}
+                            </p>
+                            <p style="font-size:10px;color:#888;margin:2px 0 0">
+                                {move || {
+                                    let s = savings_chronos.get();
+                                    if s == 0 {
+                                        "Not invested \u{2014} tap Add to start earning".to_string()
+                                    } else if savings_invested.get() {
+                                        let rate = savings_rate_pct.get();
+                                        format!("Earning: {:.1}% annual \u{00b7} Backed by HedgeKX", rate)
+                                    } else {
+                                        "Held safely \u{2014} not yet invested".to_string()
+                                    }
+                                }}
+                            </p>
+                        </div>
+
+                        // ── Loan Reserve bucket ─────────────────────────────
+                        {move || {
+                            let escrow = escrow_total_chronos.get();
+                            if escrow == 0 { return view! { <span></span> }.into_any(); }
+                            let count = escrow_loan_count.get();
+                            let label = if count == 1 { "1 active loan".to_string() } else { format!("{count} active loans") };
+                            view! {
+                                <div style="margin-top:8px;border-top:1px solid #333;padding-top:8px">
+                                    <p style="font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;margin:0">"LOAN RESERVE"</p>
+                                    <p style="font-size:15px;color:#d4a84b;font-weight:600;margin:2px 0 0">
+                                        {format!("{} KX", format_kx(&escrow.to_string()))}
+                                    </p>
+                                    <p style="font-size:10px;color:#888;margin:2px 0 0">
+                                        {format!("Reserved for: {}", label)}
+                                    </p>
+                                </div>
+                            }.into_any()
+                        }}
+
                         // Buy KX / Sell KX buttons
                         <div style="display:flex;gap:8px;margin-top:10px;justify-content:center">
                             <button style="flex:1;max-width:140px;padding:8px 0;border-radius:8px;background:#1a3a1a;border:1px solid #22c55e;color:#22c55e;font-weight:700;font-size:13px;cursor:pointer"
