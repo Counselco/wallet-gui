@@ -1316,6 +1316,7 @@ fn App() -> impl IntoView {
     let fl_amount_app = RwSignal::new(String::new());
     let fl_days_app = RwSignal::new(String::new());
     let fl_msg_app = RwSignal::new(String::new());
+    let fl_currency_app = RwSignal::new(0u8); // 0=USDC, 1=KX
     // Send tab mode: 0=Send KX, 1=Request KX
     let send_tab_mode = RwSignal::new(0u8);
     // Loans tab view: 0=Lender, 1=Borrower
@@ -2372,11 +2373,24 @@ fn App() -> impl IntoView {
                                                 _ => view! {
                                                     <div style="padding:16px;border:1px solid var(--border, #2a2f3e);border-radius:12px;background:var(--bg-card, #1a1d2e);max-width:480px">
                                                         <div style="font-size:18px;font-weight:600;margin-bottom:4px;color:var(--text-primary, #e5e7eb)">"Friend Loan"</div>
-                                                        <div style="font-size:12px;color:var(--text-secondary, #9ca3af);margin-bottom:16px">
+                                                        <div style="font-size:12px;color:var(--text-secondary, #9ca3af);margin-bottom:12px">
                                                             "Fee: 1% per 30 days, prorated. Min $0.01."
                                                         </div>
+                                                        // Currency toggle
+                                                        <div class="send-mode-row" style="margin-bottom:12px">
+                                                            <button type="button"
+                                                                class=move || if fl_currency_app.get()==0 { "send-mode-btn active" } else { "send-mode-btn" }
+                                                                on:click=move |_| fl_currency_app.set(0)>
+                                                                "USDC"
+                                                            </button>
+                                                            <button type="button"
+                                                                class=move || if fl_currency_app.get()==1 { "send-mode-btn active" } else { "send-mode-btn" }
+                                                                on:click=move |_| fl_currency_app.set(1)>
+                                                                "KX"
+                                                            </button>
+                                                        </div>
                                                         <div class="field" style="margin-bottom:12px">
-                                                            <label style="font-size:13px;color:var(--text-secondary, #9ca3af);margin-bottom:4px">"Friend's email"</label>
+                                                            <label style="font-size:13px;color:var(--text-secondary, #9ca3af);margin-bottom:4px">"Friend\u{2019}s email"</label>
                                                             <input type="email" placeholder="friend@example.com"
                                                                 style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
                                                                 prop:value=move || fl_email_app.get()
@@ -2385,8 +2399,10 @@ fn App() -> impl IntoView {
                                                         </div>
                                                         <div style="display:flex;gap:12px;margin-bottom:12px">
                                                             <div class="field" style="flex:1">
-                                                                <label style="font-size:13px;color:var(--text-secondary, #9ca3af);margin-bottom:4px">"Amount (max $250 USDC)"</label>
-                                                                <input type="number" placeholder="$USD" min="1" max="250" step="1"
+                                                                <label style="font-size:13px;color:var(--text-secondary, #9ca3af);margin-bottom:4px">
+                                                                    {move || if fl_currency_app.get() == 0 { "Amount (max $250 USDC)" } else { "Amount (KX)" }}
+                                                                </label>
+                                                                <input type="number" placeholder={move || if fl_currency_app.get() == 0 { "$USD" } else { "KX" }} min="1" max="250" step="1"
                                                                     style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
                                                                     prop:value=move || fl_amount_app.get()
                                                                     on:input=move |ev| fl_amount_app.set(event_target_value(&ev))
@@ -2404,33 +2420,55 @@ fn App() -> impl IntoView {
                                                         {move || {
                                                             let amt: f64 = fl_amount_app.get().parse().unwrap_or(0.0);
                                                             let days: f64 = fl_days_app.get().parse().unwrap_or(0.0);
+                                                            let is_kx = fl_currency_app.get() == 1;
                                                             if amt > 0.0 && days > 0.0 {
                                                                 let fee = f64::max(amt * 0.01 * (days / 30.0), 0.01);
                                                                 let total = amt + fee;
-                                                                let due_secs = (days * 86400.0) as i64;
                                                                 let now_ms = js_sys::Date::now();
-                                                                let due_ms = now_ms + (due_secs as f64 * 1000.0);
+                                                                let due_ms = now_ms + (days * 86400.0 * 1000.0);
                                                                 let due_date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(due_ms));
                                                                 let due_str = format!("{}/{}/{}",
                                                                     due_date.get_month() + 1,
                                                                     due_date.get_date(),
                                                                     due_date.get_full_year());
+                                                                let exp_ms = now_ms + (3.0 * 86400.0 * 1000.0);
+                                                                let exp_date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(exp_ms));
+                                                                let exp_str = format!("{}/{}/{}",
+                                                                    exp_date.get_month() + 1,
+                                                                    exp_date.get_date(),
+                                                                    exp_date.get_full_year());
+                                                                let unit = if is_kx { " KX" } else { " USDC" };
+                                                                let prefix = if is_kx { "" } else { "$" };
                                                                 view! {
                                                                     <div style="padding:14px;border-radius:8px;background:var(--bg-secondary, #151829);font-size:14px;line-height:2;margin-bottom:12px">
-                                                                        <div>"They repay: "<strong style="color:#d4a84b">{format!("${:.2}", total)}</strong>" USDC"</div>
-                                                                        <div>"Due: "<strong>{due_str}</strong></div>
-                                                                        <div>"Fee: "<strong>{format!("${:.2}", fee)}</strong></div>
+                                                                        <div>"They repay: "<strong style="color:#d4a84b">{format!("{}{:.2}{}", prefix, total, unit)}</strong></div>
+                                                                        <div>"Due if accepted: "<strong>{due_str}</strong></div>
+                                                                        <div>"Fee: "<strong>{format!("{}{:.2}{}", prefix, fee, unit)}</strong></div>
+                                                                        <div style="color:var(--text-secondary, #9ca3af);font-size:12px">"Offer expires: "{exp_str}</div>
                                                                     </div>
                                                                 }.into_any()
                                                             } else {
                                                                 view! { <div></div> }.into_any()
                                                             }
                                                         }}
-                                                        <div style="font-size:12px;color:#e5a040;background:rgba(229,160,64,0.08);padding:12px;border-radius:8px;line-height:1.7;margin-bottom:16px">
+                                                        <div style="font-size:12px;color:#e5a040;background:rgba(229,160,64,0.08);padding:12px;border-radius:8px;line-height:1.7;margin-bottom:12px">
                                                             <div style="font-weight:600;margin-bottom:4px">"You earn nothing."</div>
                                                             <div>"You risk your KX if they don\u{2019}t pay."</div>
                                                             <div>"Use discretion. These are friend loans."</div>
                                                         </div>
+                                                        // Green checkmark warning
+                                                        {move || {
+                                                            let msg = if fl_currency_app.get() == 0 {
+                                                                "\u{2713} Funds sent as USDC on Base network. Your friend provides their own wallet address. Offer expires in 3 days if not accepted."
+                                                            } else {
+                                                                "\u{2713} KX sent directly on ChronX DAG. Your friend needs a ChronX wallet to receive."
+                                                            };
+                                                            view! {
+                                                                <div style="font-size:12px;color:#4ade80;background:rgba(74,222,128,0.06);padding:10px 12px;border-radius:8px;line-height:1.6;margin-bottom:16px">
+                                                                    {msg}
+                                                                </div>
+                                                            }.into_any()
+                                                        }}
                                                         {move || {
                                                             let m = fl_msg_app.get();
                                                             if m.is_empty() {
