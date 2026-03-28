@@ -219,6 +219,8 @@ pub fn run() {
             commands::save_loan_preferences,
             commands::get_loan_escrow_balance,
             commands::get_savings_balance,
+            commands::create_savings_deposit,
+            commands::withdraw_savings,
         ])
         .setup(|app| {
             #[cfg(any(windows, target_os = "linux"))]

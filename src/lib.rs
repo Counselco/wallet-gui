@@ -793,6 +793,13 @@ fn format_kx_display(val: f64) -> String {
     }
 }
 
+/// Format a USD amount with commas: 329917.01 → "$329,917.01"
+fn format_usd(val: f64) -> String {
+    let whole = val.abs() as u128;
+    let cents = ((val.abs() - whole as f64) * 100.0).round() as u32;
+    format!("${}.{:02}", format_int_with_commas(whole), cents)
+}
+
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 fn shorten_addr(addr: &str) -> String {
@@ -1293,7 +1300,7 @@ fn App() -> impl IntoView {
     let err_msg     = RwSignal::new(String::new());
     let online      = RwSignal::new(false);
     // Mobile: 0=Receive 1=Send 2=Activity 3=Settings
-    // Desktop: 0=Receive 1=Send 2=Activity 3=Request 4=Settings
+    // Desktop: 0=Receive 1=Send 2=Activity 3=Request 4=Loans 5=FAQ 6=Settings
     let active_tab  = RwSignal::new(0u8);
     let activity_sub = RwSignal::new(0u8); // 0=History, 1=Promises, 2=Open
     let app_version = RwSignal::new("2.5.9".to_string());
@@ -1523,6 +1530,23 @@ fn App() -> impl IntoView {
     let pin_locked_until = RwSignal::new(0.0f64);
     let pin_shake       = RwSignal::new(false);
     let pin_first       = RwSignal::new(String::new()); // saved during PinConfirm
+
+    // Android resume lock: native side calls __chronxAppLocked() when app
+    // resumes after 5+ seconds in background → reset to PIN screen
+    {
+        let phase = app_phase;
+        let digits = pin_digits;
+        let msg = pin_msg;
+        if let Some(window) = web_sys::window() {
+            let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+                digits.set(String::new());
+                msg.set(String::new());
+                phase.set(AppPhase::PinUnlock);
+            }) as Box<dyn Fn()>);
+            let _ = js_sys::Reflect::set(&window, &"__chronxAppLocked".into(), cb.as_ref());
+            cb.forget(); // prevent deallocation
+        }
+    }
     let countdown       = RwSignal::new(0u32);
 
     // Forgot PIN state
@@ -2148,6 +2172,10 @@ fn App() -> impl IntoView {
                                 <div class="sidebar-bottom">
                                     <button class=move || if active_tab.get()==5 {"sidebar-tab active"} else {"sidebar-tab"}
                                         on:click=move |_| active_tab.set(5)>
+                                        {move || t(&lang.get(), "faq_tab")}
+                                    </button>
+                                    <button class=move || if active_tab.get()==6 {"sidebar-tab active"} else {"sidebar-tab"}
+                                        on:click=move |_| active_tab.set(6)>
                                         {move || t(&lang.get(), "tab_settings")}
                                         {move || {
                                             let unread = notices.get().iter()
@@ -2233,7 +2261,7 @@ fn App() -> impl IntoView {
                     <div class=if desktop { "main-body" } else { "" }>
                         {move || {
                             let tab = active_tab.get();
-                            let settings_tab: u8 = if desktop { 5 } else { 3 };
+                            let settings_tab: u8 = if desktop { 6 } else { 3 };
                             match tab {
                                 // Tab 0: Receive
                                 0 => view! {
@@ -3696,7 +3724,26 @@ fn App() -> impl IntoView {
                                     </div>
                                 }.into_any()
                                 },
-                                // Settings tab (3 on mobile, 5 on desktop)
+                                // FAQ tab (5 on desktop only)
+                                5 if desktop => view! {
+                                    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:300px;padding:32px">
+                                        <div style="background:#1a1a2e;border:1px solid #d4a84b;border-radius:16px;padding:40px 32px;text-align:center;max-width:400px;width:100%">
+                                            <p style="font-size:48px;margin:0 0 16px">{"\u{2753}"}</p>
+                                            <p style="font-size:20px;font-weight:700;color:#d4a84b;margin:0 0 8px">{move || t(&lang.get(), "faq_heading")}</p>
+                                            <p style="font-size:14px;color:#888;margin:0 0 24px">{move || t(&lang.get(), "faq_coming_soon")}</p>
+                                            <button style="background:#d4a84b;color:#000;border:none;padding:12px 24px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer"
+                                                on:click=move |_| {
+                                                    spawn_local(async move {
+                                                        let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "url": "https://chronx.io/support.html" })).unwrap_or(JsValue::NULL);
+                                                        let _ = call::<()>("open_url", args).await;
+                                                    });
+                                                }>
+                                                {move || t(&lang.get(), "faq_support_btn")}
+                                            </button>
+                                        </div>
+                                    </div>
+                                }.into_any(),
+                                // Settings tab (3 on mobile, 6 on desktop)
                                 _ if tab == settings_tab => view! {
                                     <SettingsPanel
                                         online=online
@@ -3739,7 +3786,7 @@ fn App() -> impl IntoView {
 
                     // Version footer — hidden on Settings tab (shown there already)
                     <div style:display=move || {
-                        let settings_idx: u8 = if desktop { 4 } else { 3 };
+                        let settings_idx: u8 = if desktop { 6 } else { 3 };
                         if active_tab.get() == settings_idx { "none" } else { "" }
                     }>
                     <p class="version-footer">
@@ -5581,6 +5628,7 @@ fn AccountPanel(
 
     // Convert block state
     let convert_visible   = RwSignal::new(false);
+    let convert_is_buy    = RwSignal::new(false); // true = Buy KX, false = Sell KX
     let convert_amount    = RwSignal::new(String::new());
     let convert_quote     = RwSignal::new(Option::<ConvertQuote>::None);
     let convert_loading   = RwSignal::new(false);
@@ -5662,6 +5710,18 @@ fn AccountPanel(
     let savings_chronos      = RwSignal::new(0u128);
     let savings_invested     = RwSignal::new(false);
     let savings_rate_pct     = RwSignal::new(0.0f64);
+    let savings_deposits     = RwSignal::new(Vec::<serde_json::Value>::new());
+    // Savings modal state
+    let sav_modal = RwSignal::new(0u8); // 0=closed, 1=amount, 2=confirm, 3=spinner, 4=success
+    let sav_input = RwSignal::new(String::new());
+    let sav_result = RwSignal::new(String::new());
+    let sav_error = RwSignal::new(String::new());
+    // Withdraw modal state
+    let withdraw_modal = RwSignal::new(0u8); // 0=closed, 1=confirm, 2=spinner, 3=success
+    let withdraw_deposit_id = RwSignal::new(String::new());
+    let withdraw_amount_kx = RwSignal::new(0.0f64);
+    let withdraw_status = RwSignal::new(String::new());
+    let withdraw_error = RwSignal::new(String::new());
     Effect::new(move |_| {
         // Re-run when info changes (balance refresh)
         let _trigger = info.get();
@@ -5685,6 +5745,9 @@ fn AccountPanel(
                 savings_chronos.set(s);
                 savings_invested.set(val.get("invested").and_then(|v| v.as_bool()).unwrap_or(false));
                 savings_rate_pct.set(val.get("annual_rate_pct").and_then(|v| v.as_f64()).unwrap_or(0.0));
+                if let Some(deps) = val.get("active_deposits").and_then(|v| v.as_array()) {
+                    savings_deposits.set(deps.clone());
+                }
             }
         });
     });
@@ -5864,73 +5927,47 @@ fn AccountPanel(
                         }
                     }
                 }}
-                        <p class="label" style="margin-top:4px;font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px">"SPENDABLE BALANCE"</p>
-                        <p class="label" style="margin-top:2px;font-size:18px;color:#d4a84b;font-weight:700">
+                        // ── BALANCE (spendable only — no label, amount is self-evident) ──
+                        <p class="label" style="margin-top:4px;font-size:18px;color:#d4a84b;font-weight:700">
                             {move || {
                                 if loading.get() { return "\u{2026}".into(); }
-                                let pending = pending_email_chronos.get();
-                                let escrow = escrow_total_chronos.get();
                                 let base_str = info.get()
                                     .map(|a| a.spendable_chronos)
                                     .unwrap_or_default();
                                 if base_str.is_empty() { return "\u{2014}".into(); }
                                 let base: u128 = base_str.parse().unwrap_or(0);
-                                let spendable = base.saturating_sub(pending as u128).saturating_sub(escrow);
+                                let pending = pending_email_chronos.get() as u128;
+                                let escrow = escrow_total_chronos.get();
+                                let spendable = base.saturating_sub(pending).saturating_sub(escrow);
                                 format!("{} KX", format_kx(&spendable.to_string()))
                             }}
                         </p>
                         <p style="margin-top:1px;font-size:12px;color:#888">
                             {move || {
                                 if loading.get() { return String::new(); }
-                                let pending = pending_email_chronos.get();
-                                let escrow = escrow_total_chronos.get();
-                                let base_str = info.get()
-                                    .map(|a| a.spendable_chronos)
-                                    .unwrap_or_default();
+                                let base_str = info.get().map(|a| a.spendable_chronos).unwrap_or_default();
                                 if base_str.is_empty() { return String::new(); }
                                 let base: u128 = base_str.parse().unwrap_or(0);
-                                let spendable = base.saturating_sub(pending as u128).saturating_sub(escrow);
+                                let pending = pending_email_chronos.get() as u128;
+                                let escrow = escrow_total_chronos.get();
+                                let spendable = base.saturating_sub(pending).saturating_sub(escrow);
                                 let usd = (spendable as f64) / 1_000_000.0 * 0.001755;
-                                format!("\u{2248} ${:.2} USDC", usd)
+                                format!("\u{2248} {} USDC", format_usd(usd))
                             }}
                         </p>
-                        {move || {
-                            let escrow = escrow_total_chronos.get();
-                            let pending = pending_email_chronos.get();
-                            if escrow == 0 && pending == 0 { return view! { <span></span> }.into_any(); }
-                            let base_str = info.get().map(|a| a.spendable_chronos).unwrap_or_default();
-                            let base: u128 = base_str.parse().unwrap_or(0);
-                            let loan_count = escrow_loan_count.get();
-                            view! {
-                                <div style="margin-top:4px;font-size:11px;color:#999;text-align:center">
-                                    {if base > 0 {
-                                        format!("Total available: {} KX", format_kx(&base.to_string()))
-                                    } else { String::new() }}
-                                </div>
-                                {if escrow > 0 {
-                                    let label = if loan_count == 1 { "1 loan".to_string() } else { format!("{loan_count} loans") };
-                                    view! {
-                                        <div style="margin-top:2px;font-size:11px;color:#d4a84b;text-align:center;opacity:0.8">
-                                            {format!("In escrow: {} KX ({})", format_kx(&escrow.to_string()), label)}
-                                        </div>
-                                    }.into_any()
-                                } else { view! { <span></span> }.into_any() }}
-                                {if pending > 0 {
-                                    view! {
-                                        <div style="margin-top:2px;font-size:11px;color:#888;text-align:center">
-                                            {format!("{} KX pending email", format_kx(&pending.to_string()))}
-                                        </div>
-                                    }.into_any()
-                                } else { view! { <span></span> }.into_any() }}
-                            }.into_any()
-                        }}
                         <p class="fee-free-badge">"✓ Zero fees — every KX sent is received in full"</p>
 
-                        // ── Savings bucket ──────────────────────────────────
+                        // ── SAVINGS bucket (always visible) ─────────────────
                         <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
                             <div style="display:flex;justify-content:space-between;align-items:center">
-                                <p style="font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;margin:0">"SAVINGS"</p>
-                                <span style="font-size:10px;color:#d4a84b;cursor:pointer;opacity:0.7">"+ Add"</span>
+                                <p style="font-size:11px;color:#d4a84b;text-transform:uppercase;letter-spacing:0.5px;margin:0;font-weight:600">"SAVINGS"</p>
+                                <span style="font-size:10px;color:#d4a84b;cursor:pointer;opacity:0.8"
+                                    on:click=move |_| {
+                                        sav_input.set(String::new());
+                                        sav_error.set(String::new());
+                                        sav_result.set(String::new());
+                                        sav_modal.set(1);
+                                    }>"+ Add"</span>
                             </div>
                             <p style="font-size:15px;color:#ccc;font-weight:600;margin:2px 0 0">
                                 {move || {
@@ -5938,61 +5975,286 @@ fn AccountPanel(
                                     if s == 0 { "0.00 KX".to_string() } else { format!("{} KX", format_kx(&s.to_string())) }
                                 }}
                             </p>
-                            <p style="font-size:10px;color:#888;margin:2px 0 0">
-                                {move || {
-                                    let s = savings_chronos.get();
-                                    if s == 0 {
-                                        "Not invested \u{2014} tap Add to start earning".to_string()
-                                    } else if savings_invested.get() {
-                                        let rate = savings_rate_pct.get();
-                                        format!("Earning: {:.1}% annual \u{00b7} Backed by HedgeKX", rate)
-                                    } else {
-                                        "Held safely \u{2014} not yet invested".to_string()
-                                    }
-                                }}
-                            </p>
+                            <p style="font-size:10px;color:#888;margin:2px 0 0">"Rate activates soon"</p>
+                            // Active deposit rows
+                            {move || {
+                                let deps = savings_deposits.get();
+                                if deps.is_empty() { return view! { <span></span> }.into_any(); }
+                                view! {
+                                    <div style="margin-top:6px">
+                                        {deps.into_iter().map(|d| {
+                                            let principal = d["principal_kx"].as_f64().unwrap_or(0.0);
+                                            let rate = d["rate_pct"].as_f64().unwrap_or(0.0);
+                                            let maturity = d["maturity_timestamp"].as_u64().unwrap_or(0);
+                                            let status = d["status"].as_str().unwrap_or("Active").to_string();
+                                            let did = d["deposit_id"].as_str().unwrap_or("").to_string();
+                                            let date = format_utc_ts(maturity as i64);
+                                            let did_for_click = did.clone();
+                                            view! {
+                                                <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:11px;color:#999;border-top:1px solid #1a1a2e">
+                                                    <span>{move || {
+                                                    let now = (js_sys::Date::now() / 1000.0) as u64;
+                                                    let remaining = if maturity > now { maturity - now } else { 0 };
+                                                    let renew_str = if remaining == 0 { "Matured".to_string() }
+                                                        else if remaining < 3600 { format!("Renews in {}m", remaining / 60) }
+                                                        else if remaining < 86400 { format!("Renews in {}h", remaining / 3600) }
+                                                        else { format_utc_ts(maturity as i64) };
+                                                    format!("{:.0} KX \u{00b7} {:.1}% \u{00b7} {}", principal, rate, renew_str)
+                                                }}</span>
+                                                    <span style="color:#d4a84b;cursor:pointer;font-size:10px"
+                                                        on:click=move |_| {
+                                                            withdraw_deposit_id.set(did_for_click.clone());
+                                                            withdraw_amount_kx.set(principal);
+                                                            withdraw_status.set(status.clone());
+                                                            withdraw_error.set(String::new());
+                                                            withdraw_modal.set(1);
+                                                        }>"Move to Available"</span>
+                                                </div>
+                                            }
+                                        }).collect_view()}
+                                    </div>
+                                }.into_any()
+                            }}
                         </div>
 
-                        // ── Loan Reserve bucket ─────────────────────────────
+                        // ── PROMISES bucket (only if outgoing locked > 0) ───
                         {move || {
-                            let escrow = escrow_total_chronos.get();
-                            if escrow == 0 { return view! { <span></span> }.into_any(); }
-                            let count = escrow_loan_count.get();
-                            let label = if count == 1 { "1 active loan".to_string() } else { format!("{count} active loans") };
+                            let locked_str = info.get().map(|a| a.spendable_chronos).unwrap_or_default();
+                            let total_str = info.get().map(|a| a.balance_chronos).unwrap_or_default();
+                            let total: u128 = total_str.parse().unwrap_or(0);
+                            let spendable: u128 = locked_str.parse().unwrap_or(0);
+                            let locked = total.saturating_sub(spendable);
+                            if locked == 0 { return view! { <span></span> }.into_any(); }
                             view! {
-                                <div style="margin-top:8px;border-top:1px solid #333;padding-top:8px">
-                                    <p style="font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;margin:0">"LOAN RESERVE"</p>
-                                    <p style="font-size:15px;color:#d4a84b;font-weight:600;margin:2px 0 0">
-                                        {format!("{} KX", format_kx(&escrow.to_string()))}
-                                    </p>
-                                    <p style="font-size:10px;color:#888;margin:2px 0 0">
-                                        {format!("Reserved for: {}", label)}
+                                <div style="margin-top:8px;border-top:1px solid #222;padding-top:8px">
+                                    <p style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:0">"PROMISES"</p>
+                                    <p style="font-size:14px;color:#aaa;font-weight:500;margin:2px 0 0">
+                                        {format!("{} KX locked", format_kx(&locked.to_string()))}
                                     </p>
                                 </div>
                             }.into_any()
                         }}
 
-                        // Buy KX / Sell KX buttons
+                        // ── LOANS bucket (only if escrow > 0) ───────────────
+                        {move || {
+                            let escrow = escrow_total_chronos.get();
+                            if escrow == 0 { return view! { <span></span> }.into_any(); }
+                            view! {
+                                <div style="margin-top:8px;border-top:1px solid #222;padding-top:8px">
+                                    <p style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:0">"LOANS"</p>
+                                    <p style="font-size:14px;color:#aaa;font-weight:500;margin:2px 0 0">
+                                        {format!("{} KX reserved", format_kx(&escrow.to_string()))}
+                                    </p>
+                                </div>
+                            }.into_any()
+                        }}
+
+                        // Buy KX / Sell KX compact pills
                         <div style="display:flex;gap:8px;margin-top:10px;justify-content:center">
-                            <button style="flex:1;max-width:140px;padding:8px 0;border-radius:8px;background:#1a3a1a;border:1px solid #22c55e;color:#22c55e;font-weight:700;font-size:13px;cursor:pointer"
-                                on:click=move |_| {
-                                    convert_visible.set(true);
-                                    // Pre-select buy mode (future: separate buy flow)
-                                }>
-                                {"\u{25B2} Buy KX"}
+                            <button style="padding:6px 14px;border-radius:16px;background:transparent;border:1px solid #22c55e;color:#22c55e;font-size:13px;cursor:pointer;transition:background 0.15s"
+                                on:click=move |_| { convert_is_buy.set(true); }>
+                                {"Buy KX \u{2197}"}
                             </button>
-                            <button style="flex:1;max-width:140px;padding:8px 0;border-radius:8px;background:#3a1a1a;border:1px solid #ef4444;color:#ef4444;font-weight:700;font-size:13px;cursor:pointer"
+                            <button style="padding:6px 14px;border-radius:16px;background:transparent;border:1px solid #ef4444;color:#ef4444;font-size:13px;cursor:pointer;transition:background 0.15s"
                                 on:click=move |_| {
+                                    convert_is_buy.set(false);
                                     convert_visible.set(!convert_visible.get_untracked());
                                 }>
-                                {"\u{25BC} Sell KX"}
+                                {"Sell KX"}
                             </button>
                         </div>
+                        // ── Move to Savings modal ────────────────────────
+                        {move || {
+                            let screen = sav_modal.get();
+                            if screen == 0 { return view! { <span></span> }.into_any(); }
+                            view! {
+                                <div style="position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:1000"
+                                    on:click=move |_| sav_modal.set(0)>
+                                    <div style="background:#1a1a2e;border:1px solid #d4a84b;border-radius:16px;padding:24px;max-width:360px;width:90%"
+                                        on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                                        {match screen {
+                                            1 => {
+                                                let spendable_kx = {
+                                                    let base: u128 = info.get().map(|a| a.spendable_chronos).unwrap_or_default().parse().unwrap_or(0);
+                                                    let pending = pending_email_chronos.get() as u128;
+                                                    let escrow = escrow_total_chronos.get();
+                                                    (base.saturating_sub(pending).saturating_sub(escrow) as f64) / 1_000_000.0
+                                                };
+                                                view! {
+                                                    <p style="font-size:18px;font-weight:700;color:#d4a84b;margin:0 0 12px">"Move to Savings"</p>
+                                                    <input type="text" inputmode="decimal" placeholder="0.00"
+                                                        prop:value=move || sav_input.get()
+                                                        on:input=move |ev| sav_input.set(event_target_value(&ev))
+                                                        style="width:100%;background:#0d0d1a;border:1px solid #333;color:#fff;padding:10px;border-radius:8px;font-size:16px;margin-bottom:4px;box-sizing:border-box"
+                                                    />
+                                                    <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-bottom:10px">
+                                                        <span>{format!("Available: {:.2} KX", spendable_kx)}</span>
+                                                        <span style="color:#d4a84b;cursor:pointer" on:click=move |_| sav_input.set(format!("{:.2}", spendable_kx))>"Max"</span>
+                                                    </div>
+                                                    <p style="font-size:11px;color:#888;margin:0 0 4px">"24-hour lock \u{00b7} auto-renews \u{00b7} withdraw anytime"</p>
+                                                    <p style="font-size:11px;color:#888;margin:0 0 12px">"Rate: 0.00% \u{2014} activates soon"</p>
+                                                    {move || { let e = sav_error.get(); if e.is_empty() { view! { <span></span> }.into_any() } else { view! { <p style="color:#ef4444;font-size:12px;margin:0 0 8px">{e}</p> }.into_any() }}}
+                                                    <div style="display:flex;gap:8px;justify-content:flex-end">
+                                                        <button style="background:none;border:1px solid #444;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer" on:click=move |_| sav_modal.set(0)>"Cancel"</button>
+                                                        <button style="background:#d4a84b;color:#000;border:none;padding:8px 16px;border-radius:8px;font-weight:700;cursor:pointer" on:click=move |_| {
+                                                            let amt: f64 = sav_input.get_untracked().parse().unwrap_or(0.0);
+                                                            if amt <= 0.0 { sav_error.set("Enter an amount greater than 0".into()); return; }
+                                                            if amt > spendable_kx { sav_error.set(format!("Max available: {:.2} KX", spendable_kx)); return; }
+                                                            sav_error.set(String::new());
+                                                            sav_modal.set(2);
+                                                        }>{format!("Confirm \u{2192}")}</button>
+                                                    </div>
+                                                }.into_any()
+                                            }
+                                            2 => {
+                                                let amt: f64 = sav_input.get().parse().unwrap_or(0.0);
+                                                view! {
+                                                    <p style="font-size:18px;font-weight:700;color:#d4a84b;margin:0 0 12px">"Confirm"</p>
+                                                    <div style="font-size:13px;color:#ccc;margin-bottom:12px">
+                                                        <p style="margin:4px 0">{format!("Moving: {:.2} KX to Savings", amt)}</p>
+                                                        <p style="margin:4px 0">"Term: 24 hours, auto-renewing"</p>
+                                                        <p style="margin:4px 0">"Rate: 0.00% (activates soon)"</p>
+                                                    </div>
+                                                    <div style="background:#1a1a0a;border:1px solid #d4a84b33;border-radius:8px;padding:10px;margin-bottom:12px">
+                                                        <p style="font-size:11px;color:#d4a84b;margin:0">"Your KX stays yours. It locks on the blockchain for 24 hours at a time. Withdraw anytime \u{2014} your KX returns within 24 hours."</p>
+                                                    </div>
+                                                    {move || { let e = sav_error.get(); if e.is_empty() { view! { <span></span> }.into_any() } else { view! { <p style="color:#ef4444;font-size:12px;margin:0 0 8px">{e}</p> }.into_any() }}}
+                                                    <div style="display:flex;gap:8px;justify-content:flex-end">
+                                                        <button style="background:none;border:1px solid #444;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer" on:click=move |_| sav_modal.set(1)>{format!("\u{2190} Back")}</button>
+                                                        <button style="background:#d4a84b;color:#000;border:none;padding:8px 16px;border-radius:8px;font-weight:700;cursor:pointer" on:click=move |_| {
+                                                            sav_modal.set(3);
+                                                            sav_error.set(String::new());
+                                                            let amount: f64 = sav_input.get_untracked().parse().unwrap_or(0.0);
+                                                            spawn_local(async move {
+                                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "amountKx": amount })).unwrap_or(JsValue::NULL);
+                                                                match call::<String>("create_savings_deposit", args).await {
+                                                                    Ok(did) => { sav_result.set(did); sav_modal.set(4); }
+                                                                    Err(e) => { sav_error.set(e); sav_modal.set(2); }
+                                                                }
+                                                            });
+                                                        }>"Confirm"</button>
+                                                    </div>
+                                                }.into_any()
+                                            }
+                                            3 => view! {
+                                                <div style="text-align:center;padding:24px 0">
+                                                    <p style="font-size:14px;color:#888">"Writing to blockchain..."</p>
+                                                </div>
+                                            }.into_any(),
+                                            4 => {
+                                                let amt: f64 = sav_input.get().parse().unwrap_or(0.0);
+                                                view! {
+                                                    <div style="text-align:center;padding:16px 0">
+                                                        <p style="font-size:32px;margin:0 0 8px">{"\u{2713}"}</p>
+                                                        <p style="font-size:16px;font-weight:700;color:#d4a84b;margin:0 0 4px">{format!("{:.2} KX moved to Savings", amt)}</p>
+                                                        <p style="font-size:12px;color:#888;margin:0 0 16px">"Renews automatically every 24 hours"</p>
+                                                        <button style="background:#d4a84b;color:#000;border:none;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer" on:click=move |_| {
+                                                            sav_modal.set(0);
+                                                            sav_input.set(String::new());
+                                                        }>"Done"</button>
+                                                    </div>
+                                                }.into_any()
+                                            }
+                                            _ => view! { <span></span> }.into_any(),
+                                        }}
+                                    </div>
+                                </div>
+                            }.into_any()
+                        }}
+
+                        // ── Withdraw Savings modal ──────────────────────────
+                        {move || {
+                            let screen = withdraw_modal.get();
+                            if screen == 0 { return view! { <span></span> }.into_any(); }
+                            let amt = withdraw_amount_kx.get();
+                            let status = withdraw_status.get();
+                            let is_matured = status == "Matured";
+                            view! {
+                                <div style="position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:1000"
+                                    on:click=move |_| withdraw_modal.set(0)>
+                                    <div style="background:#1a1a2e;border:1px solid #d4a84b;border-radius:16px;padding:24px;max-width:360px;width:90%"
+                                        on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                                        {match screen {
+                                            1 => view! {
+                                                <p style="font-size:18px;font-weight:700;color:#d4a84b;margin:0 0 12px">"Move to Available"</p>
+                                                <p style="font-size:14px;color:#ccc;margin:0 0 8px">{format!("{:.2} KX will return to your balance.", amt)}</p>
+                                                <p style="font-size:12px;color:#888;margin:0 0 8px">
+                                                    {if is_matured { "Available immediately." } else { "Available within 24 hours." }}
+                                                </p>
+                                                {move || { let e = withdraw_error.get(); if e.is_empty() { view! { <span></span> }.into_any() } else { view! { <p style="color:#ef4444;font-size:12px;margin:0 0 8px">{e}</p> }.into_any() }}}
+                                                <div style="display:flex;gap:8px;justify-content:flex-end">
+                                                    <button style="background:none;border:1px solid #444;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer" on:click=move |_| withdraw_modal.set(0)>"Cancel"</button>
+                                                    <button style="background:#d4a84b;color:#000;border:none;padding:8px 16px;border-radius:8px;font-weight:700;cursor:pointer" on:click=move |_| {
+                                                        withdraw_modal.set(2);
+                                                        withdraw_error.set(String::new());
+                                                        let did = withdraw_deposit_id.get_untracked();
+                                                        spawn_local(async move {
+                                                            let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "depositId": did })).unwrap_or(JsValue::NULL);
+                                                            match call::<f64>("withdraw_savings", args).await {
+                                                                Ok(_) => withdraw_modal.set(3),
+                                                                Err(e) => { withdraw_error.set(e); withdraw_modal.set(1); }
+                                                            }
+                                                        });
+                                                    }>"Move to Available"</button>
+                                                </div>
+                                            }.into_any(),
+                                            2 => view! {
+                                                <div style="text-align:center;padding:24px 0">
+                                                    <p style="font-size:14px;color:#888">"Processing..."</p>
+                                                </div>
+                                            }.into_any(),
+                                            3 => view! {
+                                                <div style="text-align:center;padding:16px 0">
+                                                    <p style="font-size:32px;margin:0 0 8px">{"\u{2713}"}</p>
+                                                    <p style="font-size:16px;font-weight:700;color:#d4a84b;margin:0 0 4px">{format!("{:.2} KX moved to available", amt)}</p>
+                                                    <button style="background:#d4a84b;color:#000;border:none;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer;margin-top:12px" on:click=move |_| {
+                                                        withdraw_modal.set(0);
+                                                    }>"Done"</button>
+                                                </div>
+                                            }.into_any(),
+                                            _ => view! { <span></span> }.into_any(),
+                                        }}
+                                    </div>
+                                </div>
+                            }.into_any()
+                        }}
+
+                        // Buy KX modal (opens XChan in browser)
+                        {move || {
+                            if !convert_is_buy.get() { return view! { <span></span> }.into_any(); }
+                            view! {
+                                <div style="margin-top:10px;background:#0d0d1a;border:1px solid #d4a84b;border-radius:12px;padding:16px;text-align:center">
+                                    <p style="font-size:18px;font-weight:700;color:#d4a84b;margin:0 0 8px">{move || t(&lang.get(), "buy_kx_modal_title")}</p>
+                                    <p style="font-size:13px;color:#ccc;margin:0 0 8px">{move || t(&lang.get(), "buy_kx_modal_body")}</p>
+                                    <p style="font-size:11px;color:#888;margin:0 0 12px;font-style:italic">{move || t(&lang.get(), "buy_kx_modal_coinbase_note")}</p>
+                                    <button style="background:#d4a84b;color:#000;border:none;padding:10px 20px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;margin-bottom:8px"
+                                        on:click=move |_| {
+                                            convert_is_buy.set(false);
+                                            spawn_local(async move {
+                                                let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "url": "https://xchan.io" })).unwrap_or(JsValue::NULL);
+                                                let _ = call::<()>("open_url", args).await;
+                                            });
+                                        }>
+                                        {move || t(&lang.get(), "buy_kx_modal_open")}
+                                    </button>
+                                    <br/>
+                                    <a href="#" style="font-size:12px;color:#888" on:click=move |ev: web_sys::MouseEvent| {
+                                        ev.prevent_default();
+                                        convert_is_buy.set(false);
+                                    }>"Cancel"</a>
+                                </div>
+                            }.into_any()
+                        }}
                         {move || {
                             if !convert_visible.get() { return view! { <span></span> }.into_any(); }
                             let l = lang.get();
                             view! {
                                 <div class="convert-block">
+                                    // Sell KX header
+                                    <div style="text-align:center;margin-bottom:10px">
+                                        <p style="font-size:20px;font-weight:700;color:#ef4444;margin:0">{"\u{25BC} SELL KX"}</p>
+                                        <p style="font-size:12px;color:#888;margin:4px 0">"Send KX from this wallet \u{2192} receive USDC on Base"</p>
+                                    </div>
                                     <input type="number" class="convert-input" placeholder="Amount in KX" min="0"
                                         prop:value=move || convert_amount.get()
                                         on:input=move |ev| {
@@ -6962,6 +7224,9 @@ fn SendPanel(
     let lock_date = RwSignal::new(String::new());
     let memo     = RwSignal::new(String::new());
     let memo_public = RwSignal::new(false); // v2.5.29: public memo toggle (desktop only)
+    let yield_opt_out = RwSignal::new(false); // v2.5.51: yield opt-out toggle for Send Later
+    let fl_amount = RwSignal::new(String::new()); // Friend Loan calculator amount
+    let fl_days = RwSignal::new(String::new()); // Friend Loan calculator days
     let sending   = RwSignal::new(false);
     let msg       = RwSignal::new(String::new());
     let scan_msg  = RwSignal::new(String::new());
@@ -7132,6 +7397,7 @@ fn SendPanel(
         };
         let memo_opt: Option<String> = if memo_str.is_empty() { None } else { Some(memo_str) };
         let is_memo_public = memo_public.get_untracked() && memo_opt.is_some();
+        let is_yield_opt_out: Option<bool> = if yield_opt_out.get_untracked() { Some(true) } else { None };
 
         // Balance check — reject before PoW mining starts (account for pending email sends)
         if let Some(ref ai) = info.get_untracked() {
@@ -7238,6 +7504,7 @@ fn SendPanel(
                         "aiPercentage": lp_ai_pct,
                         "axiomConsentHash": lp_hash,
                         "memoIsPublic": is_memo_public,
+                        "yieldOptOut": is_yield_opt_out,
                     })).unwrap_or(no_args());
                     match call::<String>("create_timelock", args).await {
                         Ok(txid) => {
@@ -7246,6 +7513,7 @@ fn SendPanel(
                             lock_date.set(String::new());
                             memo.set(String::new());
                             memo_public.set(false);
+                            yield_opt_out.set(false);
                             to_pubkey.set(String::new());
                             grantor_intent.set(String::new());
                             risk_level.set(50);
@@ -8153,6 +8421,28 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
+            // Yield toggle — Send Later only (timelocks)
+            {move || if send_mode.get() == 1 {
+                view! {
+                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary, #9ca3af);margin:8px 0">
+                        <input type="checkbox"
+                            style="accent-color:#d4a84b"
+                            prop:checked=move || !yield_opt_out.get()
+                            on:change=move |ev| {
+                                use wasm_bindgen::JsCast;
+                                let checked = ev.target()
+                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                    .map(|i| i.checked())
+                                    .unwrap_or(false);
+                                yield_opt_out.set(!checked);
+                            }
+                        />
+                        "Earn yield for recipient "
+                        <span style="font-size:11px;opacity:0.6">"(variable, not guaranteed)"</span>
+                    </label>
+                }.into_any()
+            } else { view! { <span></span> }.into_any() }}
+
             // Memo — for Send Later or Email
             {move || if send_mode.get() == 1 || send_sub.get() == 1 {
                 view! {
@@ -8520,6 +8810,59 @@ fn SendPanel(
                 } else { view! { <span></span> }.into_any() }
             }}
             // (save_contact_banner removed — replaced by inline save icon on email field)
+
+            // Friend Loan calculator (mobile only)
+            {move || {
+                let is_mobile = web_sys::window()
+                    .and_then(|w| w.inner_width().ok())
+                    .and_then(|w| w.as_f64())
+                    .map(|w| w < 768.0)
+                    .unwrap_or(true);
+                if is_mobile {
+                    view! {
+                        <div style="margin-top:24px;padding:16px;border:1px solid var(--border, #2a2f3e);border-radius:12px;background:var(--bg-card, #1a1d2e)">
+                            <div style="font-size:15px;font-weight:600;margin-bottom:12px;color:var(--text-primary, #e5e7eb)">"Friend Loan Calculator"</div>
+                            <div style="font-size:12px;color:var(--text-secondary, #9ca3af);margin-bottom:8px">
+                                "Fee: 1% per 30 days, prorated. Min $0.01."
+                            </div>
+                            <div style="display:flex;gap:8px;margin-bottom:8px">
+                                <input type="number" placeholder="$USD" min="1" max="250" step="1"
+                                    style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
+                                    prop:value=move || fl_amount.get()
+                                    on:input=move |ev| fl_amount.set(event_target_value(&ev))
+                                />
+                                <input type="number" placeholder="Days" min="1" max="30" step="1"
+                                    style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
+                                    prop:value=move || fl_days.get()
+                                    on:input=move |ev| fl_days.set(event_target_value(&ev))
+                                />
+                            </div>
+                            {move || {
+                                let amt: f64 = fl_amount.get().parse().unwrap_or(0.0);
+                                let days: f64 = fl_days.get().parse().unwrap_or(0.0);
+                                if amt > 0.0 && days > 0.0 {
+                                    let fee = f64::max(amt * 0.01 * (days / 30.0), 0.01);
+                                    let total = amt + fee;
+                                    let per_day = fee / days;
+                                    view! {
+                                        <div style="padding:12px;border-radius:8px;background:var(--bg-secondary, #151829);font-size:13px;line-height:1.8">
+                                            <div>"They repay: "<strong>{format!("${:.2}", total)}</strong>" USDC"</div>
+                                            <div>"Fee: "<strong>{format!("${:.2}", fee)}</strong>{format!(" ({:.2}\u{00a2}/day)", per_day * 100.0)}</div>
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! { <div></div> }.into_any()
+                                }
+                            }}
+                            <div style="font-size:11px;color:var(--text-secondary, #9ca3af);margin-top:8px;line-height:1.6;opacity:0.7">
+                                "You earn nothing. You risk your KX if they don't pay. Use discretion."
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
         </div>
         // Address Book modal (mobile only)
         {move || if address_book_open.get() {
@@ -10508,7 +10851,7 @@ fn HistoryPanel(
         for entry in &all {
             let cp = entry.counterparty.as_deref().unwrap_or("");
             let is_incoming_type = matches!(entry.tx_type.as_str(),
-                "Transfer Received" | "Email Claimed" | "Promise Kept");
+                "Transfer Received" | "Email Claimed" | "Promise Kept" | "Loan Received");
             if !is_relay_wallet(cp) || !is_incoming_type { continue; }
             if already.contains_key(&entry.tx_id) { continue; }
             let tx_id = entry.tx_id.clone();
@@ -10681,7 +11024,7 @@ fn HistoryPanel(
                 if filter > 0 {
                     list.retain(|e| match filter {
                         1 => matches!(e.tx_type.as_str(), "Transfer Sent" | "Email Send"),
-                        2 => matches!(e.tx_type.as_str(), "Transfer Received" | "Email Claimed" | "Promise Kept"),
+                        2 => matches!(e.tx_type.as_str(), "Transfer Received" | "Email Claimed" | "Promise Kept" | "Loan Received"),
                         3 => e.tx_type == "Incoming Promise",
                         4 => matches!(e.tx_type.as_str(), "Promise Sent" | "TimeLockCreate"),
                         _ => true,
@@ -10808,6 +11151,9 @@ fn HistoryPanel(
                                     "Promise Kept" => "RECEIVED",
                                     "TimeLockClaim" => "RECEIVED",
                                     "Incoming Promise" => "INCOMING PROMISE",
+                                    "Loan Received" => "LOAN",
+                                    "Moved to Savings" => "SAVINGS",
+                                    "Moved to Available" => "SAVINGS",
                                     _ => "SENT",
                                 };
                                 let label_class = match type_label {
@@ -10818,6 +11164,8 @@ fn HistoryPanel(
                                     "SCHEDULED" => "history-type-badge scheduled",
                                     "PROMISE" => "history-type-badge scheduled",
                                     "CASCADE" => "history-type-badge cascade",
+                                    "LOAN" => "history-type-badge loan",
+                                    "SAVINGS" => "history-type-badge savings",
                                     _ => "history-type-badge",
                                 };
                                 let amount_display = entry.amount_chronos.as_deref()
@@ -10826,7 +11174,10 @@ fn HistoryPanel(
                                         if is_incoming { format!("+{} KX", kx) } else { format!("{} KX", kx) }
                                     })
                                     .unwrap_or_else(|| "\u{2014}".to_string());
-                                let amount_class = if is_incoming { "history-amount incoming" } else { "history-amount" };
+                                let amount_class = if entry.tx_type == "Loan Received" { "history-amount loan" }
+                                    else if entry.tx_type == "Moved to Savings" || entry.tx_type == "Moved to Available" { "history-amount" }
+                                    else if is_incoming { "history-amount incoming" }
+                                    else { "history-amount" };
                                 // Email sends: show email address (truncated) regardless of unlock_date
                                 let addr_display = if is_email_send {
                                     entry.counterparty.as_deref()
@@ -12140,8 +12491,32 @@ fn SettingsPanel(
                 "none"
             } else { "" }
         }>
-        <div class="card settings-content-wrap">
+        <div class="card settings-content-wrap" style="display:flex;flex-direction:column">
             <p class="section-title" style="order:0">{move || t(&lang.get(), "tab_settings")}</p>
+
+            // FAQ banner (mobile only)
+            {if !desktop {
+                view! {
+                    <div style="order:0;background:#1a1a0a;border:1px solid #d4a84b44;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+                        <div>
+                            <span style="font-size:12px;color:#d4a84b">{"\u{2753} "}{move || t(&lang.get(), "faq_banner_question")}</span>
+                            <span style="font-size:12px;color:#888;margin-left:6px">{move || t(&lang.get(), "faq_banner_coming_soon")}</span>
+                        </div>
+                        <a href="#" style="font-size:11px;color:#d4a84b;text-decoration:underline;white-space:nowrap"
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.prevent_default();
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(&serde_json::json!({ "url": "https://chronx.io/support.html" })).unwrap_or(JsValue::NULL);
+                                    let _ = call::<()>("open_url", args).await;
+                                });
+                            }>
+                            {move || t(&lang.get(), "faq_banner_link")}
+                        </a>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
 
             // Language picker
             <div class="settings-section" style="margin-bottom:12px;order:1">
@@ -12293,6 +12668,53 @@ fn SettingsPanel(
                                             }.into_any()
                                         }
                                     }}
+
+                                    // ── Funds Management (inside Advanced) ────────
+                                    <hr style="border:none;border-top:1px solid #2d3748;margin:12px 0" />
+                                    <p class="label" style="color:#d4a84b;font-weight:700;text-transform:uppercase;letter-spacing:1px">"FUNDS MANAGEMENT"</p>
+                                    <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0">
+                                        <div>
+                                            <p style="font-size:13px;color:#ccc;margin:0">"Auto-Sweep KX to USDC"</p>
+                                            <p style="font-size:11px;color:#888;margin:2px 0 0">"Convert incoming KX to USDC automatically"</p>
+                                        </div>
+                                        <div style="opacity:0.5;pointer-events:none;background:#333;border-radius:12px;padding:4px 12px;font-size:11px;color:#888">
+                                            "OFF"
+                                        </div>
+                                    </div>
+                                    <div style="background:#1a1a0a;border:1px solid #d4a84b33;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+                                        <p style="font-size:11px;color:#d4a84b;margin:0">
+                                            "\u{26a0} Auto-Sweep requires governance activation. Currently available for testing only."
+                                        </p>
+                                    </div>
+                                    <div style="margin-bottom:8px">
+                                        <p style="font-size:12px;color:#aaa;margin:0 0 4px">"Base address (for USDC):"</p>
+                                        {move || {
+                                            let addrs = convert_saved_addrs.get();
+                                            if addrs.is_empty() {
+                                                view! {
+                                                    <p style="font-size:11px;color:#666;font-style:italic">"No Base address saved. Add one in the Sell KX flow."</p>
+                                                }.into_any()
+                                            } else {
+                                                view! {
+                                                    <div style="display:flex;flex-wrap:wrap;gap:4px">
+                                                        {addrs.into_iter().map(|(addr, nick)| {
+                                                            let short = if addr.len() > 14 { format!("{}...{}", &addr[..6], &addr[addr.len()-4..]) } else { addr.clone() };
+                                                            let label = if nick.is_empty() { short } else { format!("{} ({})", nick, short) };
+                                                            view! {
+                                                                <span style="background:#222;border:1px solid #444;border-radius:6px;padding:3px 8px;font-size:11px;color:#ccc;font-family:monospace">
+                                                                    {label}
+                                                                </span>
+                                                            }
+                                                        }).collect_view()}
+                                                    </div>
+                                                }.into_any()
+                                            }
+                                        }}
+                                    </div>
+                                    <div style="display:flex;gap:12px;font-size:11px;color:#666">
+                                        <span>"Min sweep: 100 KX"</span>
+                                        <span>"Interval: 5 min"</span>
+                                    </div>
                                 </div>
                             }.into_any()
                         } else {
@@ -13068,60 +13490,6 @@ fn SettingsPanel(
                 }.into_any()
             }
 
-
-            // ── Funds Management (Auto-Sweep KX → USDC) ──────────────────────
-            <div class="settings-section" style="order:90">
-                <p class="label" style="color:#d4a84b;font-weight:700;margin-bottom:6px">"FUNDS MANAGEMENT"</p>
-
-                // Auto-Sweep toggle
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <div>
-                        <p style="font-size:13px;color:#ccc;margin:0">"Auto-Sweep KX to USDC"</p>
-                        <p style="font-size:11px;color:#888;margin:2px 0 0">"Convert incoming KX to USDC automatically"</p>
-                    </div>
-                    <div style="opacity:0.5;pointer-events:none;background:#333;border-radius:12px;padding:4px 12px;font-size:11px;color:#888">
-                        "OFF"
-                    </div>
-                </div>
-                <div style="background:#1a1a0a;border:1px solid #d4a84b33;border-radius:8px;padding:10px 12px;margin-bottom:8px">
-                    <p style="font-size:11px;color:#d4a84b;margin:0">
-                        "\u{26a0} Auto-Sweep requires governance activation. Currently available for testing only."
-                    </p>
-                </div>
-
-                // Saved Base address
-                <div style="margin-bottom:8px">
-                    <p style="font-size:12px;color:#aaa;margin:0 0 4px">"Base address (for USDC):"</p>
-                    {move || {
-                        let addrs = convert_saved_addrs.get();
-                        if addrs.is_empty() {
-                            view! {
-                                <p style="font-size:11px;color:#666;font-style:italic">"No Base address saved. Add one in the Sell KX flow on the Receive tab."</p>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <div style="display:flex;flex-wrap:wrap;gap:4px">
-                                    {addrs.into_iter().map(|(addr, nick)| {
-                                        let short = if addr.len() > 14 { format!("{}...{}", &addr[..6], &addr[addr.len()-4..]) } else { addr.clone() };
-                                        let label = if nick.is_empty() { short } else { format!("{} ({})", nick, short) };
-                                        view! {
-                                            <span style="background:#222;border:1px solid #444;border-radius:6px;padding:3px 8px;font-size:11px;color:#ccc;font-family:monospace">
-                                                {label}
-                                            </span>
-                                        }
-                                    }).collect_view()}
-                                </div>
-                            }.into_any()
-                        }
-                    }}
-                </div>
-
-                // Sweep config (dormant — governance gated)
-                <div style="display:flex;gap:12px;font-size:11px;color:#666">
-                    <span>"Min sweep: 100 KX"</span>
-                    <span>"Interval: 5 min"</span>
-                </div>
-            </div>
 
             // About (no section label — just centered buttons)
             <div style="order:99;text-align:center;padding:12px 0 4px">

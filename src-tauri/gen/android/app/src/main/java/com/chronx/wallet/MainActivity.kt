@@ -10,10 +10,36 @@ import androidx.core.view.WindowCompat
 
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
+  private var appWasInBackground = false
+  private var backgroundedAt: Long = 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     WindowCompat.setDecorFitsSystemWindows(window, true)
+  }
+
+  override fun onPause() {
+    super.onPause()
+    appWasInBackground = true
+    backgroundedAt = System.currentTimeMillis()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    if (appWasInBackground) {
+      appWasInBackground = false
+      val elapsed = System.currentTimeMillis() - backgroundedAt
+      if (elapsed > 5000) {
+        triggerLockScreen()
+      }
+    }
+  }
+
+  private fun triggerLockScreen() {
+    webView?.evaluateJavascript(
+      "window.__chronxAppLocked && window.__chronxAppLocked()",
+      null
+    )
   }
 
   override fun onWebViewCreate(webView: WebView) {

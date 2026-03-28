@@ -712,6 +712,7 @@ pub async fn create_timelock(
     ai_percentage: Option<u32>,
     axiom_consent_hash: Option<String>,
     memo_is_public: Option<bool>,
+    yield_opt_out: Option<bool>,
 ) -> Result<String, String> {
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
@@ -810,7 +811,8 @@ pub async fn create_timelock(
         email_recipient_hash: None,
         claim_window_secs: None,
         unclaimed_action: None,
-        lock_type: if is_ai { Some("M".to_string()) } else { None },
+        lock_type: if is_ai { Some("M".to_string()) } else { Some("Y".to_string()) },
+        yield_opt_out: yield_opt_out,
         lock_metadata: None,
         agent_managed: if is_ai { Some(true) } else { None },
         grantor_axiom_consent_hash: axiom_consent_hash.clone(),
@@ -997,6 +999,7 @@ pub async fn create_email_timelock(
         claim_window_secs: Some(259_200), // 72 hours
         unclaimed_action: Some(UnclaimedAction::RevertToSender),
         lock_type: if is_ai { Some("M".to_string()) } else { None },
+        yield_opt_out: None,
         lock_metadata,
         agent_managed: if is_ai { Some(true) } else { None },
         grantor_axiom_consent_hash: axiom_consent_hash.clone(),
@@ -1020,7 +1023,7 @@ pub async fn create_email_timelock(
         memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
-    
+
         transferable: None,
         current_owner_account: None,
         transfer_history: None,
@@ -2174,6 +2177,85 @@ pub async fn get_transaction_history(app: AppHandle) -> Result<Vec<TxHistoryEntr
         });
     }
 
+    // ── Loan disbursements (active loans where this wallet is borrower) ────────
+    let loans: Vec<serde_json::Value> = rpc_call(
+        &url, "chronx_getLoansByWallet", serde_json::json!([b58])
+    ).await
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    for v in loans {
+        let status = v["status"].as_str().unwrap_or("");
+        let borrower = v["borrower_wallet"].as_str().unwrap_or("");
+        // Only show disbursed loans where this wallet is the borrower
+        if borrower != b58 || !matches!(status, "active" | "completed") { continue; }
+        let loan_id = v["loan_id_hex"].as_str().unwrap_or("").to_string();
+        if local_tx_ids.contains(&loan_id) { continue; }
+        let activated_at = v["activated_at"].as_i64()
+            .or_else(|| v["rescission_waived_at"].as_i64())
+            .unwrap_or(0);
+        entries.push(TxHistoryEntry {
+            tx_id: loan_id,
+            tx_type: "Loan Received".to_string(),
+            amount_chronos: Some(v["principal_chronos"].as_u64().unwrap_or(0).to_string()),
+            counterparty: Some(v["lender_wallet"].as_str().unwrap_or("").to_string()),
+            timestamp: activated_at,
+            status: "Confirmed".to_string(),
+            unlock_date: None,
+            cancellation_window_secs: None,
+            created_at: Some(activated_at),
+            claim_code: None,
+            claim_secret_hash: None,
+            recipient_registered: None,
+            memo: v["memo"].as_str().map(|s| s.to_string()),
+            sender_wallet: None,
+            sender_email: None,
+            sender_display: None,
+        });
+    }
+
+    // ── Savings deposits (TYPE_Y) as history entries ───────────────────────────
+    let deposits: Vec<serde_json::Value> = rpc_call(
+        &url, "chronx_getDepositsByWallet", serde_json::json!([b58])
+    ).await
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    for d in deposits {
+        let did = d["deposit_id"].as_str().unwrap_or("").to_string();
+        if local_tx_ids.contains(&did) { continue; }
+        let created = d["created_at"].as_u64().unwrap_or(0) as i64;
+        let principal = d["principal_chronos"].as_str()
+            .or_else(|| d["principal_chronos"].as_u64().map(|_| "").or(None))
+            .unwrap_or("0").to_string();
+        let principal_val = d["principal_chronos"].as_str()
+            .and_then(|s| s.parse::<u64>().ok())
+            .or_else(|| d["principal_chronos"].as_u64())
+            .unwrap_or(0);
+        let status_str = d["status"].as_str().unwrap_or("Active");
+        let tx_type = if status_str == "Settled" { "Moved to Available" } else { "Moved to Savings" };
+        entries.push(TxHistoryEntry {
+            tx_id: did,
+            tx_type: tx_type.to_string(),
+            amount_chronos: Some(principal_val.to_string()),
+            counterparty: Some("Savings".to_string()),
+            timestamp: created,
+            status: "Confirmed".to_string(),
+            unlock_date: None,
+            cancellation_window_secs: None,
+            created_at: Some(created),
+            claim_code: None,
+            claim_secret_hash: None,
+            recipient_registered: None,
+            memo: None,
+            sender_wallet: None,
+            sender_email: None,
+            sender_display: None,
+        });
+    }
+
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(entries)
 }
@@ -2882,6 +2964,7 @@ pub async fn create_email_timelock_series(
                 claim_window_secs: Some(259_200),
                 unclaimed_action: Some(UnclaimedAction::RevertToSender),
                 lock_type: None,
+                yield_opt_out: None,
                 lock_metadata: None,
                 agent_managed: None,
                 grantor_axiom_consent_hash: None,
@@ -2905,7 +2988,7 @@ pub async fn create_email_timelock_series(
                 memo_public: has_public_memo,
                 pay_as_amount: None,
                 beneficiary_package: None,
-            
+
                 transferable: None,
                 current_owner_account: None,
                 transfer_history: None,
@@ -3846,6 +3929,7 @@ pub async fn create_freeform_timelock(
         claim_window_secs: None,
         unclaimed_action: None,
         lock_type: if is_ai { Some("M".to_string()) } else { Some("F".to_string()) },
+        yield_opt_out: None,
         lock_metadata: None,
         agent_managed: if is_ai { Some(true) } else { None },
         grantor_axiom_consent_hash: axiom_consent_hash.clone(),
@@ -3869,7 +3953,7 @@ pub async fn create_freeform_timelock(
         memo_public: has_public_memo,
         pay_as_amount: None,
         beneficiary_package: None,
-    
+
         transferable: None,
         current_owner_account: None,
         transfer_history: None,
@@ -5039,8 +5123,119 @@ pub async fn get_savings_balance(app: AppHandle) -> Result<serde_json::Value, St
     let url = rpc_url(&app);
     let kp = load_keypair(&app)?;
     let b58 = kp.account_id.to_b58();
-    let result = rpc_call(&url, "chronx_getSavingsBalance", serde_json::json!([b58]))
+
+    // Fetch deposits from node
+    let deposits_val = rpc_call(&url, "chronx_getDepositsByWallet", serde_json::json!([b58]))
         .await
-        .map_err(|e| format!("RPC failed: {e}"))?;
-    Ok(result)
+        .unwrap_or(serde_json::Value::Array(vec![]));
+
+    let deposits = deposits_val.as_array().cloned().unwrap_or_default();
+    let mut savings_kx: f64 = 0.0;
+    let mut active_deposits = Vec::new();
+    for d in &deposits {
+        let status = d["status"].as_str().unwrap_or("");
+        if status == "Active" || status == "Matured" {
+            // principal_kx may be string or number from RPC
+            let principal = d["principal_kx"].as_f64()
+                .or_else(|| d["principal_kx"].as_str().and_then(|s| s.parse().ok()))
+                .unwrap_or(0.0);
+            let total_due = d["total_due_kx"].as_f64()
+                .or_else(|| d["total_due_kx"].as_str().and_then(|s| s.parse().ok()))
+                .unwrap_or(principal);
+            let rate = d["rate_pct"].as_f64()
+                .or_else(|| d["rate_basis_points"].as_u64().map(|bp| bp as f64 / 100.0))
+                .unwrap_or(0.0);
+            savings_kx += principal;
+            active_deposits.push(serde_json::json!({
+                "deposit_id": d["deposit_id"].as_str().unwrap_or(""),
+                "principal_kx": principal,
+                "total_due_kx": total_due,
+                "rate_pct": rate,
+                "maturity_timestamp": d["maturity_timestamp"].as_u64().unwrap_or(0),
+                "status": status,
+            }));
+        }
+    }
+
+    Ok(serde_json::json!({
+        "savings_kx": savings_kx,
+        "savings_chronos": ((savings_kx * 1_000_000.0) as u128).to_string(),
+        "active_deposits": active_deposits,
+        "invested": false,
+        "annual_rate_pct": 0.0,
+    }))
+}
+
+/// Create a savings deposit (TYPE_Y: CreateDeposit — self-deposit, 24h term).
+#[tauri::command]
+pub async fn create_savings_deposit(app: AppHandle, amount_kx: f64) -> Result<String, String> {
+    use chronx_core::transaction::Compounding;
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    if amount_kx <= 0.0 {
+        return Err("Amount must be greater than 0".to_string());
+    }
+    let chronos = (amount_kx * CHRONOS_PER_KX as f64) as u64;
+
+    // Generate deposit_id as BLAKE3(wallet + timestamp + amount)
+    let timestamp = chrono::Utc::now().timestamp();
+    let seed = format!("{}:{}:{}", kp.account_id.to_b58(), timestamp, chronos);
+    let hash = blake3::hash(seed.as_bytes());
+    let mut deposit_id = [0u8; 32];
+    deposit_id.copy_from_slice(hash.as_bytes());
+
+    let actions = vec![Action::CreateDeposit(chronx_core::transaction::CreateDepositAction {
+        depositor_pubkey: kp.public_key.clone(),
+        obligor_pubkey: kp.public_key.clone(), // self-deposit
+        principal_chronos: chronos,
+        rate_basis_points: 0,
+        term_seconds: 86400, // 24 hours
+        compounding: Compounding::Simple,
+        penalty_basis_points: Some(0),
+        deposit_id,
+    })];
+
+    let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(hex::encode(deposit_id))
+}
+
+/// Withdraw a savings deposit (TYPE_Y: SettleDeposit).
+#[tauri::command]
+pub async fn withdraw_savings(app: AppHandle, deposit_id: String) -> Result<f64, String> {
+    let url = rpc_url(&app);
+    let kp = load_keypair(&app)?;
+
+    // Fetch deposit details to get total_due_chronos
+    let deposit_val = rpc_call(&url, "chronx_getDeposit", serde_json::json!([deposit_id]))
+        .await
+        .map_err(|e| format!("Failed to fetch deposit: {e}"))?;
+
+    if deposit_val.is_null() {
+        return Err("Deposit not found".to_string());
+    }
+
+    let total_due_kx = deposit_val["total_due_kx"].as_f64()
+        .or_else(|| deposit_val["total_due_kx"].as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0.0);
+    let total_due_chronos = deposit_val["total_due_chronos"].as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or((total_due_kx * CHRONOS_PER_KX as f64) as u64);
+
+    let did_bytes = hex::decode(&deposit_id)
+        .map_err(|e| format!("Invalid deposit_id hex: {e}"))?;
+    if did_bytes.len() != 32 {
+        return Err("deposit_id must be 32 bytes".to_string());
+    }
+    let mut did = [0u8; 32];
+    did.copy_from_slice(&did_bytes);
+
+    let actions = vec![Action::SettleDeposit(chronx_core::transaction::SettleDepositAction {
+        obligor_pubkey: kp.public_key.clone(),
+        deposit_id: did,
+        amount_chronos: total_due_chronos,
+    })];
+
+    let _tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
+    Ok(total_due_kx)
 }

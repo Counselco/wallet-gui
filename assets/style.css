@@ -683,6 +683,7 @@ input[type="datetime-local"] { color-scheme: dark; }
     padding: 12px;
     cursor: pointer;
     transition: border-color 0.15s;
+    overflow: hidden;
 }
 .history-row:hover { border-color: #2d3748; }
 
@@ -691,6 +692,7 @@ input[type="datetime-local"] { color-scheme: dark; }
     justify-content: space-between;
     align-items: center;
     gap: 12px;
+    overflow: hidden;
 }
 
 .history-type {
@@ -735,6 +737,18 @@ input[type="datetime-local"] { color-scheme: dark; }
     color: #a78bfa;
     border: 1px solid rgba(109,40,217,0.4);
 }
+.history-type-badge.loan-received,
+.history-type-badge.loan {
+    background: rgba(212,168,75,0.15);
+    color: #d4a84b;
+}
+.history-amount.loan {
+    color: #d4a84b;
+}
+.history-type-badge.savings {
+    background: rgba(255,255,255,0.08);
+    color: #ccc;
+}
 .cascade-parent { border-left: 3px solid #7c3aed; padding-left: 8px; }
 .cascade-stage {
     margin-left: 16px;
@@ -752,7 +766,9 @@ input[type="datetime-local"] { color-scheme: dark; }
     text-align: right;
     margin-left: auto;
     max-width: 140px;
-    word-break: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     flex-shrink: 0;
 }
 .history-amount.incoming {
@@ -764,6 +780,7 @@ input[type="datetime-local"] { color-scheme: dark; }
     justify-content: space-between;
     margin-top: 6px;
     gap: 8px;
+    overflow: hidden;
 }
 
 .history-addr {
