@@ -855,6 +855,9 @@ pub async fn create_timelock(
         oracle_trigger_threshold: None,
         oracle_trigger_direction: None,
         linked_instrument_id: None,
+        extension_right: None,
+        max_extensions: None,
+        pay_as_execution: None,
 }];
 
     build_sign_mine_submit(&kp, actions, &url).await
@@ -1042,6 +1045,9 @@ pub async fn create_email_timelock(
         oracle_trigger_threshold: None,
         oracle_trigger_direction: None,
         linked_instrument_id: None,
+        extension_right: None,
+        max_extensions: None,
+        pay_as_execution: None,
 }];
 
     let tx_id = build_sign_mine_submit(&kp, actions, &url).await?;
@@ -3007,6 +3013,9 @@ pub async fn create_email_timelock_series(
                 oracle_trigger_threshold: None,
                 oracle_trigger_direction: None,
                 linked_instrument_id: None,
+        extension_right: None,
+        max_extensions: None,
+        pay_as_execution: None,
 }
         })
         .collect();
@@ -3972,6 +3981,9 @@ pub async fn create_freeform_timelock(
         oracle_trigger_threshold: None,
         oracle_trigger_direction: None,
         linked_instrument_id: None,
+        extension_right: None,
+        max_extensions: None,
+        pay_as_execution: None,
 }];
 
     build_sign_mine_submit(&kp, actions, &url).await
