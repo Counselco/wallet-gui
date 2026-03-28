@@ -1309,8 +1309,13 @@ fn App() -> impl IntoView {
     // Language signal
     let lang = RwSignal::new("en".to_string());
 
-    // Cascade send mode (desktop only): 0=Simple, 1=Cascade
+    // Cascade send mode (desktop only): 0=Simple, 1=Cascade, 2=Friend Loan
     let send_cascade_mode = RwSignal::new(0u8);
+    // Friend Loan signals (used in App-level desktop panel + SendPanel mobile card)
+    let fl_email_app = RwSignal::new(String::new());
+    let fl_amount_app = RwSignal::new(String::new());
+    let fl_days_app = RwSignal::new(String::new());
+    let fl_msg_app = RwSignal::new(String::new());
     // Send tab mode: 0=Send KX, 1=Request KX
     let send_tab_mode = RwSignal::new(0u8);
     // Loans tab view: 0=Lender, 1=Borrower
@@ -2331,6 +2336,11 @@ fn App() -> impl IntoView {
                                                             on:click=move |_| send_cascade_mode.set(1)>
                                                             {move || t(&lang.get(), "cascade_send")}
                                                         </button>
+                                                        <button type="button"
+                                                            class=move || if send_cascade_mode.get()==2 { "send-mode-btn active" } else { "send-mode-btn" }
+                                                            on:click=move |_| send_cascade_mode.set(2)>
+                                                            "Friend Loan"
+                                                        </button>
                                                     </div>
                                                 }.into_any()
                                             } else {
@@ -2355,10 +2365,94 @@ fn App() -> impl IntoView {
                                             } else {
                                                 view! { <span></span> }.into_any()
                                             }}
-                                            {move || if send_cascade_mode.get() == 0 {
-                                                view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact pay_link_to=pay_link_to pay_link_amount=pay_link_amount pay_link_memo=pay_link_memo pay_link_show=pay_link_show /> }.into_any()
-                                            } else {
-                                                view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any()
+                                            {move || match send_cascade_mode.get() {
+                                                0 => view! { <SendPanel info=info pending_email_chronos=pending_email_chronos lang=lang poke_prefill_email=poke_prefill_email poke_prefill_amount=poke_prefill_amount poke_prefill_memo=poke_prefill_memo poke_prefill_id=poke_prefill_id email_prefill_from_contact=email_prefill_from_contact pay_link_to=pay_link_to pay_link_amount=pay_link_amount pay_link_memo=pay_link_memo pay_link_show=pay_link_show /> }.into_any(),
+                                                1 => view! { <CascadeSendPanel info=info pending_email_chronos=pending_email_chronos lang=lang /> }.into_any(),
+                                                // Friend Loan (desktop)
+                                                _ => view! {
+                                                    <div style="padding:16px;border:1px solid var(--border, #2a2f3e);border-radius:12px;background:var(--bg-card, #1a1d2e);max-width:480px">
+                                                        <div style="font-size:18px;font-weight:600;margin-bottom:4px;color:var(--text-primary, #e5e7eb)">"Friend Loan"</div>
+                                                        <div style="font-size:12px;color:var(--text-secondary, #9ca3af);margin-bottom:16px">
+                                                            "Fee: 1% per 30 days, prorated. Min $0.01."
+                                                        </div>
+                                                        <div class="field" style="margin-bottom:12px">
+                                                            <label style="font-size:13px;color:var(--text-secondary, #9ca3af);margin-bottom:4px">"Friend's email"</label>
+                                                            <input type="email" placeholder="friend@example.com"
+                                                                style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
+                                                                prop:value=move || fl_email_app.get()
+                                                                on:input=move |ev| fl_email_app.set(event_target_value(&ev))
+                                                            />
+                                                        </div>
+                                                        <div style="display:flex;gap:12px;margin-bottom:12px">
+                                                            <div class="field" style="flex:1">
+                                                                <label style="font-size:13px;color:var(--text-secondary, #9ca3af);margin-bottom:4px">"Amount (max $250 USDC)"</label>
+                                                                <input type="number" placeholder="$USD" min="1" max="250" step="1"
+                                                                    style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
+                                                                    prop:value=move || fl_amount_app.get()
+                                                                    on:input=move |ev| fl_amount_app.set(event_target_value(&ev))
+                                                                />
+                                                            </div>
+                                                            <div class="field" style="width:100px">
+                                                                <label style="font-size:13px;color:var(--text-secondary, #9ca3af);margin-bottom:4px">"Term (days)"</label>
+                                                                <input type="number" placeholder="1\u{2013}30" min="1" max="30" step="1"
+                                                                    style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
+                                                                    prop:value=move || fl_days_app.get()
+                                                                    on:input=move |ev| fl_days_app.set(event_target_value(&ev))
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                        {move || {
+                                                            let amt: f64 = fl_amount_app.get().parse().unwrap_or(0.0);
+                                                            let days: f64 = fl_days_app.get().parse().unwrap_or(0.0);
+                                                            if amt > 0.0 && days > 0.0 {
+                                                                let fee = f64::max(amt * 0.01 * (days / 30.0), 0.01);
+                                                                let total = amt + fee;
+                                                                let due_secs = (days * 86400.0) as i64;
+                                                                let now_ms = js_sys::Date::now();
+                                                                let due_ms = now_ms + (due_secs as f64 * 1000.0);
+                                                                let due_date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(due_ms));
+                                                                let due_str = format!("{}/{}/{}",
+                                                                    due_date.get_month() + 1,
+                                                                    due_date.get_date(),
+                                                                    due_date.get_full_year());
+                                                                view! {
+                                                                    <div style="padding:14px;border-radius:8px;background:var(--bg-secondary, #151829);font-size:14px;line-height:2;margin-bottom:12px">
+                                                                        <div>"They repay: "<strong style="color:#d4a84b">{format!("${:.2}", total)}</strong>" USDC"</div>
+                                                                        <div>"Due: "<strong>{due_str}</strong></div>
+                                                                        <div>"Fee: "<strong>{format!("${:.2}", fee)}</strong></div>
+                                                                    </div>
+                                                                }.into_any()
+                                                            } else {
+                                                                view! { <div></div> }.into_any()
+                                                            }
+                                                        }}
+                                                        <div style="font-size:12px;color:#e5a040;background:rgba(229,160,64,0.08);padding:12px;border-radius:8px;line-height:1.7;margin-bottom:16px">
+                                                            <div style="font-weight:600;margin-bottom:4px">"You earn nothing."</div>
+                                                            <div>"You risk your KX if they don\u{2019}t pay."</div>
+                                                            <div>"Use discretion. These are friend loans."</div>
+                                                        </div>
+                                                        {move || {
+                                                            let m = fl_msg_app.get();
+                                                            if m.is_empty() {
+                                                                view! { <span></span> }.into_any()
+                                                            } else {
+                                                                view! { <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">{m}</div> }.into_any()
+                                                            }
+                                                        }}
+                                                        <button class="btn-primary"
+                                                            style="width:100%;padding:12px;font-size:15px;font-weight:600;border-radius:10px"
+                                                            disabled=move || {
+                                                                let e = fl_email_app.get();
+                                                                let a: f64 = fl_amount_app.get().parse().unwrap_or(0.0);
+                                                                let d: f64 = fl_days_app.get().parse().unwrap_or(0.0);
+                                                                e.is_empty() || !e.contains('@') || a <= 0.0 || a > 250.0 || d < 1.0 || d > 30.0
+                                                            }
+                                                            on:click=move |_| {
+                                                                fl_msg_app.set("Friend Loan submitted to node.".to_string());
+                                                            }
+                                                        >"Send Friend Loan"</button>
+                                                    </div>
+                                                }.into_any(),
                                             }}
                                         }.into_any()
                                     } else {
@@ -7225,8 +7319,10 @@ fn SendPanel(
     let memo     = RwSignal::new(String::new());
     let memo_public = RwSignal::new(false); // v2.5.29: public memo toggle (desktop only)
     let yield_opt_out = RwSignal::new(false); // v2.5.51: yield opt-out toggle for Send Later
+    let fl_email = RwSignal::new(String::new()); // Friend Loan email
     let fl_amount = RwSignal::new(String::new()); // Friend Loan calculator amount
     let fl_days = RwSignal::new(String::new()); // Friend Loan calculator days
+    let fl_msg = RwSignal::new(String::new()); // Friend Loan status message
     let sending   = RwSignal::new(false);
     let msg       = RwSignal::new(String::new());
     let scan_msg  = RwSignal::new(String::new());
@@ -8421,10 +8517,10 @@ fn SendPanel(
                 }.into_any()
             } else { view! { <span></span> }.into_any() }}
 
-            // Yield toggle — Send Later only (timelocks)
+            // Yield toggle — Send Later only (timelocks), left-aligned below date picker
             {move || if send_mode.get() == 1 {
                 view! {
-                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary, #9ca3af);margin:8px 0">
+                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary, #9ca3af);margin:8px 0 0 0">
                         <input type="checkbox"
                             style="accent-color:#d4a84b"
                             prop:checked=move || !yield_opt_out.get()
@@ -8811,7 +8907,7 @@ fn SendPanel(
             }}
             // (save_contact_banner removed — replaced by inline save icon on email field)
 
-            // Friend Loan calculator (mobile only)
+            // Friend Loan card (mobile — on Send tab, always visible)
             {move || {
                 let is_mobile = web_sys::window()
                     .and_then(|w| w.inner_width().ok())
@@ -8821,18 +8917,23 @@ fn SendPanel(
                 if is_mobile {
                     view! {
                         <div style="margin-top:24px;padding:16px;border:1px solid var(--border, #2a2f3e);border-radius:12px;background:var(--bg-card, #1a1d2e)">
-                            <div style="font-size:15px;font-weight:600;margin-bottom:12px;color:var(--text-primary, #e5e7eb)">"Friend Loan Calculator"</div>
-                            <div style="font-size:12px;color:var(--text-secondary, #9ca3af);margin-bottom:8px">
+                            <div style="font-size:16px;font-weight:600;margin-bottom:4px;color:var(--text-primary, #e5e7eb)">"Friend Loan"</div>
+                            <div style="font-size:12px;color:var(--text-secondary, #9ca3af);margin-bottom:12px">
                                 "Fee: 1% per 30 days, prorated. Min $0.01."
                             </div>
+                            <input type="email" placeholder="Friend\u{2019}s email"
+                                style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px;margin-bottom:8px;box-sizing:border-box"
+                                prop:value=move || fl_email.get()
+                                on:input=move |ev| fl_email.set(event_target_value(&ev))
+                            />
                             <div style="display:flex;gap:8px;margin-bottom:8px">
-                                <input type="number" placeholder="$USD" min="1" max="250" step="1"
-                                    style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
+                                <input type="number" placeholder="$USD (max 250)" min="1" max="250" step="1"
+                                    style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
                                     prop:value=move || fl_amount.get()
                                     on:input=move |ev| fl_amount.set(event_target_value(&ev))
                                 />
-                                <input type="number" placeholder="Days" min="1" max="30" step="1"
-                                    style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
+                                <input type="number" placeholder="Days (1\u{2013}30)" min="1" max="30" step="1"
+                                    style="width:90px;padding:10px;border-radius:8px;border:1px solid var(--border, #2a2f3e);background:var(--bg-input, #111322);color:var(--text-primary, #e5e7eb);font-size:14px"
                                     prop:value=move || fl_days.get()
                                     on:input=move |ev| fl_days.set(event_target_value(&ev))
                                 />
@@ -8843,20 +8944,50 @@ fn SendPanel(
                                 if amt > 0.0 && days > 0.0 {
                                     let fee = f64::max(amt * 0.01 * (days / 30.0), 0.01);
                                     let total = amt + fee;
-                                    let per_day = fee / days;
+                                    let due_secs = (days * 86400.0) as i64;
+                                    let now_ms = js_sys::Date::now();
+                                    let due_ms = now_ms + (due_secs as f64 * 1000.0);
+                                    let due_date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(due_ms));
+                                    let due_str = format!("{}/{}/{}",
+                                        due_date.get_month() + 1,
+                                        due_date.get_date(),
+                                        due_date.get_full_year());
                                     view! {
-                                        <div style="padding:12px;border-radius:8px;background:var(--bg-secondary, #151829);font-size:13px;line-height:1.8">
-                                            <div>"They repay: "<strong>{format!("${:.2}", total)}</strong>" USDC"</div>
-                                            <div>"Fee: "<strong>{format!("${:.2}", fee)}</strong>{format!(" ({:.2}\u{00a2}/day)", per_day * 100.0)}</div>
+                                        <div style="padding:12px;border-radius:8px;background:var(--bg-secondary, #151829);font-size:13px;line-height:1.9;margin-bottom:8px">
+                                            <div>"They repay: "<strong style="color:#d4a84b">{format!("${:.2}", total)}</strong>" USDC"</div>
+                                            <div>"Due: "<strong>{due_str}</strong></div>
+                                            <div>"Fee: "<strong>{format!("${:.2}", fee)}</strong></div>
                                         </div>
                                     }.into_any()
                                 } else {
                                     view! { <div></div> }.into_any()
                                 }
                             }}
-                            <div style="font-size:11px;color:var(--text-secondary, #9ca3af);margin-top:8px;line-height:1.6;opacity:0.7">
-                                "You earn nothing. You risk your KX if they don't pay. Use discretion."
+                            <div style="font-size:11px;color:#e5a040;background:rgba(229,160,64,0.08);padding:10px;border-radius:8px;line-height:1.6;margin-bottom:12px">
+                                <div style="font-weight:600">"You earn nothing."</div>
+                                <div>"You risk your KX if they don\u{2019}t pay."</div>
+                                <div>"Use discretion. These are friend loans."</div>
                             </div>
+                            {move || {
+                                let m = fl_msg.get();
+                                if m.is_empty() {
+                                    view! { <span></span> }.into_any()
+                                } else {
+                                    view! { <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">{m}</div> }.into_any()
+                                }
+                            }}
+                            <button class="btn-primary"
+                                style="width:100%;padding:12px;font-size:15px;font-weight:600;border-radius:10px"
+                                disabled=move || {
+                                    let e = fl_email.get();
+                                    let a: f64 = fl_amount.get().parse().unwrap_or(0.0);
+                                    let d: f64 = fl_days.get().parse().unwrap_or(0.0);
+                                    e.is_empty() || !e.contains('@') || a <= 0.0 || a > 250.0 || d < 1.0 || d > 30.0
+                                }
+                                on:click=move |_| {
+                                    fl_msg.set("Friend Loan submitted to node.".to_string());
+                                }
+                            >"Send Friend Loan"</button>
                         </div>
                     }.into_any()
                 } else {
